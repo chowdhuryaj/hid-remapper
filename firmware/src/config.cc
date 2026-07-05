@@ -10,7 +10,10 @@
 #include "platform.h"
 #include "remapper.h"
 
-const uint8_t CONFIG_VERSION = 18;
+// Fork-local version: upstream v18 layout + the Pointer FX parameter block.
+// 100 so upstream's own 19+ can never collide with this fork's numbering.
+const uint8_t CONFIG_VERSION = 100;
+const uint8_t LAST_UPSTREAM_CONFIG_VERSION = 18;
 
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH = 0x01;
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH_MASK = 0b00001111;
@@ -29,7 +32,9 @@ bool checksum_ok(const uint8_t* buffer, uint16_t data_size) {
 
 bool persisted_version_ok(const uint8_t* buffer) {
     uint8_t version = ((config_version_t*) buffer)->version;
-    return (version >= 3) && (version <= CONFIG_VERSION);
+    // Accept every upstream layout we know how to parse, plus this fork's
+    // own version — but NOT unknown upstream versions 19..99.
+    return ((version >= 3) && (version <= LAST_UPSTREAM_CONFIG_VERSION)) || (version == CONFIG_VERSION);
 }
 
 bool command_version_ok(const uint8_t* buffer) {
@@ -550,6 +555,10 @@ void load_config_v13(const uint8_t* persisted_config) {
 }
 
 void load_config(const uint8_t* persisted_config) {
+    // Always seed Pointer FX defaults; a v100 config below may overwrite
+    // them. Runs even when flash holds no/invalid config.
+    pfx_set_defaults();
+
     if (!checksum_ok(persisted_config, PERSISTED_CONFIG_SIZE) || !persisted_version_ok(persisted_config)) {
         return;
     }
@@ -616,6 +625,8 @@ void load_config(const uint8_t* persisted_config) {
         return;
     }
 
+    // v18 (last upstream) and v100 (fork) share this header prefix; v100
+    // additionally carries the Pointer FX block, growing the header.
     persist_config_v18_t* config = (persist_config_v18_t*) persisted_config;
     unmapped_passthrough_layer_mask = config->unmapped_passthrough_layer_mask;
     ignore_auth_dev_inputs = config->flags & (1 << CONFIG_FLAG_IGNORE_AUTH_DEV_INPUTS_BIT);
@@ -630,12 +641,18 @@ void load_config(const uint8_t* persisted_config) {
         our_descriptor_number = 0;
     }
     macro_entry_duration = config->macro_entry_duration;
-    mapping_config11_t* buffer_mappings = (mapping_config11_t*) (persisted_config + sizeof(persist_config_v18_t));
+    size_t header_size = sizeof(persist_config_v18_t);
+    if (version == CONFIG_VERSION) {
+        pointer_fx_config = ((persist_config_v100_t*) persisted_config)->pointer_fx;
+        pfx_clamp_config();
+        header_size = sizeof(persist_config_v100_t);
+    }
+    mapping_config11_t* buffer_mappings = (mapping_config11_t*) (persisted_config + header_size);
     for (uint32_t i = 0; i < config->mapping_count; i++) {
         config_mappings.push_back(buffer_mappings[i]);
     }
 
-    const uint8_t* macros_config_ptr = (persisted_config + sizeof(persist_config_v18_t) + config->mapping_count * sizeof(mapping_config11_t));
+    const uint8_t* macros_config_ptr = (persisted_config + header_size + config->mapping_count * sizeof(mapping_config11_t));
     my_mutex_enter(MutexId::MACROS);
     for (int i = 0; i < NMACROS; i++) {
         macros[i].clear();
@@ -722,6 +739,7 @@ void fill_persist_config(persist_config_t* config) {
     my_mutex_enter(MutexId::QUIRKS);
     config->quirk_count = quirks.size();
     my_mutex_exit(MutexId::QUIRKS);
+    config->pointer_fx = pointer_fx_config;
 }
 
 PersistConfigReturnCode persist_config() {
@@ -934,6 +952,15 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                 my_mutex_exit(MutexId::QUIRKS);
                 break;
             }
+            case ConfigCommand::GET_POINTER_FX: {
+                const uint8_t* src = (const uint8_t*) &pointer_fx_config;
+                if (requested_index == 0) {
+                    memcpy(config_buffer->data, src, PFX_PAGE0_SIZE);
+                } else if (requested_index == 1) {
+                    memcpy(config_buffer->data, src + PFX_PAGE0_SIZE, PFX_PAGE1_SIZE);
+                }
+                break;
+            }
             case ConfigCommand::PERSIST_CONFIG: {
                 persist_config_response_t* returned = (persist_config_response_t*) config_buffer;
                 if (persist_config_return_code == PersistConfigReturnCode::UNKNOWN) {
@@ -999,7 +1026,8 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                 case ConfigCommand::GET_MAPPING:
                 case ConfigCommand::GET_OUR_USAGES:
                 case ConfigCommand::GET_THEIR_USAGES:
-                case ConfigCommand::GET_QUIRK: {
+                case ConfigCommand::GET_QUIRK:
+                case ConfigCommand::GET_POINTER_FX: {
                     get_indexed_t* get_indexed = (get_indexed_t*) config_buffer->data;
                     requested_index = get_indexed->requested_index;
                     break;
@@ -1111,6 +1139,19 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     my_mutex_enter(MutexId::QUIRKS);
                     quirks.push_back(*quirk);
                     my_mutex_exit(MutexId::QUIRKS);
+                    break;
+                }
+                case ConfigCommand::SET_POINTER_FX: {
+                    // data = [page u8][page bytes]; setters take effect live,
+                    // persistence only via PERSIST_CONFIG (Flask SAVE model).
+                    uint8_t page = config_buffer->data[0];
+                    uint8_t* dst = (uint8_t*) &pointer_fx_config;
+                    if (page == 0) {
+                        memcpy(dst, config_buffer->data + 1, PFX_PAGE0_SIZE);
+                    } else if (page == 1) {
+                        memcpy(dst + PFX_PAGE0_SIZE, config_buffer->data + 1, PFX_PAGE1_SIZE);
+                    }
+                    pfx_clamp_config();
                     break;
                 }
                 default:

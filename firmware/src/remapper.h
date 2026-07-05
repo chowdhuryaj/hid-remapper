@@ -17,6 +17,8 @@
 typedef bool (*send_report_t)(uint8_t interface, const uint8_t* report_with_id, uint8_t len);
 
 void set_mapping_from_config();
+// non-inline accessor for pointer_fx.cc (get_state_ptr itself is inline-internal)
+int32_t* remapper_get_state_ptr(uint32_t usage, uint8_t hub_port, bool assign_if_absent, bool raw);
 void handle_received_report(const uint8_t* report, int len, uint16_t interface, uint8_t external_report_id = 0);
 void do_handle_received_report(const uint8_t* report, int len, uint16_t interface, uint8_t external_report_id = 0);
 void handle_received_midi(uint8_t hub_port, uint8_t* midi_msg);

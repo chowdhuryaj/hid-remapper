@@ -1,0 +1,2 @@
+pywebview>=4.4
+hid>=1.0.5

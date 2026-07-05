@@ -15,6 +15,7 @@
 #include "globals.h"
 #include "our_descriptor.h"
 #include "platform.h"
+#include "pointer_fx.h"
 #include "remapper.h"
 
 #define MAX_REPORT_SIZE 64
@@ -378,6 +379,10 @@ inline uint8_t* get_sticky_state_ptr(uint32_t usage, uint8_t hub_port, bool assi
     return NULL;
 }
 
+int32_t* remapper_get_state_ptr(uint32_t usage, uint8_t hub_port, bool assign_if_absent, bool raw) {
+    return get_state_ptr(usage, hub_port, assign_if_absent, raw);
+}
+
 void set_mapping_from_config() {
     std::unordered_map<uint64_t, std::vector<map_source_t>> reverse_mapping_map;  // hub_port+target -> sources list
     std::unordered_map<uint64_t, uint8_t> sticky_usage_map;
@@ -659,6 +664,15 @@ void set_mapping_from_config() {
                 .len = sizeof(registers),
                 .size = 8 * sizeof(registers[0]),
                 .bitpos = (uint16_t) (((target & 0xFFFF) - 1) * 8 * sizeof(registers[0])),
+            });
+        } else if (pfx_is_activation_target(target)) {
+            // Pointer FX activation flags, GPIO-out pattern: the walk sets a
+            // bit per active tick; pfx_input_stage() samples and clears.
+            rev_map.our_usages.push_back((out_usage_def_t){
+                .data = pfx_out_state,
+                .len = sizeof(pfx_out_state),
+                .size = 1,
+                .bitpos = (uint16_t) ((target & 0xFFFF) - 1),
             });
         } else {
             bool handled = false;
@@ -1095,6 +1109,12 @@ void process_mapping(bool auto_repeat) {
     uint64_t now = get_time();
     frame_counter++;
 
+    // Pointer FX input side: wiggle detection, gesture/chord/jog capture
+    // (swallowing raw cursor deltas), pulse-usage cadence. Runs before the
+    // tap-hold/sticky/layer logic so fired pulses behave like fresh button
+    // presses everywhere this tick.
+    pfx_input_stage(now / 1000);
+
     for (auto& tap_hold : tap_hold_usages) {
         if ((*tap_hold.input_state != 0) && (*(tap_hold.input_state + PREV_STATE_OFFSET) == 0)) {
             tap_hold.pressed_at = now;
@@ -1240,7 +1260,9 @@ void process_mapping(bool auto_repeat) {
                 if (value != 0) {
                     if (target == V_SCROLL_USAGE || target == H_SCROLL_USAGE) {
                         accumulated[target] += handle_scroll(map_source, target, value * RESOLUTION_MULTIPLIER, now);
-                    } else {
+                    } else if (!pfx_divert_cursor(target, value)) {
+                        // (diverted values re-enter accumulated[] via
+                        // pfx_output_stage after smoothing/accel)
                         accumulated[target] += value;
                     }
                 }
@@ -1371,6 +1393,10 @@ void process_mapping(bool auto_repeat) {
     for (auto state : relative_usages) {
         *state = 0;
     }
+
+    // Pointer FX output side: smoothing + accel on whatever the walk routed
+    // to Cursor X/Y; feeds accumulated[] before the drain below.
+    pfx_output_stage(now / 1000);
 
     for (auto& [usage, accumulated_val] : accumulated) {
         if (accumulated_val == 0) {
@@ -1937,6 +1963,11 @@ void update_their_descriptor_derivates() {
                 });
         }
     }
+
+    // Runs both on config rebuild and on lazy slot assignment (expressions
+    // can create slots mid-run via their_descriptor_updated), so the Pointer
+    // FX pointer cache never goes stale.
+    pfx_cache_ptrs();
 }
 
 void parse_our_descriptor() {
@@ -2033,6 +2064,7 @@ void reset_state() {
     accumulated.clear();
     layer_state_mask = 1;
     frame_counter = 0;
+    pfx_reset_runtime_state();
 }
 
 void set_monitor_enabled(bool enabled) {

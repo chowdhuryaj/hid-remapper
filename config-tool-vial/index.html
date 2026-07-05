@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HID Remapper — Vial configurator</title>
+    <style>
+        :root {
+            --bg: #f5f5f4; --surface: #ffffff; --surface2: #fafaf9; --text: #1c1c1a;
+            --muted: #6b6b66; --faint: #9a9a93; --border: #e2e2dd; --border2: #cfcfc8;
+            --accent: #2563eb; --accent-bg: #e8f0fe; --accent-text: #14458a;
+            --ok: #15803d; --ok-bg: #e7f6ec; --danger: #b42318; --danger-bg: #fdeceb;
+            --radius: 8px;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1a1a18; --surface: #242422; --surface2: #2c2c29; --text: #ececea;
+                --muted: #a3a39d; --faint: #76766f; --border: #36352f; --border2: #45443d;
+                --accent: #5b9aff; --accent-bg: #1c2a44; --accent-text: #bcd4ff;
+                --ok: #69d28c; --ok-bg: #15301f; --danger: #f1857c; --danger-bg: #3a1714;
+            }
+        }
+        * { box-sizing: border-box; }
+        body { margin: 0; background: var(--bg); color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.5; }
+        .wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px 64px; }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        h1 { font-size: 22px; font-weight: 600; margin: 8px 0 0; }
+        h2 { font-size: 14px; font-weight: 600; margin: 24px 0 10px; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.04em; }
+        .lite { color: var(--muted); font-weight: 400; }
+        .status { font-size: 13px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border2); }
+        .status.off { color: var(--muted); }
+        .status.on { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+        .toolbar { display: flex; align-items: center; gap: 8px; margin: 18px 0 6px; flex-wrap: wrap; }
+        .spacer { flex: 1; }
+        .btn { font: inherit; font-size: 14px; padding: 8px 14px; border-radius: var(--radius);
+            border: 1px solid var(--border2); background: var(--surface); color: var(--text); cursor: pointer; }
+        .btn:hover:not(:disabled) { background: var(--surface2); }
+        .btn:active:not(:disabled) { transform: translateY(1px); }
+        .btn:disabled { opacity: 0.45; cursor: default; }
+        .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .btn.primary:hover { filter: brightness(1.05); background: var(--accent); }
+        .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 16px 0 4px; }
+        .tab { font-size: 13px; padding: 7px 13px; border-radius: var(--radius);
+            border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; }
+        .tab.on { background: var(--accent-bg); color: var(--accent-text); border-color: transparent; }
+        .maintabs { display: flex; gap: 4px; margin: 18px 0 6px; border-bottom: 1px solid var(--border); }
+        .mtab { font: inherit; font-size: 15px; padding: 9px 16px; border: none; background: none; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+        .mtab.on { color: var(--text); border-bottom-color: var(--accent); }
+        .addbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+        .addbar > span { font-size: 13px; color: var(--muted); }
+        .bcard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+        .bhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .btitle { font-size: 15px; font-weight: 600; }
+        .btype { font-size: 11px; color: var(--muted); border: 1px solid var(--border2); border-radius: 999px; padding: 2px 9px; margin-left: 8px; }
+        .field { display: flex; align-items: center; gap: 10px; margin: 9px 0; flex-wrap: wrap; }
+        .field > label { font-size: 13px; color: var(--muted); min-width: 104px; }
+        .field select, .field input[type=number] { font: inherit; font-size: 14px; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); }
+        .field input[type=range] { flex: 1; min-width: 130px; max-width: 280px; }
+        .readout { font-size: 13px; color: var(--text); min-width: 48px; }
+        .keybtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); cursor: pointer; min-width: 92px; text-align: center; }
+        .keybtn:hover { border-color: var(--accent); }
+        .mchip { font: inherit; font-size: 13px; padding: 5px 11px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--muted); cursor: pointer; }
+        .mchip.on { background: var(--accent-bg); color: var(--accent-text); border-color: transparent; }
+        .chordrow { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 9px 0; border-top: 1px solid var(--border); }
+        .iconbtn { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); cursor: pointer; }
+        .iconbtn:hover { background: var(--surface); border-color: var(--border2); }
+        .bcaption { font-size: 12px; color: var(--faint); margin-top: 10px; }
+        .keyoptions { margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+        .koh { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+        .actionrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 0; }
+        .actionrow.focus .keybtn { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+        .flag { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
+        .flag input { margin: 0; cursor: pointer; }
+        .settingrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid var(--border); }
+        .settingrow > label { font-size: 14px; min-width: 230px; }
+        .settingrow .desc { font-size: 12px; color: var(--faint); flex-basis: 100%; margin-top: 2px; }
+        .settingrow input[type=number], .settingrow select { font: inherit; font-size: 14px; padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); width: 120px; }
+        .layerchecks { display: flex; gap: 12px; flex-wrap: wrap; }
+        .layerchecks label { font-size: 13px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+        .macrorow { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; }
+        .macrohead { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+        .macrohead .mname { font-weight: 500; min-width: 82px; }
+        .macrohead .mprev { font-size: 13px; color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .macrostep { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--border); }
+        .macrostep .slabel { font-size: 12px; color: var(--faint); min-width: 54px; }
+        .kchip { font-size: 13px; padding: 5px 10px; border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); display: inline-flex; gap: 7px; align-items: center; }
+        .kchip .x { cursor: pointer; color: var(--faint); }
+        .list { display: flex; flex-direction: column; gap: 6px; }
+        .row { display: flex; align-items: center; gap: 14px; padding: 11px 14px; background: var(--surface);
+            border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+        .row:hover { border-color: var(--border2); }
+        .row.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+        .row.static { cursor: default; }
+        .row .id { min-width: 132px; }
+        .row .name { font-size: 14px; }
+        .row .hint { font-size: 12px; color: var(--faint); }
+        .row .native { font-size: 12px; color: var(--muted); flex: 1; }
+        .row .assign { font-size: 13px; padding: 6px 12px; border-radius: var(--radius);
+            border: 1px solid var(--border2); background: var(--surface2); min-width: 120px; text-align: center; }
+        .row .assign.transparent { color: var(--faint); border-style: dashed; }
+        .row .assign.advanced { color: var(--accent-text); background: var(--accent-bg); border-color: transparent; }
+        .badge { font-size: 11px; color: var(--muted); border: 1px solid var(--border2);
+            border-radius: 999px; padding: 2px 8px; }
+        .picker { margin-top: 28px; padding: 16px; background: var(--surface); border: 1px solid var(--border);
+            border-radius: 12px; }
+        .picker.disabled { opacity: 0.55; }
+        .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        .chip { font-size: 13px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border2);
+            background: var(--surface); color: var(--muted); cursor: pointer; }
+        .chip.on { background: var(--accent-bg); color: var(--accent-text); border-color: transparent; }
+        .search { width: 100%; font: inherit; font-size: 14px; padding: 9px 12px; margin-bottom: 12px;
+            border-radius: var(--radius); border: 1px solid var(--border2); background: var(--surface2); color: var(--text); }
+        .codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 7px; }
+        .code { font-size: 13px; padding: 8px 8px; text-align: center; border-radius: var(--radius);
+            border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .code:hover { border-color: var(--accent); background: var(--accent-bg); }
+        .code.special { border-style: dashed; }
+        .notice { font-size: 14px; padding: 10px 14px; border-radius: var(--radius); margin: 12px 0;
+            background: var(--danger-bg); color: var(--danger); border: 1px solid transparent; }
+        .ok { color: var(--ok); }
+        .hidden { display: none; }
+        footer { margin-top: 36px; font-size: 12px; color: var(--faint); }
+        a { color: var(--accent); }
+    </style>
+    <script src="vial.js" type="module"></script>
+</head>
+
+<body>
+    <div class="wrap">
+        <header>
+            <h1>HID Remapper <span class="lite">— Vial configurator</span></h1>
+            <div id="status" class="status off">Not connected</div>
+        </header>
+
+        <div class="toolbar">
+            <button id="connect" class="btn primary">Connect</button>
+            <button id="load" class="btn" disabled>Load from device</button>
+            <button id="save" class="btn" disabled>Save to device <span id="saveok" class="ok hidden">✓</span></button>
+            <span class="spacer"></span>
+            <button id="import" class="btn">Import</button>
+            <button id="export" class="btn">Export</button>
+            <input id="file" type="file" accept="application/json,.json" class="hidden">
+        </div>
+
+        <div id="notice" class="notice hidden"></div>
+
+        <div class="maintabs">
+            <button id="mt-keymap" class="mtab on">Keymap</button>
+            <button id="mt-behaviors" class="mtab">Behaviors</button>
+            <button id="mt-macros" class="mtab">Macros</button>
+            <button id="mt-settings" class="mtab">Settings</button>
+        </div>
+
+        <div id="panel-keymap">
+            <div id="tabs" class="tabs"></div>
+            <main>
+                <section>
+                    <h2>Buttons</h2>
+                    <div id="buttons" class="list"></div>
+                </section>
+                <section>
+                    <h2>Pointer, wheel &amp; tilt</h2>
+                    <div id="axes" class="list"></div>
+                </section>
+            </main>
+        </div>
+
+        <div id="panel-behaviors" class="hidden">
+            <div class="addbar">
+                <span>Add behavior:</span>
+                <button class="btn" data-add="dpi_shift">DPI shift</button>
+                <button class="btn" data-add="cursor_keys">Cursor → keys</button>
+                <button class="btn" data-add="chord_set">Chord</button>
+                <button class="btn" data-add="tap_dance">Tap dance</button>
+                <button class="btn" data-add="scroll_text">Scroll-wheel text</button>
+            </div>
+            <div id="behaviors-list" class="list"></div>
+        </div>
+
+        <div id="panel-macros" class="hidden">
+            <div id="macros-list" class="list"></div>
+        </div>
+
+        <div id="panel-settings" class="hidden">
+            <div id="settings-form"></div>
+        </div>
+
+        <section id="picker" class="picker disabled">
+            <h2 style="margin-top:0">Assign <span id="pickfor" class="lite">— select an input above</span></h2>
+            <div id="keyoptions" class="keyoptions hidden"></div>
+            <div id="chips" class="chips"></div>
+            <input id="search" class="search" type="text" placeholder="Search keycodes" autocomplete="off">
+            <div id="codes" class="codes"></div>
+        </section>
+
+        <footer>
+            Talks to stock HID Remapper firmware. Run the desktop app (no browser needed) or use a
+            Chromium browser for WebHID. Configs are compatible with the stock configurator.
+            Cursor, wheel and tilt are programmed in the Behaviors tab.
+        </footer>
+    </div>
+</body>
+
+</html>

@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <vector>
 
+#include "pointer_fx.h"
+
 enum class ConfigCommand : int8_t {
     NO_COMMAND = 0,
     RESET_INTO_BOOTSEL = 1,
@@ -32,6 +34,9 @@ enum class ConfigCommand : int8_t {
     CLEAR_QUIRKS = 23,
     ADD_QUIRK = 24,
     GET_QUIRK = 25,
+    // fork-local (Flask parity); numbered after the last upstream command
+    GET_POINTER_FX = 26,
+    SET_POINTER_FX = 27,
 };
 
 struct usage_def_t {
@@ -312,7 +317,25 @@ typedef persist_config_v12_t persist_config_v13_t;
 
 typedef persist_config_v13_t persist_config_v18_t;
 
-typedef persist_config_v18_t persist_config_t;
+// Fork-local persisted layout: upstream v18 header + the Pointer FX
+// parameter block inline. Version 100 so upstream's future 19+ never
+// collides. Mappings/macros/expressions/quirks follow as in v18.
+struct __attribute__((packed)) persist_config_v100_t {
+    uint8_t version;
+    uint8_t flags;
+    uint8_t unmapped_passthrough_layer_mask;
+    uint32_t partial_scroll_timeout;
+    uint16_t mapping_count;
+    uint8_t interval_override;
+    uint32_t tap_hold_threshold;
+    uint8_t gpio_debounce_time_ms;
+    uint8_t our_descriptor_number;
+    uint8_t macro_entry_duration;
+    uint16_t quirk_count;
+    pointer_fx_config_t pointer_fx;
+};
+
+typedef persist_config_v100_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;

@@ -1,0 +1,7 @@
+{
+    "name": "hid-remapper-config-tool-vial",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "description": "Vial-style web configurator for HID Remapper (no build step; static ES modules served as-is)."
+}
