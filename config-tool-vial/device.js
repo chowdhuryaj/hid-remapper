@@ -7,7 +7,7 @@
 
 import {
     UINT8, UINT16, UINT32, INT32,
-    CONFIG_SIZE, CONFIG_VERSION, CONFIG_USAGE_PAGE, CONFIG_USAGE,
+    CONFIG_SIZE, CONFIG_VERSION, CONFIG_VERSION_FORK, CONFIG_USAGE_PAGE, CONFIG_USAGE,
     REPORT_ID_MONITOR, NMACROS, NEXPRESSIONS, MACRO_ITEMS_IN_PACKET, HUB_PORT_NONE,
     STICKY_FLAG, TAP_FLAG, HOLD_FLAG,
     IGNORE_AUTH_DEV_INPUTS_FLAG, GPIO_OUTPUT_MODE_FLAG, NORMALIZE_GAMEPAD_INPUTS_FLAG,
@@ -18,6 +18,7 @@ import {
     GET_EXPRESSION, SET_MONITOR_ENABLED, CLEAR_QUIRKS, ADD_QUIRK, GET_QUIRK,
     PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG,
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
+    setActiveConfigVersion, readPointerFx, writePointerFx,
 } from './protocol.js';
 import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js';
 import { usageToHex } from './model.js';
@@ -118,19 +119,44 @@ export class RemapperDevice {
     }
 
     async _checkDeviceVersion() {
-        for (const version of [CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+        // Probe the fork version first, then stock. Both are supported; the
+        // fork additionally unlocks the Pointer FX features.
+        for (const version of [CONFIG_VERSION_FORK, CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
             await sendFeatureCommand(this.io, GET_CONFIG, [], version);
             const [received_version] = await readConfigFeature(this.io, [UINT8]);
             if (received_version == version) {
-                if (version == CONFIG_VERSION) {
+                if (version == CONFIG_VERSION_FORK || version == CONFIG_VERSION) {
+                    this.configVersion = version;
+                    setActiveConfigVersion(version);
                     return;
                 }
                 throw new Error(
                     'Incompatible firmware version (' + version + '). This tool targets config ' +
-                    'version ' + CONFIG_VERSION + '. Please update your HID Remapper firmware.');
+                    'version ' + CONFIG_VERSION + ' (stock) or ' + CONFIG_VERSION_FORK + ' (Flask-parity fork).');
             }
         }
         throw new Error('Incompatible firmware version (could not negotiate).');
+    }
+
+    // Fork firmware only: Pointer FX live tuning parameters.
+    get isFork() {
+        return this.configVersion === CONFIG_VERSION_FORK;
+    }
+
+    async loadPointerFx() {
+        return await readPointerFx(this.io);
+    }
+
+    async savePointerFx(params) {
+        await writePointerFx(this.io, params);
+    }
+
+    // Persists the device's current live state (including Pointer FX params)
+    // without rewriting mappings — used by the Pointer tab's save button.
+    async persistOnly() {
+        await sendFeatureCommand(this.io, PERSIST_CONFIG);
+        const [code] = await readConfigFeature(this.io, [UINT8]);
+        return code;
     }
 
     async _readGlobalConfig() {

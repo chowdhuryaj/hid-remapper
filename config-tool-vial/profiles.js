@@ -28,6 +28,25 @@ export const ELECOM_HUGE_PLUS = {
         { id: 'b8', label: 'Button 8 · Fn3', native: 'Button 8', source: '0x00090008', hint: 'Top · right of ball' },
     ],
 
+    // Top-view geometry for the visual layout editor (SVG user units).
+    // Thumb cluster on the left, ball center-right, front (palm) at bottom.
+    layout: {
+        viewBox: '0 0 440 300',
+        outline: { x: 8, y: 14, w: 424, h: 272, rx: 44 },
+        ball: { cx: 232, cy: 165, r: 74 },
+        wheel: { x: 34, y: 112, w: 30, h: 64, rx: 10, label: 'Wheel' },
+        buttons: [
+            { id: 'b4', x: 30, y: 62, w: 34, h: 26, tag: 'B4' },
+            { id: 'b5', x: 68, y: 62, w: 34, h: 26, tag: 'B5' },
+            { id: 'b3', x: 34, y: 112, w: 30, h: 64, tag: 'B3', isWheelClick: true },
+            { id: 'b1', x: 26, y: 194, w: 78, h: 60, tag: 'B1' },
+            { id: 'b7', x: 118, y: 54, w: 54, h: 34, tag: 'B7' },
+            { id: 'b6', x: 118, y: 94, w: 54, h: 34, tag: 'B6' },
+            { id: 'b2', x: 316, y: 56, w: 54, h: 38, tag: 'B2' },
+            { id: 'b8', x: 376, y: 56, w: 48, h: 38, tag: 'B8' },
+        ],
+    },
+
     // Axis inputs. These carry a signed value (one usage for both directions),
     // so per-direction keycodes are produced by the directional-mapping
     // behavior (behaviors.js), not a plain mapping. dir: -1 / +1 = the two ends.

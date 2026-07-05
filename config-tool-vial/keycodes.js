@@ -7,7 +7,13 @@
 // the advanced behaviors feed their results back into the keymap.
 
 import usages from './usages.js';
-import { LAYERS_USAGE_PAGE, MACRO_USAGE_PAGE, REGISTER_USAGE_PAGE, EXPR_USAGE_PAGE, BUTTON_USAGE_PAGE, MIDI_USAGE_PAGE, NLAYERS } from './protocol.js';
+import {
+    LAYERS_USAGE_PAGE, MACRO_USAGE_PAGE, REGISTER_USAGE_PAGE, EXPR_USAGE_PAGE,
+    BUTTON_USAGE_PAGE, MIDI_USAGE_PAGE, POINTER_FX_USAGE_PAGE, NLAYERS,
+    pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
+    PFX_AUTOSCROLL_JOG_USAGE, PFX_AUTOSCROLL_UP_USAGE, PFX_AUTOSCROLL_DOWN_USAGE,
+    PFX_AUTOSCROLL_STOP_USAGE, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
+} from './protocol.js';
 
 export const NMACROS_ASSIGNABLE = 32;
 const hexUsage = (base, n) => '0x' + ((base + n) >>> 0).toString(16).padStart(8, '0');
@@ -54,6 +60,19 @@ export function targetCategories(descriptorNumber = 0) {
     }
     cats.push({ name: 'Special', items: special });
 
+    // Pointer FX activation targets (Flask-parity fork firmware only; inert
+    // on stock firmware). Sticky mapping to a "Gesture set active" toggles
+    // the set exactly like Flask's GR#_TOG keycodes.
+    const pfx = [];
+    for (let s = 0; s < 8; s++) {
+        pfx.push({ usage: pfxGestureSetActiveUsage(s), label: 'Gesture set ' + (s + 1) + ' active' });
+    }
+    pfx.push({ usage: PFX_AUTOSCROLL_JOG_USAGE, label: 'Autoscroll jog' });
+    pfx.push({ usage: PFX_AUTOSCROLL_UP_USAGE, label: 'Autoscroll speed +' });
+    pfx.push({ usage: PFX_AUTOSCROLL_DOWN_USAGE, label: 'Autoscroll speed −' });
+    pfx.push({ usage: PFX_AUTOSCROLL_STOP_USAGE, label: 'Autoscroll stop' });
+    cats.push({ name: 'Pointer FX', items: pfx });
+
     return cats;
 }
 
@@ -83,6 +102,21 @@ export function sourceCategories(profile, extraSource = []) {
     const detected = (extraSource || []).filter((u) => !known.has(u)).map((u) => ({ usage: u, label: readableSourceName(u) }));
     if (detected.length) cats.push({ name: 'Detected', items: detected });
 
+    // Pointer FX fired pulses (fork firmware): map these like buttons — to
+    // keys, macros, or sticky layer toggles (e.g. wiggle → scroll layer).
+    const pfx = [{ usage: PFX_WIGGLE_FIRED_USAGE, label: 'Wiggle triggered' }];
+    for (let s = 0; s < 8; s++) {
+        for (let d = 0; d < 8; d++) {
+            pfx.push({ usage: pfxGestureFiredUsage(s, d), label: 'Gesture ' + (s + 1) + ' fired ' + PFX_DIRECTIONS[d] });
+        }
+    }
+    for (let b = 0; b < 8; b++) {
+        for (let d = 0; d < 8; d++) {
+            pfx.push({ usage: pfxChordFiredUsage(b, d), label: 'Chord B' + (b + 1) + ' fired ' + PFX_DIRECTIONS[d] });
+        }
+    }
+    cats.push({ name: 'Pointer FX', items: pfx });
+
     return cats;
 }
 
@@ -108,7 +142,30 @@ export function readableTargetName(usage, descriptorNumber = 0) {
     if (pageOf(usage) === EXPR_USAGE_PAGE) {
         return 'Expression ' + (parseInt(usage, 16) & 0xFFFF);
     }
+    if (pageOf(usage) === POINTER_FX_USAGE_PAGE) {
+        return pfxName(usage);
+    }
     return usage;
+}
+
+// Names for the Pointer FX usage page, both directions.
+function pfxName(usage) {
+    const n = parseInt(usage, 16) & 0xFFFF;
+    if (n >= 0x01 && n <= 0x08) return 'Gesture set ' + n + ' active';
+    if (n === 0x09) return 'Autoscroll jog';
+    if (n === 0x0a) return 'Autoscroll speed +';
+    if (n === 0x0b) return 'Autoscroll speed −';
+    if (n === 0x0c) return 'Autoscroll stop';
+    if (n >= 0x20 && n < 0x60) {
+        const i = n - 0x20;
+        return 'Gesture ' + (Math.floor(i / 8) + 1) + ' fired ' + PFX_DIRECTIONS[i % 8];
+    }
+    if (n === 0x70) return 'Wiggle triggered';
+    if (n >= 0x80 && n < 0xC0) {
+        const i = n - 0x80;
+        return 'Chord B' + (Math.floor(i / 8) + 1) + ' fired ' + PFX_DIRECTIONS[i % 8];
+    }
+    return 'Pointer FX ' + n;
 }
 
 // Human-readable name for a source usage (an input from the upstream device).
@@ -120,6 +177,7 @@ export function readableSourceName(usage, inputLabels = 0) {
     if (pageOf(usage) === BUTTON_USAGE_PAGE) return 'Button ' + (parseInt(usage, 16) & 0xFFFF);
     if (pageOf(usage) === REGISTER_USAGE_PAGE) return 'Register ' + (parseInt(usage, 16) & 0xFFFF);
     if (pageOf(usage) === MIDI_USAGE_PAGE) return 'MIDI ' + usage;
+    if (pageOf(usage) === POINTER_FX_USAGE_PAGE) return pfxName(usage);
     return usage;
 }
 

@@ -4,11 +4,16 @@
 
 import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG } from './device.js';
 import { migrateConfig } from './model.js';
-import { NLAYERS, NMACROS } from './protocol.js';
-import { defaultProfile } from './profiles.js';
+import {
+    NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
+    PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
+    PFX_FLAG_CHORDS, PFX_FLAG_GESTURES,
+} from './protocol.js';
+import { defaultProfile } from './profiles.js?v=2';
 import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js';
 import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js';
 import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -25,6 +30,8 @@ let focusedAction = null;     // the action (mapping) the picker currently edits
 let pickerTarget = null;      // {kind:'slot'} or {kind:'callback', fn, label}
 let categories = targetCategories(0);
 let currentCat = categories[0].name;
+let pointerFx = null;         // live Pointer FX params (fork firmware only)
+let pfxSendTimer = null;
 
 const dev = new RemapperDevice();
 const $ = (id) => document.getElementById(id);
@@ -60,6 +67,7 @@ function init() {
     $('search').addEventListener('input', renderCodes);
     $('mt-keymap').addEventListener('click', () => switchTab('keymap'));
     $('mt-behaviors').addEventListener('click', () => switchTab('behaviors'));
+    $('mt-pointer').addEventListener('click', () => switchTab('pointer'));
     $('mt-macros').addEventListener('click', () => switchTab('macros'));
     $('mt-settings').addEventListener('click', () => switchTab('settings'));
     for (const b of document.querySelectorAll('[data-add]')) {
@@ -127,16 +135,25 @@ async function saveToDevice() {
 }
 
 function onConnected() {
-    $('status').textContent = (dev.productName || 'HID Remapper') + ' connected';
+    $('status').textContent = (dev.productName || 'HID Remapper') + ' connected' + (dev.isFork ? ' (Flask fork)' : '');
     $('status').className = 'status on';
     $('load').disabled = false;
     $('save').disabled = false;
+    if (dev.isFork) {
+        dev.loadPointerFx().then((p) => { pointerFx = p; if (currentTab === 'pointer') renderPointer(); })
+            .catch((e) => showNotice('Could not read Pointer FX parameters: ' + errMsg(e)));
+    } else {
+        pointerFx = null;
+        if (currentTab === 'pointer') renderPointer();
+    }
 }
 function onDisconnected() {
     $('status').textContent = 'Not connected';
     $('status').className = 'status off';
     $('load').disabled = true;
     $('save').disabled = true;
+    pointerFx = null;
+    if (currentTab === 'pointer') renderPointer();
 }
 
 // --- import / export (project = source of truth) ---
@@ -172,7 +189,7 @@ function afterProjectChanged() {
 // --- main tabs ---
 function switchTab(tab) {
     currentTab = tab;
-    for (const t of ['keymap', 'behaviors', 'macros', 'settings']) {
+    for (const t of ['keymap', 'behaviors', 'pointer', 'macros', 'settings']) {
         $('mt-' + t).classList.toggle('on', tab === t);
         $('panel-' + t).classList.toggle('hidden', tab !== t);
     }
@@ -181,6 +198,7 @@ function switchTab(tab) {
     $('picker').classList.add('disabled');
     $('keyoptions').classList.add('hidden');
     if (tab === 'behaviors') renderBehaviors();
+    if (tab === 'pointer') renderPointer();
     if (tab === 'macros') renderMacros();
     if (tab === 'settings') renderSettings();
 }
@@ -191,6 +209,67 @@ function renderAll() {
     renderAxes();
     renderBehaviors();
     renderPicker();
+}
+
+// --- visual layout diagram (spatial keymap editing) ---
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs, ...kids) {
+    const e = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+        if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+        else if (k === 'text') e.textContent = v;
+        else e.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid != null) e.append(kid);
+    return e;
+}
+
+function truncate(s, n) {
+    return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+function renderDiagram() {
+    const host = $('diagram');
+    if (!host) return;
+    host.replaceChildren();
+    const lay = profile.layout;
+    if (!lay) return;
+
+    const svg = svgEl('svg', { viewBox: lay.viewBox });
+    const o = lay.outline;
+    svg.append(svgEl('rect', { class: 'outline', x: o.x, y: o.y, width: o.w, height: o.h, rx: o.rx }));
+
+    // Ball and wheel are programmed via behaviors (they're axes, not buttons).
+    const ball = lay.ball;
+    svg.append(svgEl('circle', {
+        class: 'ballshape', cx: ball.cx, cy: ball.cy, r: ball.r,
+        onclick: () => switchTab('behaviors'),
+    }, svgEl('title', { text: 'Trackball — programmed in the Behaviors tab' })));
+    svg.append(svgEl('text', { class: 'biglbl', x: ball.cx, y: ball.cy + 4, 'text-anchor': 'middle', text: 'Ball' }));
+
+    const byId = {};
+    for (const b of profile.buttons) byId[b.id] = b;
+    for (const s of lay.buttons) {
+        const btn = byId[s.id];
+        if (!btn) continue;
+        const view = assignmentView(btn.source);
+        const isSel = selected && selected.source === btn.source;
+        const cls = 'btnshape' + (isSel ? ' sel' : '') + (view.cls === 'transparent' ? '' : ' assigned');
+        svg.append(svgEl('rect', {
+            class: cls, x: s.x, y: s.y, width: s.w, height: s.h, rx: s.rx || 7,
+            onclick: () => selectSlot(btn.source, btn.label),
+        }, svgEl('title', { text: btn.label + ' — ' + view.text })));
+        const cx = s.x + s.w / 2;
+        const roomy = s.h >= 34;
+        svg.append(svgEl('text', { class: 'tag', x: cx, y: s.y + (roomy ? s.h / 2 - 4 : s.h / 2 + 4), 'text-anchor': 'middle', text: s.tag }));
+        if (roomy) {
+            svg.append(svgEl('text', { class: 'lbl', x: cx, y: s.y + s.h / 2 + 10, 'text-anchor': 'middle', text: truncate(view.text, 13) }));
+        }
+    }
+    if (lay.wheel && lay.wheel.label) {
+        svg.append(svgEl('text', { class: 'lbl', x: lay.wheel.x + lay.wheel.w / 2, y: lay.wheel.y - 5, 'text-anchor': 'middle', text: lay.wheel.label }));
+    }
+    host.append(svg);
 }
 
 // --- keymap tab ---
@@ -234,6 +313,7 @@ function renderButtons() {
             el('div', { class: 'assign ' + view.cls, text: view.text }));
         list.append(row);
     }
+    renderDiagram();
 }
 
 function renderAxes() {
@@ -414,6 +494,12 @@ function keyButton(usage, label, onPick) {
     return el('button', { class: 'keybtn', text: usage ? readableTargetName(usage, base().our_descriptor_number) : 'None', onclick: () => pickKeycode(label, onPick) });
 }
 
+function emptySlots() {
+    const s = {};
+    for (const d of PFX_DIRECTIONS) s[d] = null;
+    return s;
+}
+
 function defaultBehavior(type) {
     const id = newBehaviorId();
     const firstBtn = profile.buttons[0].source;
@@ -422,6 +508,11 @@ function defaultBehavior(type) {
     if (type === 'chord_set') return { id, type, members: [], chords: [{ id: newBehaviorId(), members: [profile.buttons[0].source, profile.buttons[1].source], output: '0x00070006' }] };
     if (type === 'scroll_text') return { id, type, glyphs: ['0x00070004', '0x00070005', '0x00070006'], scroll: '0x00010038', accept: firstBtn };
     if (type === 'tap_dance') return { id, type, button: profile.buttons[2].source, tap1: '0x00070004', tap2: null, tap3: null, hold: '0xfff10001', window: 200 };
+    if (type === 'drag_scroll') return { id, type, trigger: profile.buttons[5].source, mode: 'sticky', divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
+    if (type === 'gesture_set') return { id, type, set: 0, trigger: profile.buttons[6] ? profile.buttons[6].source : firstBtn, mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
+    if (type === 'wheel_chords') return { id, type, button: 0, slots: emptySlots() };
+    if (type === 'shake_action') return { id, type, action: '0xfff10001', sticky: true };
+    if (type === 'os_shortcut') return { id, type, trigger: profile.buttons[3].source, action: 'copy', os: 'mac' };
     throw new Error('unknown behavior ' + type);
 }
 
@@ -477,7 +568,12 @@ function renderBehaviors() {
 }
 
 function behaviorCard(b) {
-    const titles = { dpi_shift: 'DPI shift', cursor_keys: 'Cursor → keys', chord_set: 'Chord', scroll_text: 'Scroll-wheel text', tap_dance: 'Tap dance' };
+    const titles = {
+        dpi_shift: 'DPI shift', cursor_keys: 'Cursor → keys', chord_set: 'Chord',
+        scroll_text: 'Scroll-wheel text', tap_dance: 'Tap dance',
+        drag_scroll: 'Drag scroll', gesture_set: 'Gestures', wheel_chords: 'Wheel chords', shake_action: 'Shake action',
+        os_shortcut: 'OS shortcut',
+    };
     const head = el('div', { class: 'bhead' },
         el('div', {}, el('span', { class: 'btitle', text: titles[b.type] }), el('span', { class: 'btype', text: b.type })),
         el('button', { class: 'iconbtn', text: 'Remove', onclick: () => removeBehavior(b) }));
@@ -487,8 +583,69 @@ function behaviorCard(b) {
     else if (b.type === 'chord_set') body.append(...chordBody(b));
     else if (b.type === 'tap_dance') body.append(...tapDanceBody(b));
     else if (b.type === 'scroll_text') body.append(...scrollBody(b));
+    else if (b.type === 'drag_scroll') body.append(...dragScrollBody(b));
+    else if (b.type === 'gesture_set') body.append(...gestureSetBody(b));
+    else if (b.type === 'wheel_chords') body.append(...wheelChordsBody(b));
+    else if (b.type === 'shake_action') body.append(...shakeActionBody(b));
+    else if (b.type === 'os_shortcut') body.append(...osShortcutBody(b));
     body.insertBefore(layerField(b), body.firstChild);
     return el('div', { class: 'bcard' }, head, body);
+}
+
+// Compass-ordered direction slot editor shared by gestures and wheel chords.
+// b.slots is keyed by the firmware direction names (E SE S SW W NW N NE).
+function directionSlotFields(b, labelPrefix) {
+    const display = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    return display.map((d) => field(d, keyButton(b.slots[d], labelPrefix + ' ' + d, (u) => { b.slots[d] = u; renderBehaviors(); })));
+}
+
+function dragScrollBody(b) {
+    const rows = [
+        field('Trigger', sourceButton(b.trigger, 'Drag scroll trigger', (u) => { b.trigger = u; renderBehaviors(); })),
+        field('Mode', selectFrom([['sticky', 'Toggle (sticky tap)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
+        field('Vertical divisor', ...slider(1, 64, 1, b.divisorV, (v) => String(v), (v) => { b.divisorV = v; })),
+        field('Horizontal', flagBox('Scroll sideways too', b.horizontal, (v) => { b.horizontal = v; renderBehaviors(); })),
+    ];
+    if (b.horizontal) rows.push(field('Horizontal divisor', ...slider(1, 64, 1, b.divisorH, (v) => String(v), (v) => { b.divisorH = v; })));
+    rows.push(field('Invert', flagBox('Reverse scroll direction', b.invert, (v) => { b.invert = v; })));
+    rows.push(field('Shake toggle', flagBox('Wiggle the ball to toggle (fork firmware)', b.wiggleToggle, (v) => { b.wiggleToggle = v; })));
+    rows.push(el('div', { class: 'bcaption', text: 'Ball motion becomes the scroll wheel while active. Runs on stock firmware (1 spare layer + 3 mappings); the shake toggle needs the Flask-parity fork.' }));
+    return rows;
+}
+
+function gestureSetBody(b) {
+    return [
+        field('Set', selectFrom([0, 1, 2, 3, 4, 5, 6, 7].map((i) => [String(i), 'Set ' + (i + 1)]), String(b.set), (v) => { b.set = parseInt(v, 10); })),
+        field('Trigger', sourceButton(b.trigger, 'Gesture set trigger', (u) => { b.trigger = u; renderBehaviors(); })),
+        field('Mode', selectFrom([['sticky', 'Toggle (sticky tap)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
+        ...directionSlotFields(b, 'Gesture'),
+        el('div', { class: 'bcaption', text: 'While the set is active the ball stops moving the cursor; each ratchet step of travel fires the key for its direction (empty diagonals fall back to the nearest cardinal). Ratchet distance is tuned in the Pointer tab. Needs the Flask-parity fork firmware.' }),
+    ];
+}
+
+function wheelChordsBody(b) {
+    return [
+        field('Button', selectFrom(profile.buttons.slice(0, 8).map((pb, i) => [String(i), pb.label]), String(b.button), (v) => { b.button = parseInt(v, 10); })),
+        ...directionSlotFields(b, 'Chord'),
+        el('div', { class: 'bcaption', text: 'Hold the button and roll the ball to fire direction keys; a quick click still clicks (hold delay in the Pointer tab). Needs the Flask-parity fork firmware.' }),
+    ];
+}
+
+function shakeActionBody(b) {
+    return [
+        field('Action', keyButton(b.action, 'Shake action', (u) => { b.action = u; renderBehaviors(); })),
+        field('Sticky', flagBox('Toggle on each shake (for layers)', b.sticky, (v) => { b.sticky = v; })),
+        el('div', { class: 'bcaption', text: 'Wiggle the ball left-right to fire the action. Detection thresholds are tuned in the Pointer tab. Needs the Flask-parity fork firmware.' }),
+    ];
+}
+
+function osShortcutBody(b) {
+    return [
+        field('Trigger', sourceButton(b.trigger, 'Shortcut trigger', (u) => { b.trigger = u; renderBehaviors(); })),
+        field('Shortcut', selectFrom(OS_SHORTCUT_CHOICES, b.action, (v) => { b.action = v; })),
+        field('OS', selectFrom([['mac', 'macOS (⌘)'], ['pc', 'Windows / Linux (Ctrl)']], b.os, (v) => { b.os = v; })),
+        el('div', { class: 'bcaption', text: 'Cut/Copy/Paste/Undo/Redo, app switcher, select word/line and friends, with the right modifiers for your OS. Fills one of the top macro slots at compile time; runs on stock firmware.' }),
+    ];
 }
 
 function dpiBody(b) {
@@ -694,6 +851,106 @@ function renderSettings() {
     f.append(settingSelect('Output polling rate', 'Force the polling interval reported to the PC. “Device default” leaves it unchanged.',
         [['0', 'Device default'], ['1', '1000 Hz'], ['2', '500 Hz'], ['4', '250 Hz'], ['8', '125 Hz']], String(c.interval_override), (v) => { c.interval_override = parseInt(v, 10); }));
     f.append(settingToggle('Normalize gamepad inputs', 'Rescale analog gamepad axes to a standard range.', !!c.normalize_gamepad_inputs, (v) => { c.normalize_gamepad_inputs = v; }));
+}
+
+// --- pointer tab (fork firmware live tuning) ---
+// Parameters live on the device, not in the project: every change is sent
+// live (debounced), and "Persist" snapshots them into device flash — the
+// same GET/SET/SAVE model Flask uses over its raw-HID channels.
+function pfxChanged() {
+    if (!dev.isOpen || !dev.isFork || !pointerFx) return;
+    if (pfxSendTimer) clearTimeout(pfxSendTimer);
+    pfxSendTimer = setTimeout(async () => {
+        try { await dev.savePointerFx(pointerFx); }
+        catch (e) { showNotice('Pointer FX write failed: ' + errMsg(e)); }
+    }, 150);
+}
+
+function pfxToggle(label, desc, bit) {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = !!(pointerFx.flags & bit);
+    cb.addEventListener('change', () => {
+        if (cb.checked) pointerFx.flags |= bit; else pointerFx.flags &= ~bit;
+        pfxChanged();
+    });
+    return el('div', { class: 'settingrow' }, el('label', { text: label }), el('label', { class: 'flag' }, cb, 'Enabled'), el('div', { class: 'desc', text: desc }));
+}
+
+function pfxSlider(label, desc, key, min, max, step, fmt) {
+    const [r, out] = slider(min, max, step, pointerFx[key], fmt, (v) => { pointerFx[key] = v; pfxChanged(); });
+    return el('div', { class: 'settingrow' }, el('label', { text: label }), el('span', {}, r, out), el('div', { class: 'desc', text: desc }));
+}
+
+const x1000 = (v) => (v / 1000).toFixed(2);
+
+function renderPointer() {
+    const f = $('pointer-form');
+    if (!f) return;
+    f.replaceChildren();
+    if (!dev.isOpen) {
+        f.append(el('div', { class: 'hint', text: 'Connect a device to tune pointer processing. These parameters live on the device itself (Flask-parity fork firmware), not in the project file.' }));
+        return;
+    }
+    if (!dev.isFork) {
+        f.append(el('div', { class: 'hint', text: 'This device runs stock HID Remapper firmware. Flash the Flask-parity fork to unlock acceleration, smoothing, gestures, wheel chords, shake detection and autoscroll. (Everything else in this tool still works.)' }));
+        return;
+    }
+    if (!pointerFx) {
+        f.append(el('div', { class: 'hint', text: 'Reading parameters from the device…' }));
+        dev.loadPointerFx().then((p) => { pointerFx = p; renderPointer(); }).catch((e) => showNotice(errMsg(e)));
+        return;
+    }
+
+    const h = (t) => el('h2', { text: t, style: 'margin:18px 0 6px' });
+
+    f.append(h('Acceleration'));
+    f.append(pfxToggle('Acceleration', 'Sigmoid gain curve on cursor speed (ported from Flask/pd_accel).', PFX_FLAG_ACCEL));
+    f.append(pfxSlider('Takeoff', 'How abruptly acceleration kicks in (sigmoid k).', 'accel_takeoff', 500, 10000, 100, x1000));
+    f.append(pfxSlider('Growth rate', 'How fast the gain grows past takeoff (sigmoid g).', 'accel_growth', 0, 2000, 50, x1000));
+    f.append(pfxSlider('Offset', 'Velocity where acceleration centers (sigmoid s).', 'accel_offset', -10000, 10000, 100, x1000));
+    f.append(pfxSlider('Low-speed gain', 'Gain floor at very slow speeds (m). 1.00 = no accel.', 'accel_limit', 0, 1000, 25, x1000));
+    f.append(pfxSlider('Device CPI', 'Your trackball’s CPI, for velocity normalization — the converter can’t query it.', 'device_cpi', 100, 8000, 100, String));
+
+    f.append(h('Smoothing'));
+    f.append(pfxToggle('Smoothing', 'Per-axis exponential moving average (ported from Flask).', PFX_FLAG_SMOOTHING));
+    f.append(pfxSlider('EMA factor', 'Lower = smoother but laggier. Flask default 0.40.', 'smooth_factor', 25, 1000, 25, x1000));
+    f.append(pfxSlider('Idle reset', 'Clear the average after this much stillness (ms).', 'smooth_timeout', 0, 1000, 25, String));
+
+    f.append(h('Gestures'));
+    f.append(pfxToggle('Gestures', 'Flick the ball to fire keys while a set is latched (Behaviors tab defines sets).', PFX_FLAG_GESTURES));
+    f.append(pfxSlider('Ratchet step', 'Ball travel (counts) per fired key.', 'gesture_ratchet', 50, 2000, 25, String));
+
+    f.append(h('Wheel chords'));
+    f.append(pfxToggle('Wheel chords', 'Hold a button + roll the ball for direction keys (Behaviors tab assigns them).', PFX_FLAG_CHORDS));
+    f.append(pfxSlider('Chord step', 'Ball travel (counts) per fired key.', 'chord_step', 50, 2000, 25, String));
+    f.append(pfxSlider('Hold delay', 'How long a button must be held before the ball is captured (ms). 0 = immediately.', 'chord_hold', 0, 2000, 50, String));
+
+    f.append(h('Shake detection'));
+    f.append(pfxToggle('Shake detection', 'Wiggle left-right to fire the “Wiggle triggered” input (Behaviors tab assigns the action).', PFX_FLAG_WIGGLE));
+    f.append(pfxSlider('Reversal window', 'Max ms between direction reversals for them to count as one shake.', 'wiggle_switch', 10, 2000, 10, String));
+    f.append(pfxSlider('Cooldown', 'Ignore shakes for this long after one triggers (ms).', 'wiggle_cooldown', 50, 2000, 50, String));
+    f.append(pfxSlider('Y-quiet threshold', 'Vertical motion (counts) that disqualifies a shake.', 'wiggle_threshold', 0, 20, 1, String));
+
+    f.append(h('Autoscroll'));
+    f.append(pfxToggle('Invert direction', 'Flip autoscroll direction.', PFX_FLAG_ASC_INVERTED));
+    f.append(pfxSlider('Speed scale', 'Global autoscroll speed (%).', 'asc_speed', 25, 400, 5, (v) => v + '%'));
+    f.append(pfxSlider('Jog deadzone', 'Ball deflection (counts) before jog scrolling starts.', 'asc_deadzone', 0, 200, 5, String));
+    f.append(pfxSlider('Jog range', 'Deflection (counts) for maximum jog speed.', 'asc_range', 50, 2000, 25, String));
+    f.append(el('div', { class: 'desc', text: 'Map buttons to “Autoscroll jog / speed + / speed − / stop” in the Keymap tab (Pointer FX category) to drive autoscroll.' }));
+
+    f.append(el('div', { style: 'display:flex;gap:8px;margin-top:18px' },
+        el('button', { class: 'btn', text: 'Re-read from device', onclick: async () => { try { pointerFx = await dev.loadPointerFx(); renderPointer(); } catch (e) { showNotice(errMsg(e)); } } }),
+        el('button', {
+            class: 'btn primary', text: 'Persist on device', onclick: async () => {
+                try {
+                    if (pfxSendTimer) { clearTimeout(pfxSendTimer); pfxSendTimer = null; }
+                    await dev.savePointerFx(pointerFx);
+                    const code = await dev.persistOnly();
+                    if (code === PERSIST_CONFIG_SUCCESS) flashSaved(); else showNotice('Persist failed (' + code + ').');
+                } catch (e) { showNotice(errMsg(e)); }
+            },
+        })));
+    f.append(el('div', { class: 'desc', text: 'Changes apply live as you drag. “Persist on device” keeps them across power cycles (a normal “Save to device” persists them too).' }));
 }
 
 // --- helpers ---

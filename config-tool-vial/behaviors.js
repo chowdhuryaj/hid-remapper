@@ -14,6 +14,10 @@
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
 import { newMapping } from './model.js';
+import {
+    pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
+    PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
+} from './protocol.js';
 
 const ALL_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7];
 // Which layers a behavior's outputs/triggers are active on (defaults to all).
@@ -21,6 +25,7 @@ const layersOf = (b) => (b.layers && b.layers.length) ? b.layers : ALL_LAYERS;
 const CURSOR_X = '0x00010030';
 const CURSOR_Y = '0x00010031';
 const V_SCROLL = '0x00010038';
+const H_SCROLL = '0x000c0238';
 const NOTHING = '0x00000000';
 
 const hexUsage = (base, n) => '0x' + (((base + n) >>> 0)).toString(16).padStart(8, '0');
@@ -56,6 +61,17 @@ function makeAllocator(config) {
             nextReg += count;
             return start;
         },
+        // Claims the highest empty macro slot (0-based index), so compiled
+        // preset macros stay clear of the user's own low-numbered macros.
+        macro() {
+            for (let i = 31; i >= 0; i--) {
+                if (!config.macros[i] || config.macros[i].length === 0) {
+                    config.macros[i] = [];
+                    return i;
+                }
+            }
+            throw new Error('Out of macro slots (max 32).');
+        },
     };
 }
 
@@ -74,6 +90,11 @@ export function compile(baseConfig, behaviors) {
             case 'chord_set': compileChordSet(b, config, alloc); break;
             case 'scroll_text': compileScrollText(b, config, alloc); break;
             case 'tap_dance': compileTapDance(b, config, alloc); break;
+            case 'drag_scroll': compileDragScroll(b, config, alloc); break;
+            case 'gesture_set': compileGestureSet(b, config, alloc); break;
+            case 'wheel_chords': compileWheelChords(b, config, alloc); break;
+            case 'shake_action': compileShakeAction(b, config, alloc); break;
+            case 'os_shortcut': compileOsShortcut(b, config, alloc); break;
             default: throw new Error('Unknown behavior type: ' + b.type);
         }
     }
@@ -206,6 +227,93 @@ function compileScrollText(b, config, alloc) {
     for (let i = 0; i < n; i++) {
         config.mappings.push(newMapping(registerUsage(outRegs[i]), glyphs[i], layersOf(b)));
     }
+}
+
+// --- Drag scroll: toggle/hold a button, ball becomes the scroll wheel -------
+// Pure stock primitives — a spare layer carries Cursor X/Y -> H/V scroll
+// mappings with fractional scaling (the engine's partial-tick accumulation
+// plays the role of Flask's divisor remainders); the trigger activates the
+// layer momentarily (hold) or sticky (toggle). Optionally the fork firmware's
+// wiggle pulse also toggles the layer — Flask's shake-to-toggle.
+function compileDragScroll(b, config, alloc) {
+    const L = alloc.layer();
+    config.mappings.push({ ...newMapping(b.trigger, layerUsage(L), layersOf(b)), sticky: b.mode === 'sticky' });
+    if (b.wiggleToggle) {
+        config.mappings.push({ ...newMapping(PFX_WIGGLE_FIRED_USAGE, layerUsage(L), layersOf(b)), sticky: true });
+    }
+    const sign = b.invert ? 1 : -1;  // default: ball down = scroll down (wheel negative)
+    const divV = Math.max(1, b.divisorV || 32);
+    const divH = Math.max(1, b.divisorH || 40);
+    config.mappings.push({ ...newMapping(CURSOR_Y, V_SCROLL, [L]), scaling: Math.round(sign * 1000 / divV) });
+    if (b.horizontal) {
+        config.mappings.push({ ...newMapping(CURSOR_X, H_SCROLL, [L]), scaling: Math.round(-sign * 1000 / divH) });
+    } else {
+        config.mappings.push(newMapping(CURSOR_X, NOTHING, [L]));  // swallow X so the cursor stays put
+    }
+}
+
+// --- Gesture set: latch a set, flick the ball to fire keys (fork firmware) --
+// The heavy lifting (swallow, ratchet, 8-way binning) is the fork firmware's
+// pointer_fx module; this compiles to one activation mapping (sticky = toggle,
+// like Flask's GR#_TOG) plus one mapping per configured direction pulse.
+function compileGestureSet(b, config, alloc) {
+    config.mappings.push({ ...newMapping(b.trigger, pfxGestureSetActiveUsage(b.set), layersOf(b)), sticky: b.mode === 'sticky' });
+    PFX_DIRECTIONS.forEach((dir, d) => {
+        const out = b.slots && b.slots[dir];
+        if (out) config.mappings.push(newMapping(pfxGestureFiredUsage(b.set, d), out, layersOf(b)));
+    });
+}
+
+// --- Wheel chords: hold a physical button + roll the ball (fork firmware) ---
+// No trigger mapping needed — the firmware watches the physical button and
+// captures motion only when at least one direction pulse is mapped.
+function compileWheelChords(b, config, alloc) {
+    PFX_DIRECTIONS.forEach((dir, d) => {
+        const out = b.slots && b.slots[dir];
+        if (out) config.mappings.push(newMapping(pfxChordFiredUsage(b.button, d), out, layersOf(b)));
+    });
+}
+
+// --- Shake action: wiggle the ball to fire any output (fork firmware) -------
+function compileShakeAction(b, config, alloc) {
+    config.mappings.push({ ...newMapping(PFX_WIGGLE_FIRED_USAGE, b.action, layersOf(b)), sticky: !!b.sticky });
+}
+
+// --- OS shortcut presets (Flask os_shortcuts / select_word equivalents) -----
+// Pure stock primitives: each preset fills a high macro slot with the right
+// modifier chords for the chosen OS, and maps the trigger to that macro.
+// Works on stock firmware; nothing OS-detection based (pick Mac or PC here).
+const KEY = (code) => '0x000700' + code.toString(16).padStart(2, '0');
+const LCTL = KEY(0xe0), LSFT = KEY(0xe1), LALT = KEY(0xe2), LGUI = KEY(0xe3);
+const OS_SHORTCUTS = {
+    cut: { label: 'Cut', mac: [[LGUI, KEY(0x1b)]], pc: [[LCTL, KEY(0x1b)]] },
+    copy: { label: 'Copy', mac: [[LGUI, KEY(0x06)]], pc: [[LCTL, KEY(0x06)]] },
+    paste: { label: 'Paste', mac: [[LGUI, KEY(0x19)]], pc: [[LCTL, KEY(0x19)]] },
+    undo: { label: 'Undo', mac: [[LGUI, KEY(0x1d)]], pc: [[LCTL, KEY(0x1d)]] },
+    redo: { label: 'Redo', mac: [[LSFT, LGUI, KEY(0x1d)]], pc: [[LCTL, KEY(0x1c)]] },
+    select_all: { label: 'Select all', mac: [[LGUI, KEY(0x04)]], pc: [[LCTL, KEY(0x04)]] },
+    app_switch: { label: 'App switcher', mac: [[LGUI, KEY(0x2b)]], pc: [[LALT, KEY(0x2b)]] },
+    new_tab: { label: 'New tab', mac: [[LGUI, KEY(0x17)]], pc: [[LCTL, KEY(0x17)]] },
+    close: { label: 'Close window/tab', mac: [[LGUI, KEY(0x1a)]], pc: [[LCTL, KEY(0x1a)]] },
+    select_word: {
+        label: 'Select word',
+        mac: [[LALT, KEY(0x50)], [LALT, LSFT, KEY(0x4f)]],   // ⌥← then ⌥⇧→
+        pc: [[LCTL, KEY(0x50)], [LCTL, LSFT, KEY(0x4f)]],    // ^← then ^⇧→
+    },
+    select_line: {
+        label: 'Select line',
+        mac: [[LGUI, KEY(0x50)], [LGUI, LSFT, KEY(0x4f)]],   // ⌘← then ⌘⇧→
+        pc: [[KEY(0x4a)], [LSFT, KEY(0x4d)]],                // Home then ⇧End
+    },
+};
+export const OS_SHORTCUT_CHOICES = Object.entries(OS_SHORTCUTS).map(([k, v]) => [k, v.label]);
+
+function compileOsShortcut(b, config, alloc) {
+    const def = OS_SHORTCUTS[b.action];
+    if (!def) throw new Error('Unknown OS shortcut: ' + b.action);
+    const slot = alloc.macro();
+    config.macros[slot] = (def[b.os === 'pc' ? 'pc' : 'mac']).map((step) => [...step]);
+    config.mappings.push(newMapping(b.trigger, hexUsage(0xFFF20000, slot + 1), layersOf(b)));
 }
 
 // --- Tap dance: 1 / 2 / 3 taps + hold on one button -------------------------

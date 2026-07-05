@@ -10,7 +10,16 @@ import crc32 from './crc.js';
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
 export const CONFIG_SIZE = 32;
-export const CONFIG_VERSION = 18;
+export const CONFIG_VERSION = 18;       // last stock/upstream version
+export const CONFIG_VERSION_FORK = 100; // our Flask-parity firmware fork
+
+// The device's negotiated config version. The firmware rejects SET frames
+// whose version byte doesn't match its own, so the device layer stores the
+// negotiated value here after connecting and every frame uses it by default.
+let activeConfigVersion = CONFIG_VERSION;
+export function setActiveConfigVersion(v) { activeConfigVersion = v; }
+export function getActiveConfigVersion() { return activeConfigVersion; }
+export function deviceIsFork() { return activeConfigVersion === CONFIG_VERSION_FORK; }
 
 // HID Remapper's config interface advertises this usage page / usage. We match
 // on it (not VID/PID) so the tool works on the Feather, the Pico variants and
@@ -49,6 +58,8 @@ export const GPIO_USAGE_PAGE = 0xFFF40000;
 export const REGISTER_USAGE_PAGE = 0xFFF50000;
 export const MIDI_USAGE_PAGE = 0xFFF70000;
 export const BUTTON_USAGE_PAGE = 0x00090000;
+// Fork-only: Pointer FX (see firmware/src/pointer_fx.h for the full map).
+export const POINTER_FX_USAGE_PAGE = 0xFFFB0000;
 
 export const QUIRK_FLAG_RELATIVE_MASK = 0b10000000;
 export const QUIRK_FLAG_SIGNED_MASK = 0b01000000;
@@ -80,6 +91,9 @@ export const SET_MONITOR_ENABLED = 22;
 export const CLEAR_QUIRKS = 23;
 export const ADD_QUIRK = 24;
 export const GET_QUIRK = 25;
+// Fork-only commands (Flask-parity firmware, config version 100).
+export const GET_POINTER_FX = 26;
+export const SET_POINTER_FX = 27;
 
 export const PERSIST_CONFIG_SUCCESS = 1;
 export const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
@@ -89,6 +103,7 @@ export const UINT8 = Symbol('uint8');
 export const UINT16 = Symbol('uint16');
 export const UINT32 = Symbol('uint32');
 export const INT32 = Symbol('int32');
+export const INT16 = Symbol('int16');
 
 function add_crc(dataview) {
     dataview.setUint32(CONFIG_SIZE - 4, crc32(dataview, CONFIG_SIZE - 4), true);
@@ -100,10 +115,10 @@ function check_crc(data) {
     }
 }
 
-export async function sendFeatureCommand(device, command, fields = [], version = CONFIG_VERSION) {
+export async function sendFeatureCommand(device, command, fields = [], version = null) {
     const buffer = new ArrayBuffer(CONFIG_SIZE);
     const dataview = new DataView(buffer);
-    dataview.setUint8(0, version);
+    dataview.setUint8(0, version == null ? activeConfigVersion : version);
     dataview.setUint8(1, command);
     let pos = 2;
     for (const [type, value] of fields) {
@@ -112,6 +127,7 @@ export async function sendFeatureCommand(device, command, fields = [], version =
             case UINT16: dataview.setUint16(pos, value, true); pos += 2; break;
             case UINT32: dataview.setUint32(pos, value, true); pos += 4; break;
             case INT32: dataview.setInt32(pos, value, true); pos += 4; break;
+            case INT16: dataview.setInt16(pos, value, true); pos += 2; break;
         }
     }
     add_crc(dataview);
@@ -144,10 +160,86 @@ export async function readConfigFeature(device, fields = []) {
             case UINT16: ret.push(data.getUint16(pos, true)); pos += 2; break;
             case UINT32: ret.push(data.getUint32(pos, true)); pos += 4; break;
             case INT32: ret.push(data.getInt32(pos, true)); pos += 4; break;
+            case INT16: ret.push(data.getInt16(pos, true)); pos += 2; break;
         }
     }
     return ret;
 }
+
+// --- Pointer FX (fork firmware only) ----------------------------------------
+// Two SET/GET pages mirroring firmware/src/pointer_fx.h's packed struct.
+// Page 0: flags u16, accel takeoff/growth u16, offset i16, limit u16,
+//         device_cpi u16, smooth factor/timeout u16  (16 bytes)
+// Page 1: gesture_ratchet u16, wiggle switch/cooldown u16, threshold u8,
+//         reserved u8, asc speed/deadzone/range u16, chord step/hold u16
+//         (18 bytes)
+
+export const PFX_FLAG_SMOOTHING = 1 << 0;
+export const PFX_FLAG_ACCEL = 1 << 1;
+export const PFX_FLAG_WIGGLE = 1 << 2;
+export const PFX_FLAG_ASC_INVERTED = 1 << 3;
+export const PFX_FLAG_CHORDS = 1 << 4;
+export const PFX_FLAG_GESTURES = 1 << 5;
+
+const PFX_PAGE0_FIELDS = [UINT16, UINT16, UINT16, INT16, UINT16, UINT16, UINT16, UINT16];
+const PFX_PAGE1_FIELDS = [UINT16, UINT16, UINT16, UINT8, UINT8, UINT16, UINT16, UINT16, UINT16, UINT16];
+
+export async function readPointerFx(device) {
+    await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 0]]);
+    const [flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
+        device_cpi, smooth_factor, smooth_timeout] =
+        await readConfigFeature(device, PFX_PAGE0_FIELDS);
+    await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 1]]);
+    const [gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold, ,
+        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold] =
+        await readConfigFeature(device, PFX_PAGE1_FIELDS);
+    return {
+        flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
+        device_cpi, smooth_factor, smooth_timeout,
+        gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold,
+        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold,
+    };
+}
+
+export async function writePointerFx(device, p) {
+    await sendFeatureCommand(device, SET_POINTER_FX, [
+        [UINT8, 0],
+        [UINT16, p.flags], [UINT16, p.accel_takeoff], [UINT16, p.accel_growth],
+        [INT16, p.accel_offset], [UINT16, p.accel_limit], [UINT16, p.device_cpi],
+        [UINT16, p.smooth_factor], [UINT16, p.smooth_timeout],
+    ]);
+    await sendFeatureCommand(device, SET_POINTER_FX, [
+        [UINT8, 1],
+        [UINT16, p.gesture_ratchet], [UINT16, p.wiggle_switch], [UINT16, p.wiggle_cooldown],
+        [UINT8, p.wiggle_threshold], [UINT8, 0],
+        [UINT16, p.asc_speed], [UINT16, p.asc_deadzone], [UINT16, p.asc_range],
+        [UINT16, p.chord_step], [UINT16, p.chord_hold],
+    ]);
+}
+
+export function defaultPointerFx() {
+    return {
+        flags: PFX_FLAG_SMOOTHING | PFX_FLAG_ACCEL | PFX_FLAG_WIGGLE | PFX_FLAG_CHORDS | PFX_FLAG_GESTURES,
+        accel_takeoff: 2000, accel_growth: 250, accel_offset: 2200, accel_limit: 200,
+        device_cpi: 1000, smooth_factor: 400, smooth_timeout: 200,
+        gesture_ratchet: 200, wiggle_switch: 150, wiggle_cooldown: 250, wiggle_threshold: 3,
+        asc_speed: 100, asc_deadzone: 15, asc_range: 300, chord_step: 200, chord_hold: 200,
+    };
+}
+
+// Pointer FX usage helpers (hex-string usages, GUI convention).
+const pfxHex = (n) => '0x' + ((POINTER_FX_USAGE_PAGE + n) >>> 0).toString(16).padStart(8, '0');
+export const pfxGestureSetActiveUsage = (set) => pfxHex(0x01 + set);      // set 0..7, target
+export const PFX_AUTOSCROLL_JOG_USAGE = pfxHex(0x09);                     // target
+export const PFX_AUTOSCROLL_UP_USAGE = pfxHex(0x0a);                      // target, edge
+export const PFX_AUTOSCROLL_DOWN_USAGE = pfxHex(0x0b);                    // target, edge
+export const PFX_AUTOSCROLL_STOP_USAGE = pfxHex(0x0c);                    // target, edge
+export const pfxGestureFiredUsage = (set, dir) => pfxHex(0x20 + set * 8 + dir);  // source
+export const PFX_WIGGLE_FIRED_USAGE = pfxHex(0x70);                       // source
+export const pfxChordFiredUsage = (btn, dir) => pfxHex(0x80 + btn * 8 + dir);    // source
+
+// Direction order used by the firmware (mouse +y = south): index 0..7.
+export const PFX_DIRECTIONS = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
 
 export function maskToLayerList(layer_mask) {
     const layers = [];

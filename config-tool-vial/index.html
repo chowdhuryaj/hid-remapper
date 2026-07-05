@@ -122,6 +122,18 @@
         .code.special { border-style: dashed; }
         .notice { font-size: 14px; padding: 10px 14px; border-radius: var(--radius); margin: 12px 0;
             background: var(--danger-bg); color: var(--danger); border: 1px solid transparent; }
+        .diagram { margin: 14px 0 4px; }
+        .diagram svg { width: 100%; max-width: 560px; display: block; margin: 0 auto; }
+        .diagram .outline { fill: var(--surface); stroke: var(--border2); stroke-width: 1.5; }
+        .diagram .ballshape { fill: var(--surface2); stroke: var(--border2); stroke-width: 1.5; cursor: pointer; }
+        .diagram .btnshape { fill: var(--surface2); stroke: var(--border2); stroke-width: 1.2; cursor: pointer; }
+        .diagram .btnshape:hover { stroke: var(--accent); }
+        .diagram .btnshape.sel { stroke: var(--accent); stroke-width: 2.5; fill: var(--accent-bg); }
+        .diagram .btnshape.assigned { fill: var(--accent-bg); }
+        .diagram text { pointer-events: none; user-select: none; }
+        .diagram .tag { font-size: 11px; font-weight: 600; fill: var(--text); }
+        .diagram .lbl { font-size: 9px; fill: var(--muted); }
+        .diagram .biglbl { font-size: 12px; fill: var(--faint); }
         .ok { color: var(--ok); }
         .hidden { display: none; }
         footer { margin-top: 36px; font-size: 12px; color: var(--faint); }
@@ -152,12 +164,14 @@
         <div class="maintabs">
             <button id="mt-keymap" class="mtab on">Keymap</button>
             <button id="mt-behaviors" class="mtab">Behaviors</button>
+            <button id="mt-pointer" class="mtab">Pointer</button>
             <button id="mt-macros" class="mtab">Macros</button>
             <button id="mt-settings" class="mtab">Settings</button>
         </div>
 
         <div id="panel-keymap">
             <div id="tabs" class="tabs"></div>
+            <div id="diagram" class="diagram"></div>
             <main>
                 <section>
                     <h2>Buttons</h2>
@@ -173,6 +187,11 @@
         <div id="panel-behaviors" class="hidden">
             <div class="addbar">
                 <span>Add behavior:</span>
+                <button class="btn" data-add="drag_scroll">Drag scroll</button>
+                <button class="btn" data-add="gesture_set">Gestures</button>
+                <button class="btn" data-add="wheel_chords">Wheel chords</button>
+                <button class="btn" data-add="shake_action">Shake action</button>
+                <button class="btn" data-add="os_shortcut">OS shortcut</button>
                 <button class="btn" data-add="dpi_shift">DPI shift</button>
                 <button class="btn" data-add="cursor_keys">Cursor → keys</button>
                 <button class="btn" data-add="chord_set">Chord</button>
@@ -180,6 +199,10 @@
                 <button class="btn" data-add="scroll_text">Scroll-wheel text</button>
             </div>
             <div id="behaviors-list" class="list"></div>
+        </div>
+
+        <div id="panel-pointer" class="hidden">
+            <div id="pointer-form"></div>
         </div>
 
         <div id="panel-macros" class="hidden">
@@ -199,8 +222,9 @@
         </section>
 
         <footer>
-            Talks to stock HID Remapper firmware. Run the desktop app (no browser needed) or use a
-            Chromium browser for WebHID. Configs are compatible with the stock configurator.
+            Works with stock HID Remapper firmware and with the Flask-parity fork (which unlocks the
+            Pointer tab: acceleration, smoothing, gestures, wheel chords, shake detection, autoscroll).
+            Run the desktop app (no browser needed) or use a Chromium browser for WebHID.
             Cursor, wheel and tilt are programmed in the Behaviors tab.
         </footer>
     </div>
