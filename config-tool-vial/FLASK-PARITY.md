@@ -331,18 +331,47 @@ in particular is rate-sensitive: at a true 125 Hz input cadence, α=0.4
 - Flask's **status report** (types settings as text): skip — the
   configurator displays live values instead.
 
-### Implementation order (Phase 3, once confirmed)
+### Implementation status (2026-07-05 — Phase 3 built, hardware pass pending)
 
-1. Drag-scroll behavior builder (config-only; testable against stock
-   firmware immediately).
-2. Firmware fork: `pointer_fx` module + smoothing + accel, params over new
-   ConfigCommands, persistence, version bump.
-3. Gestures + wiggle in the same module; 0xFFFB usages both directions.
-4. Configurator Pointer tab + gesture builder + keycodes plumbing.
-5. Hardware pass: measure Elecom report rate, try `interval_override`,
-   retune defaults, then persist-power-cycle-verify each param (the
-   madromys hardware-verification pattern: get → set → out-of-range clamp
-   → save → power cycle → re-get).
+Branch `flask-parity`: commit `c4dab8c` (firmware) + `3b8cf15` (GUI).
+
+**Firmware (done, builds clean, NOT hardware-tested):**
+`firmware/src/pointer_fx.cc/.h` carries all six features (accel, smoothing,
+gestures, wiggle, autoscroll, wheel chords). Hooks in `process_mapping()`:
+`pfx_input_stage()` at the top (activation-flag sampling, pulse cadence,
+wiggle observe, chord/gesture/jog capture + swallow), `pfx_divert_cursor()`
+in the relative walk branch, `pfx_output_stage()` (smoothing→accel) before
+the `accumulated[]` drain; `pfx_cache_ptrs()` at the end of
+`update_their_descriptor_derivates()`. Config: `GET/SET_POINTER_FX` (26/27,
+2 pages), `CONFIG_VERSION` 100, params inline in `persist_config_v100_t`
+(v18 header + block); unknown upstream 19–99 rejected on load. Build:
+`cd firmware/build && PICO_BOARD=feather_host cmake .. && make -j8 remapper`.
+
+**GUI (done, browser-verified):** Pointer tab (live debounced SET, re-read,
+persist; hides behind a hint on stock firmware), version negotiation
+100→18→…, new builders — Drag scroll (pure stock primitives + optional
+wiggle toggle), Gestures, Wheel chords, Shake action, OS shortcut presets
+(Mac ⌘ / PC Ctrl, incl. select word/line, compiled into top macro slots) —
+Pointer FX picker categories both directions, and a clickable top-view SVG
+device diagram on the Keymap tab (geometry in `profiles.js` `layout`).
+Dev server: use `serve.py` (adds `Cache-Control: no-cache`) — the default
+`http.server` let the browser heuristically cache edited ES modules for
+hours (`vial.js` imports `./profiles.js?v=2` to bust one poisoned entry).
+
+### Hardware pass (remaining)
+
+1. Flash `firmware/build/remapper.uf2` (hold BOOTSEL on the Feather while
+   plugging in, drag the UF2).
+2. Connect config-tool-vial — status should read "(Flask fork)"; Pointer
+   tab should populate.
+3. Measure the Elecom's real report rate (Monitor tab / `print_stats`);
+   try Settings → polling-rate override at 1000 Hz.
+4. Retune accel takeoff/offset + smoothing α on hardware (doc'd defaults
+   are Flask's, tuned at ~1 kHz PMW3360 — treat as starting points).
+5. Per-param verification, madromys pattern: get → set in-range → set
+   out-of-range expecting clamp → persist → power-cycle → re-get.
+6. Feel-check each feature: drag scroll (incl. shake toggle), a gesture
+   set (arrows), a wheel chord, autoscroll jog + stepped, an OS shortcut.
 
 ### Open questions (need answers before Phase 3)
 
