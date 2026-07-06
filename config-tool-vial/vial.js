@@ -972,4 +972,22 @@ function errMsg(e) { return (e && e.message) ? e.message : String(e); }
 
 window.vialDebug = { get project() { return project; }, compile: () => { normalizeBehaviors(); return compileProject(project); } };
 
-init();
+// A startup crash used to leave a silently dead page (seen in the wild when a
+// browser served a stale-cached index.html against fresh modules: a missing
+// element made init() throw before any handler was bound). Surface it loudly
+// and name the likely fix instead.
+function fatal(msg) {
+    const div = document.createElement('div');
+    div.style.cssText = 'margin:16px;padding:14px;border-radius:8px;background:#fdeceb;color:#b42318;font:14px -apple-system,sans-serif';
+    div.textContent = 'The configurator failed to start: ' + msg +
+        ' — This usually means your browser cached an old version of the tool. Hard-reload the page (Cmd+Shift+R / Ctrl+Shift+R).';
+    document.body.prepend(div);
+}
+window.addEventListener('error', (e) => fatal(e.message));
+
+try {
+    init();
+} catch (e) {
+    fatal(errMsg(e));
+    throw e;
+}
