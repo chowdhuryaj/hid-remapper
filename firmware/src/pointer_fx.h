@@ -69,7 +69,14 @@ struct __attribute__((packed)) pointer_fx_config_t {
     uint16_t asc_range;        // jog range counts, 50..2000 (Flask 300)
     uint16_t chord_step;       // counts per fire, 50..2000 (Flask 200)
     uint16_t chord_hold_ms;    // capture delay, 0..2000 (Flask 200)
+    // v101: software pointer speed ("DPI"), pure output gain applied after
+    // accel — the attached device's real sensor CPI can't be commanded.
+    uint16_t cursor_gain_mil;  // x1000, 100..4000, 1000 = unchanged
 };
+
+// Size of the parameter block as persisted by config version 100 (before
+// cursor_gain_mil); used to load legacy flash contents.
+#define PFX_V100_BLOCK_SIZE 34
 
 #define PFX_FLAG_SMOOTHING_ENABLED (1 << 0)
 #define PFX_FLAG_ACCEL_ENABLED (1 << 1)

@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js';
+import { newMapping } from './model.js?v=3';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js';
+} from './protocol.js?v=3';
 
 const ALL_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7];
 // Which layers a behavior's outputs/triggers are active on (defaults to all).
@@ -77,11 +77,14 @@ function makeAllocator(config) {
 
 // Compiles a base config (simple keymap + global settings) plus a list of
 // behaviors into a single device config. The base config is not mutated.
-export function compile(baseConfig, behaviors) {
+// projectOs = the project-wide OS ('mac'|'pc') that os_shortcut behaviors
+// inherit unless they pin their own.
+export function compile(baseConfig, behaviors, projectOs = 'mac') {
     const config = structuredClone(baseConfig);
     config.expressions = (config.expressions || []).slice(0, 8);
     while (config.expressions.length < 8) config.expressions.push('');
     const alloc = makeAllocator(config);
+    const ctx = { os: projectOs === 'pc' ? 'pc' : 'mac' };
 
     for (const b of behaviors || []) {
         switch (b.type) {
@@ -94,7 +97,7 @@ export function compile(baseConfig, behaviors) {
             case 'gesture_set': compileGestureSet(b, config, alloc); break;
             case 'wheel_chords': compileWheelChords(b, config, alloc); break;
             case 'shake_action': compileShakeAction(b, config, alloc); break;
-            case 'os_shortcut': compileOsShortcut(b, config, alloc); break;
+            case 'os_shortcut': compileOsShortcut(b, config, alloc, ctx); break;
             default: throw new Error('Unknown behavior type: ' + b.type);
         }
     }
@@ -308,11 +311,13 @@ const OS_SHORTCUTS = {
 };
 export const OS_SHORTCUT_CHOICES = Object.entries(OS_SHORTCUTS).map(([k, v]) => [k, v.label]);
 
-function compileOsShortcut(b, config, alloc) {
+function compileOsShortcut(b, config, alloc, ctx) {
     const def = OS_SHORTCUTS[b.action];
     if (!def) throw new Error('Unknown OS shortcut: ' + b.action);
+    // 'inherit' (or anything unrecognized) follows the project-wide OS.
+    const os = (b.os === 'pc' || b.os === 'mac') ? b.os : (ctx ? ctx.os : 'mac');
     const slot = alloc.macro();
-    config.macros[slot] = (def[b.os === 'pc' ? 'pc' : 'mac']).map((step) => [...step]);
+    config.macros[slot] = def[os].map((step) => [...step]);
     config.mappings.push(newMapping(b.trigger, hexUsage(0xFFF20000, slot + 1), layersOf(b)));
 }
 

@@ -11,8 +11,10 @@
 #include "remapper.h"
 
 // Fork-local version: upstream v18 layout + the Pointer FX parameter block.
-// 100 so upstream's own 19+ can never collide with this fork's numbering.
-const uint8_t CONFIG_VERSION = 100;
+// 100+ so upstream's own 19+ can never collide with this fork's numbering.
+// 100 = first fork version; 101 adds cursor_gain_mil (software pointer speed).
+const uint8_t CONFIG_VERSION = 101;
+const uint8_t FIRST_FORK_CONFIG_VERSION = 100;
 const uint8_t LAST_UPSTREAM_CONFIG_VERSION = 18;
 
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH = 0x01;
@@ -33,8 +35,9 @@ bool checksum_ok(const uint8_t* buffer, uint16_t data_size) {
 bool persisted_version_ok(const uint8_t* buffer) {
     uint8_t version = ((config_version_t*) buffer)->version;
     // Accept every upstream layout we know how to parse, plus this fork's
-    // own version — but NOT unknown upstream versions 19..99.
-    return ((version >= 3) && (version <= LAST_UPSTREAM_CONFIG_VERSION)) || (version == CONFIG_VERSION);
+    // versions — but NOT unknown upstream versions 19..99.
+    return ((version >= 3) && (version <= LAST_UPSTREAM_CONFIG_VERSION)) ||
+        ((version >= FIRST_FORK_CONFIG_VERSION) && (version <= CONFIG_VERSION));
 }
 
 bool command_version_ok(const uint8_t* buffer) {
@@ -642,10 +645,16 @@ void load_config(const uint8_t* persisted_config) {
     }
     macro_entry_duration = config->macro_entry_duration;
     size_t header_size = sizeof(persist_config_v18_t);
-    if (version == CONFIG_VERSION) {
-        pointer_fx_config = ((persist_config_v100_t*) persisted_config)->pointer_fx;
+    if (version == 100) {
+        // Legacy fork block (34 bytes, no cursor_gain_mil); the missing tail
+        // keeps its pfx_set_defaults() value.
+        memcpy(&pointer_fx_config, persisted_config + sizeof(persist_config_v18_t), PFX_V100_BLOCK_SIZE);
         pfx_clamp_config();
-        header_size = sizeof(persist_config_v100_t);
+        header_size = sizeof(persist_config_v18_t) + PFX_V100_BLOCK_SIZE;
+    } else if (version == CONFIG_VERSION) {
+        pointer_fx_config = ((persist_config_v101_t*) persisted_config)->pointer_fx;
+        pfx_clamp_config();
+        header_size = sizeof(persist_config_v101_t);
     }
     mapping_config11_t* buffer_mappings = (mapping_config11_t*) (persisted_config + header_size);
     for (uint32_t i = 0; i < config->mapping_count; i++) {

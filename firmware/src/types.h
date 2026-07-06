@@ -318,9 +318,11 @@ typedef persist_config_v12_t persist_config_v13_t;
 typedef persist_config_v13_t persist_config_v18_t;
 
 // Fork-local persisted layout: upstream v18 header + the Pointer FX
-// parameter block inline. Version 100 so upstream's future 19+ never
+// parameter block inline. Versions 100+ so upstream's future 19+ never
 // collides. Mappings/macros/expressions/quirks follow as in v18.
-struct __attribute__((packed)) persist_config_v100_t {
+// v100 used a 34-byte block (PFX_V100_BLOCK_SIZE, before cursor_gain_mil);
+// v101 = the current pointer_fx_config_t.
+struct __attribute__((packed)) persist_config_v101_t {
     uint8_t version;
     uint8_t flags;
     uint8_t unmapped_passthrough_layer_mask;
@@ -335,7 +337,7 @@ struct __attribute__((packed)) persist_config_v100_t {
     pointer_fx_config_t pointer_fx;
 };
 
-typedef persist_config_v100_t persist_config_t;
+typedef persist_config_v101_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;

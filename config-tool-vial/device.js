@@ -7,7 +7,7 @@
 
 import {
     UINT8, UINT16, UINT32, INT32,
-    CONFIG_SIZE, CONFIG_VERSION, CONFIG_VERSION_FORK, CONFIG_USAGE_PAGE, CONFIG_USAGE,
+    CONFIG_SIZE, CONFIG_VERSION, CONFIG_VERSION_FORK, FORK_VERSIONS, CONFIG_USAGE_PAGE, CONFIG_USAGE,
     REPORT_ID_MONITOR, NMACROS, NEXPRESSIONS, MACRO_ITEMS_IN_PACKET, HUB_PORT_NONE,
     STICKY_FLAG, TAP_FLAG, HOLD_FLAG,
     IGNORE_AUTH_DEV_INPUTS_FLAG, GPIO_OUTPUT_MODE_FLAG, NORMALIZE_GAMEPAD_INPUTS_FLAG,
@@ -19,9 +19,9 @@ import {
     PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG,
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
     setActiveConfigVersion, readPointerFx, writePointerFx,
-} from './protocol.js';
-import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js';
-import { usageToHex } from './model.js';
+} from './protocol.js?v=3';
+import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=3';
+import { usageToHex } from './model.js?v=3';
 
 // Native (desktop) transport: speaks the same sendFeatureReport /
 // receiveFeatureReport surface as a WebHID HIDDevice, but routes through the
@@ -119,13 +119,13 @@ export class RemapperDevice {
     }
 
     async _checkDeviceVersion() {
-        // Probe the fork version first, then stock. Both are supported; the
-        // fork additionally unlocks the Pointer FX features.
-        for (const version of [CONFIG_VERSION_FORK, CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+        // Probe fork versions first (newest first), then stock. All are
+        // supported; the fork additionally unlocks the Pointer FX features.
+        for (const version of [...FORK_VERSIONS, CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
             await sendFeatureCommand(this.io, GET_CONFIG, [], version);
             const [received_version] = await readConfigFeature(this.io, [UINT8]);
             if (received_version == version) {
-                if (version == CONFIG_VERSION_FORK || version == CONFIG_VERSION) {
+                if (FORK_VERSIONS.includes(version) || version == CONFIG_VERSION) {
                     this.configVersion = version;
                     setActiveConfigVersion(version);
                     return;
@@ -140,7 +140,7 @@ export class RemapperDevice {
 
     // Fork firmware only: Pointer FX live tuning parameters.
     get isFork() {
-        return this.configVersion === CONFIG_VERSION_FORK;
+        return FORK_VERSIONS.includes(this.configVersion);
     }
 
     async loadPointerFx() {
@@ -289,6 +289,18 @@ export class RemapperDevice {
     // Writes the config to the device and persists it. Returns a code; throws on
     // communication errors.
     async save(config) {
+        return await this._push(config, true);
+    }
+
+    // Vial-style live apply: writes the config to the device's RAM only — no
+    // flash write (persist_config erases a whole sector; auto-persisting on
+    // every edit would wear it out and add latency). Changes take effect
+    // immediately but are lost on power-cycle until save() persists them.
+    async apply(config) {
+        await this._push(config, false);
+    }
+
+    async _push(config, persist) {
         await sendFeatureCommand(this.io, SUSPEND);
         try {
             const flags = (config['ignore_auth_dev_inputs'] ? IGNORE_AUTH_DEV_INPUTS_FLAG : 0) |
@@ -381,9 +393,12 @@ export class RemapperDevice {
                 ]);
             }
 
-            await sendFeatureCommand(this.io, PERSIST_CONFIG);
-            const [code] = await readConfigFeature(this.io, [UINT8]);
-            return code;
+            if (persist) {
+                await sendFeatureCommand(this.io, PERSIST_CONFIG);
+                const [code] = await readConfigFeature(this.io, [UINT8]);
+                return code;
+            }
+            return undefined;
         } finally {
             await sendFeatureCommand(this.io, RESUME);
         }

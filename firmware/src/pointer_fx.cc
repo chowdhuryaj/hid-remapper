@@ -72,6 +72,7 @@ void pfx_set_defaults() {
         .asc_range = 300,
         .chord_step = 200,
         .chord_hold_ms = 200,
+        .cursor_gain_mil = 1000,
     };
 }
 
@@ -94,6 +95,7 @@ void pfx_clamp_config() {
     c->asc_range = clamp_u16(c->asc_range, 50, 2000);
     c->chord_step = clamp_u16(c->chord_step, 50, 2000);
     c->chord_hold_ms = clamp_u16(c->chord_hold_ms, 0, 2000);
+    c->cursor_gain_mil = clamp_u16(c->cursor_gain_mil, 100, 4000);
 }
 
 bool pfx_is_activation_target(uint32_t usage) {
@@ -558,8 +560,13 @@ void pfx_input_stage(uint64_t now_ms) {
     }
 }
 
+static bool pfx_output_active() {
+    return (pointer_fx_config.flags & (PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED)) ||
+        (pointer_fx_config.cursor_gain_mil != 1000);
+}
+
 bool pfx_divert_cursor(uint32_t target_usage, int32_t value_mil) {
-    if (!(pointer_fx_config.flags & (PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED))) {
+    if (!pfx_output_active()) {
         return false;
     }
     if (target_usage == CURSOR_X_USAGE) {
@@ -578,7 +585,7 @@ bool pfx_divert_cursor(uint32_t target_usage, int32_t value_mil) {
 // back into accumulated[] whose x1000 drain keeps the fractional carry that
 // the QMK modules maintained by hand.
 void pfx_output_stage(uint64_t now_ms) {
-    if (!(pointer_fx_config.flags & (PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED))) {
+    if (!pfx_output_active()) {
         return;
     }
 
@@ -627,6 +634,14 @@ void pfx_output_stage(uint64_t now_ms) {
         const float factor = 1.0f - (1.0f - m) / powf(1.0f + expf(k * (velocity - s)), g / k);
         out_x *= factor;
         out_y *= factor;
+    }
+
+    // Software pointer speed, last — a pure output gain so changing it
+    // doesn't disturb the accel curve's velocity tuning.
+    if (pointer_fx_config.cursor_gain_mil != 1000) {
+        const float gain = (float) pointer_fx_config.cursor_gain_mil / 1000.0f;
+        out_x *= gain;
+        out_y *= gain;
     }
 
     accumulated[CURSOR_X_USAGE] += (int32_t) lroundf(out_x * 1000.0f);

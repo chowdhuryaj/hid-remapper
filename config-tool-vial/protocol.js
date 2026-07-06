@@ -5,13 +5,14 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js';
+import crc32 from './crc.js?v=3';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
 export const CONFIG_SIZE = 32;
-export const CONFIG_VERSION = 18;       // last stock/upstream version
-export const CONFIG_VERSION_FORK = 100; // our Flask-parity firmware fork
+export const CONFIG_VERSION = 18;        // last stock/upstream version
+export const CONFIG_VERSION_FORK = 101;  // our Flask-parity firmware fork (current)
+export const FORK_VERSIONS = [101, 100]; // all fork versions we can talk to, newest first
 
 // The device's negotiated config version. The firmware rejects SET frames
 // whose version byte doesn't match its own, so the device layer stores the
@@ -19,7 +20,7 @@ export const CONFIG_VERSION_FORK = 100; // our Flask-parity firmware fork
 let activeConfigVersion = CONFIG_VERSION;
 export function setActiveConfigVersion(v) { activeConfigVersion = v; }
 export function getActiveConfigVersion() { return activeConfigVersion; }
-export function deviceIsFork() { return activeConfigVersion === CONFIG_VERSION_FORK; }
+export function deviceIsFork() { return FORK_VERSIONS.includes(activeConfigVersion); }
 
 // HID Remapper's config interface advertises this usage page / usage. We match
 // on it (not VID/PID) so the tool works on the Feather, the Pico variants and
@@ -183,38 +184,45 @@ export const PFX_FLAG_GESTURES = 1 << 5;
 
 const PFX_PAGE0_FIELDS = [UINT16, UINT16, UINT16, INT16, UINT16, UINT16, UINT16, UINT16];
 const PFX_PAGE1_FIELDS = [UINT16, UINT16, UINT16, UINT8, UINT8, UINT16, UINT16, UINT16, UINT16, UINT16];
+// v101 appended cursor_gain to page 1; on a v100 device the field is absent.
+const PFX_PAGE1_FIELDS_V101 = [...PFX_PAGE1_FIELDS, UINT16];
 
 export async function readPointerFx(device) {
+    const v101 = getActiveConfigVersion() >= 101;
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 0]]);
     const [flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
         device_cpi, smooth_factor, smooth_timeout] =
         await readConfigFeature(device, PFX_PAGE0_FIELDS);
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 1]]);
     const [gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold, ,
-        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold] =
-        await readConfigFeature(device, PFX_PAGE1_FIELDS);
+        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold, cursor_gain] =
+        await readConfigFeature(device, v101 ? PFX_PAGE1_FIELDS_V101 : PFX_PAGE1_FIELDS);
     return {
         flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
         device_cpi, smooth_factor, smooth_timeout,
         gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold,
         asc_speed, asc_deadzone, asc_range, chord_step, chord_hold,
+        cursor_gain: cursor_gain == null ? 1000 : cursor_gain,
     };
 }
 
 export async function writePointerFx(device, p) {
+    const v101 = getActiveConfigVersion() >= 101;
     await sendFeatureCommand(device, SET_POINTER_FX, [
         [UINT8, 0],
         [UINT16, p.flags], [UINT16, p.accel_takeoff], [UINT16, p.accel_growth],
         [INT16, p.accel_offset], [UINT16, p.accel_limit], [UINT16, p.device_cpi],
         [UINT16, p.smooth_factor], [UINT16, p.smooth_timeout],
     ]);
-    await sendFeatureCommand(device, SET_POINTER_FX, [
+    const page1 = [
         [UINT8, 1],
         [UINT16, p.gesture_ratchet], [UINT16, p.wiggle_switch], [UINT16, p.wiggle_cooldown],
         [UINT8, p.wiggle_threshold], [UINT8, 0],
         [UINT16, p.asc_speed], [UINT16, p.asc_deadzone], [UINT16, p.asc_range],
         [UINT16, p.chord_step], [UINT16, p.chord_hold],
-    ]);
+    ];
+    if (v101) page1.push([UINT16, p.cursor_gain == null ? 1000 : p.cursor_gain]);
+    await sendFeatureCommand(device, SET_POINTER_FX, page1);
 }
 
 export function defaultPointerFx() {
@@ -224,6 +232,7 @@ export function defaultPointerFx() {
         device_cpi: 1000, smooth_factor: 400, smooth_timeout: 200,
         gesture_ratchet: 200, wiggle_switch: 150, wiggle_cooldown: 250, wiggle_threshold: 3,
         asc_speed: 100, asc_deadzone: 15, asc_range: 300, chord_step: 200, chord_hold: 200,
+        cursor_gain: 1000,
     };
 }
 

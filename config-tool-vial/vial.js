@@ -2,18 +2,18 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG } from './device.js';
-import { migrateConfig } from './model.js';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG } from './device.js?v=3';
+import { migrateConfig } from './model.js?v=3';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES,
-} from './protocol.js';
-import { defaultProfile } from './profiles.js?v=2';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js';
+} from './protocol.js?v=3';
+import { defaultProfile } from './profiles.js?v=3';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=3';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=3';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=3';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=3';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -32,6 +32,10 @@ let categories = targetCategories(0);
 let currentCat = categories[0].name;
 let pointerFx = null;         // live Pointer FX params (fork firmware only)
 let pfxSendTimer = null;
+let liveApply = true;         // Vial-style: push keymap/behavior edits to device RAM as you make them
+let applyTimer = null;
+let applying = false;
+let lastApplied = null;       // JSON of the last config pushed/loaded, to skip no-op applies
 
 const dev = new RemapperDevice();
 const $ = (id) => document.getElementById(id);
@@ -73,6 +77,19 @@ function init() {
     for (const b of document.querySelectorAll('[data-add]')) {
         b.addEventListener('click', () => addBehavior(b.getAttribute('data-add')));
     }
+    $('live').addEventListener('change', () => {
+        liveApply = $('live').checked;
+        if (liveApply) scheduleApply();
+    });
+    // Vial-style live apply: any interaction inside the editing surfaces may
+    // have mutated the project; schedule a (debounced, diffed) push. Clicks
+    // that changed nothing are filtered out by the compiled-JSON comparison.
+    for (const id of ['panel-keymap', 'panel-behaviors', 'panel-macros', 'panel-settings', 'picker']) {
+        const p = $(id);
+        for (const ev of ['change', 'click', 'input']) {
+            p.addEventListener(ev, scheduleApply);
+        }
+    }
 
     dev.onDisconnect = onDisconnected;
     if (NATIVE) {
@@ -111,9 +128,54 @@ async function loadFromDevice() {
     clearNotice();
     try {
         project = projectFromJson(migrateConfig(await dev.load()));
+        // What's on the device is now what the project compiles to — don't
+        // immediately re-push it.
+        try { lastApplied = JSON.stringify(compileProject(project)); } catch { lastApplied = null; }
         afterProjectChanged();
         showNotice('Loaded the device config as the base keymap. Note: behaviors can’t be read back from a device — keep your project file.', 'info');
     } catch (e) { showNotice(errMsg(e)); }
+}
+
+// --- Vial-style live apply ---
+// Debounced compile-and-push to device RAM. Explicit "Save to device" is what
+// persists to flash (power-cycle safe); live applies deliberately never do.
+function scheduleApply() {
+    if (!liveApply || !dev.isOpen) return;
+    if (applyTimer) clearTimeout(applyTimer);
+    applyTimer = setTimeout(doApply, 350);
+}
+
+async function doApply() {
+    if (!dev.isOpen || !liveApply) return;
+    if (applying) { scheduleApply(); return; }  // one in flight; retry after
+    let compiled;
+    try {
+        normalizeBehaviors();
+        compiled = compileProject(project);
+    } catch (e) {
+        setApplyState('err', 'Compile: ' + errMsg(e));
+        return;
+    }
+    const snapshot = JSON.stringify(compiled);
+    if (snapshot === lastApplied) return;
+    applying = true;
+    setApplyState('busy', 'Applying…');
+    try {
+        await dev.apply(compiled);
+        lastApplied = snapshot;
+        setApplyState('ok', 'Applied (not yet persisted — Save to keep across power cycles)');
+    } catch (e) {
+        setApplyState('err', 'Apply failed: ' + errMsg(e));
+    } finally {
+        applying = false;
+    }
+}
+
+function setApplyState(kind, title) {
+    const dot = $('applystate');
+    if (!dot) return;
+    dot.className = 'applystate ' + kind;
+    dot.title = title || '';
 }
 
 async function saveToDevice() {
@@ -128,6 +190,8 @@ async function saveToDevice() {
     }
     try {
         const code = await dev.save(compiled);
+        lastApplied = JSON.stringify(compiled);
+        setApplyState('ok', 'Saved and persisted');
         if (code === PERSIST_CONFIG_SUCCESS) flashSaved();
         else if (code === PERSIST_CONFIG_CONFIG_TOO_BIG) showNotice('Configuration is too big to persist on the device.');
         else showNotice('Unexpected save result (' + code + ').');
@@ -139,6 +203,10 @@ function onConnected() {
     $('status').className = 'status on';
     $('load').disabled = false;
     $('save').disabled = false;
+    // Don't auto-push the local project over an unseen device config; the
+    // first edit (or an explicit Save/Load) decides whose state wins.
+    lastApplied = null;
+    setApplyState('', 'Live apply armed — first edit pushes the whole local project');
     if (dev.isFork) {
         dev.loadPointerFx().then((p) => { pointerFx = p; if (currentTab === 'pointer') renderPointer(); })
             .catch((e) => showNotice('Could not read Pointer FX parameters: ' + errMsg(e)));
@@ -512,7 +580,7 @@ function defaultBehavior(type) {
     if (type === 'gesture_set') return { id, type, set: 0, trigger: profile.buttons[6] ? profile.buttons[6].source : firstBtn, mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
     if (type === 'wheel_chords') return { id, type, button: 0, slots: emptySlots() };
     if (type === 'shake_action') return { id, type, action: '0xfff10001', sticky: true };
-    if (type === 'os_shortcut') return { id, type, trigger: profile.buttons[3].source, action: 'copy', os: 'mac' };
+    if (type === 'os_shortcut') return { id, type, trigger: profile.buttons[3].source, action: 'copy', os: 'inherit' };
     throw new Error('unknown behavior ' + type);
 }
 
@@ -643,7 +711,7 @@ function osShortcutBody(b) {
     return [
         field('Trigger', sourceButton(b.trigger, 'Shortcut trigger', (u) => { b.trigger = u; renderBehaviors(); })),
         field('Shortcut', selectFrom(OS_SHORTCUT_CHOICES, b.action, (v) => { b.action = v; })),
-        field('OS', selectFrom([['mac', 'macOS (⌘)'], ['pc', 'Windows / Linux (Ctrl)']], b.os, (v) => { b.os = v; })),
+        field('OS', selectFrom([['inherit', 'Project default (Settings tab)'], ['mac', 'macOS (⌘)'], ['pc', 'Windows / Linux (Ctrl)']], b.os, (v) => { b.os = v; })),
         el('div', { class: 'bcaption', text: 'Cut/Copy/Paste/Undo/Redo, app switcher, select word/line and friends, with the right modifiers for your OS. Fills one of the top macro slots at compile time; runs on stock firmware.' }),
     ];
 }
@@ -851,6 +919,8 @@ function renderSettings() {
     f.append(settingSelect('Output polling rate', 'Force the polling interval reported to the PC. “Device default” leaves it unchanged.',
         [['0', 'Device default'], ['1', '1000 Hz'], ['2', '500 Hz'], ['4', '250 Hz'], ['8', '125 Hz']], String(c.interval_override), (v) => { c.interval_override = parseInt(v, 10); }));
     f.append(settingToggle('Normalize gamepad inputs', 'Rescale analog gamepad axes to a standard range.', !!c.normalize_gamepad_inputs, (v) => { c.normalize_gamepad_inputs = v; }));
+    f.append(settingSelect('Shortcut OS', 'Which modifier set “OS shortcut” behaviors use when set to “Project default”. Changing this recompiles them on the next apply/save.',
+        [['mac', 'macOS (⌘)'], ['pc', 'Windows / Linux (Ctrl)']], project.os || 'mac', (v) => { project.os = v; }));
 }
 
 // --- pointer tab (fork firmware live tuning) ---
@@ -902,6 +972,9 @@ function renderPointer() {
     }
 
     const h = (t) => el('h2', { text: t, style: 'margin:18px 0 6px' });
+
+    f.append(h('Pointer speed'));
+    f.append(pfxSlider('Pointer speed', 'Software “DPI”: scales all cursor movement. The trackball’s real sensor CPI can only be changed with its hardware switch.', 'cursor_gain', 100, 4000, 50, (v) => (v / 10).toFixed(0) + '%'));
 
     f.append(h('Acceleration'));
     f.append(pfxToggle('Acceleration', 'Sigmoid gain curve on cursor speed (ported from Flask/pd_accel).', PFX_FLAG_ACCEL));

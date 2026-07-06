@@ -4,8 +4,8 @@
 // reverse-engineered from a compiled device config. Saving to the device
 // compiles base + behaviors together (see behaviors.compile).
 
-import { defaultConfig, migrateConfig } from './model.js';
-import { compile } from './behaviors.js';
+import { defaultConfig, migrateConfig } from './model.js?v=3';
+import { compile } from './behaviors.js?v=3';
 
 export const PROJECT_FORMAT = 1;
 
@@ -13,6 +13,7 @@ export function defaultProject() {
     return {
         format: PROJECT_FORMAT,
         profile: 'elecom_huge_plus',
+        os: 'mac',  // project-wide OS for os_shortcut behaviors set to 'inherit'
         base: defaultConfig(),
         behaviors: [],
     };
@@ -20,7 +21,7 @@ export function defaultProject() {
 
 // Compiles the project into the config that gets written to the device.
 export function compileProject(project) {
-    return compile(project.base, project.behaviors);
+    return compile(project.base, project.behaviors, project.os);
 }
 
 // Recognizes whether an imported JSON is a Vial-tool project (has behaviors) or
@@ -29,6 +30,7 @@ export function projectFromJson(json) {
     if (json && typeof json === 'object' && 'base' in json && 'behaviors' in json) {
         const p = defaultProject();
         p.profile = json.profile || p.profile;
+        p.os = (json.os === 'pc' || json.os === 'mac') ? json.os : p.os;
         p.base = migrateConfig(json.base);
         p.behaviors = Array.isArray(json.behaviors) ? json.behaviors : [];
         return p;

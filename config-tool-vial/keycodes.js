@@ -6,14 +6,14 @@
 // engine-level outputs live (Nothing, Registers, Expressions) — these are how
 // the advanced behaviors feed their results back into the keymap.
 
-import usages from './usages.js';
+import usages from './usages.js?v=3';
 import {
     LAYERS_USAGE_PAGE, MACRO_USAGE_PAGE, REGISTER_USAGE_PAGE, EXPR_USAGE_PAGE,
     BUTTON_USAGE_PAGE, MIDI_USAGE_PAGE, POINTER_FX_USAGE_PAGE, NLAYERS,
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     PFX_AUTOSCROLL_JOG_USAGE, PFX_AUTOSCROLL_UP_USAGE, PFX_AUTOSCROLL_DOWN_USAGE,
     PFX_AUTOSCROLL_STOP_USAGE, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js';
+} from './protocol.js?v=3';
 
 export const NMACROS_ASSIGNABLE = 32;
 const hexUsage = (base, n) => '0x' + ((base + n) >>> 0).toString(16).padStart(8, '0');
