@@ -33,6 +33,7 @@ extern uint8_t resolution_multiplier;
 static const uint32_t CURSOR_X_USAGE = 0x00010030;
 static const uint32_t CURSOR_Y_USAGE = 0x00010031;
 static const uint32_t PFX_V_SCROLL_USAGE = 0x00010038;
+static const uint32_t PFX_H_SCROLL_USAGE = 0x000C0238;
 static const uint32_t BUTTON_USAGE_PAGE = 0x00090000;
 static const uint8_t PFX_V_RESOLUTION_BITMASK = 1 << 0;  // mirrors remapper.cc (internal linkage there)
 
@@ -110,6 +111,8 @@ bool pfx_is_activation_target(uint32_t usage) {
 // swallowing must zero all of them.
 static int32_t* cursor_x_slots[2] = { NULL, NULL };
 static int32_t* cursor_y_slots[2] = { NULL, NULL };
+static int32_t* wheel_slots[2] = { NULL, NULL };
+static int32_t* tilt_slots[2] = { NULL, NULL };
 static int32_t* button_slots[PFX_NUM_CHORD_BUTTONS] = { NULL };
 
 struct pulse_slot_t {
@@ -119,12 +122,15 @@ struct pulse_slot_t {
 
 static pulse_slot_t gesture_pulses[PFX_NUM_GESTURE_SETS][PFX_NUM_DIRECTIONS];
 static pulse_slot_t chord_pulses[PFX_NUM_CHORD_BUTTONS][PFX_NUM_DIRECTIONS];
+static pulse_slot_t chord_wheel_pulses[PFX_NUM_CHORD_BUTTONS][PFX_NUM_CHORD_WHEEL_DIRS];
 static pulse_slot_t wiggle_pulse;
 
 void pfx_cache_ptrs() {
     for (int raw = 0; raw < 2; raw++) {
         cursor_x_slots[raw] = remapper_get_state_ptr(CURSOR_X_USAGE, 0, false, raw);
         cursor_y_slots[raw] = remapper_get_state_ptr(CURSOR_Y_USAGE, 0, false, raw);
+        wheel_slots[raw] = remapper_get_state_ptr(PFX_V_SCROLL_USAGE, 0, false, raw);
+        tilt_slots[raw] = remapper_get_state_ptr(PFX_H_SCROLL_USAGE, 0, false, raw);
     }
     for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
         button_slots[b] = remapper_get_state_ptr(BUTTON_USAGE_PAGE | (b + 1), 0, false, false);
@@ -140,6 +146,9 @@ void pfx_cache_ptrs() {
     for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
         for (int d = 0; d < PFX_NUM_DIRECTIONS; d++) {
             chord_pulses[b][d].state = remapper_get_state_ptr(PFX_PULSE_CHORD(b, d), 0, false, false);
+        }
+        for (int w = 0; w < PFX_NUM_CHORD_WHEEL_DIRS; w++) {
+            chord_wheel_pulses[b][w].state = remapper_get_state_ptr(PFX_PULSE_CHORD_WHEEL(b, w), 0, false, false);
         }
     }
     wiggle_pulse.state = remapper_get_state_ptr(PFX_PULSE_WIGGLE, 0, false, false);
@@ -319,6 +328,9 @@ void pfx_reset_runtime_state() {
         for (int d = 0; d < PFX_NUM_DIRECTIONS; d++) {
             chord_pulses[b][d].pending = 0;
         }
+        for (int w = 0; w < PFX_NUM_CHORD_WHEEL_DIRS; w++) {
+            chord_wheel_pulses[b][w].pending = 0;
+        }
     }
     wiggle_pulse.pending = 0;
 }
@@ -355,8 +367,44 @@ static void wiggle_observe(int32_t x, int32_t y, uint64_t now_ms) {
     }
 }
 
-// wheel_chords.c: capture target = lowest held button with mapped slots,
-// hold-delay before capture, fresh accumulator per chord.
+// wheel_chords.c ("mouse chords"): capture target = lowest held button with
+// mapped slots, hold-delay before capture, fresh accumulator per chord.
+// Beyond the ball's 8 ratchet directions, the scroll wheel and tilt are also
+// captured while chording: each detent fires the matching wheel pulse.
+
+static bool chord_row_has_any(uint8_t b) {
+    if (row_has_any_pulse(chord_pulses[b])) {
+        return true;
+    }
+    for (int w = 0; w < PFX_NUM_CHORD_WHEEL_DIRS; w++) {
+        if (chord_wheel_pulses[b][w].state != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int32_t read_delta_pair(int32_t* slots[2]) {
+    if (slots[1] != NULL) return *slots[1];
+    if (slots[0] != NULL) return *slots[0];
+    return 0;
+}
+
+static void swallow_pair(int32_t* slots[2]) {
+    if (slots[0] != NULL) *slots[0] = 0;
+    if (slots[1] != NULL) *slots[1] = 0;
+}
+
+static void chord_fire_wheel(uint8_t button, uint8_t w, int32_t ticks) {
+    pulse_slot_t* p = &chord_wheel_pulses[button][w];
+    if (p->state == NULL) {
+        return;
+    }
+    for (int32_t i = 0; i < ticks && i < 8; i++) {
+        pulse_fire(p);
+    }
+}
+
 static bool chords_stage(int32_t dx, int32_t dy, uint64_t now_ms) {
     if (!(pointer_fx_config.flags & PFX_FLAG_CHORDS_ENABLED)) {
         chord_active_button = -1;
@@ -365,7 +413,7 @@ static bool chords_stage(int32_t dx, int32_t dy, uint64_t now_ms) {
     int8_t previous = chord_active_button;
     chord_active_button = -1;
     for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
-        if ((button_slots[b] != NULL) && (*button_slots[b] != 0) && row_has_any_pulse(chord_pulses[b])) {
+        if ((button_slots[b] != NULL) && (*button_slots[b] != 0) && chord_row_has_any(b)) {
             chord_active_button = b;
             break;
         }
@@ -386,6 +434,18 @@ static bool chords_stage(int32_t dx, int32_t dy, uint64_t now_ms) {
     chord_acc_x += dx;
     chord_acc_y += dy;
     ratchet_run(&chord_acc_x, &chord_acc_y, pointer_fx_config.chord_step, chord_pulses[chord_active_button]);
+
+    // Wheel + tilt while chording: swallow the detents and fire per tick.
+    int32_t wv = read_delta_pair(wheel_slots);
+    int32_t tv = read_delta_pair(tilt_slots);
+    if (wv != 0) {
+        chord_fire_wheel(chord_active_button, wv > 0 ? 0 : 1, wv > 0 ? wv : -wv);
+        swallow_pair(wheel_slots);
+    }
+    if (tv != 0) {
+        chord_fire_wheel(chord_active_button, tv < 0 ? 2 : 3, tv < 0 ? -tv : tv);
+        swallow_pair(tilt_slots);
+    }
     return true;
 }
 
@@ -529,6 +589,9 @@ void pfx_input_stage(uint64_t now_ms) {
     for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
         for (int d = 0; d < PFX_NUM_DIRECTIONS; d++) {
             pulse_drain(&chord_pulses[b][d]);
+        }
+        for (int w = 0; w < PFX_NUM_CHORD_WHEEL_DIRS; w++) {
+            pulse_drain(&chord_wheel_pulses[b][w]);
         }
     }
     pulse_drain(&wiggle_pulse);

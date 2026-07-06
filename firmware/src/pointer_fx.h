@@ -42,6 +42,10 @@
 #define PFX_PULSE_GESTURE(set, dir) (POINTER_FX_USAGE_PAGE | (0x20 + (set) * 8 + (dir)))
 #define PFX_PULSE_WIGGLE (POINTER_FX_USAGE_PAGE | 0x70)
 #define PFX_PULSE_CHORD(btn, dir) (POINTER_FX_USAGE_PAGE | (0x80 + (btn) * 8 + (dir)))
+// Mouse chords also capture the scroll wheel and tilt while the button is
+// held: w = 0 wheel-up, 1 wheel-down, 2 tilt-left, 3 tilt-right.
+#define PFX_PULSE_CHORD_WHEEL(btn, w) (POINTER_FX_USAGE_PAGE | (0xC0 + (btn) * 4 + (w)))
+#define PFX_NUM_CHORD_WHEEL_DIRS 4
 
 #define PFX_NUM_GESTURE_SETS 8
 #define PFX_NUM_CHORD_BUTTONS 8

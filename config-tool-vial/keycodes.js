@@ -11,8 +11,9 @@ import {
     LAYERS_USAGE_PAGE, MACRO_USAGE_PAGE, REGISTER_USAGE_PAGE, EXPR_USAGE_PAGE,
     BUTTON_USAGE_PAGE, MIDI_USAGE_PAGE, POINTER_FX_USAGE_PAGE, NLAYERS,
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
+    pfxChordWheelFiredUsage,
     PFX_AUTOSCROLL_JOG_USAGE, PFX_AUTOSCROLL_UP_USAGE, PFX_AUTOSCROLL_DOWN_USAGE,
-    PFX_AUTOSCROLL_STOP_USAGE, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
+    PFX_AUTOSCROLL_STOP_USAGE, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS, PFX_WHEEL_DIRS,
 } from './protocol.js?v=3';
 
 export const NMACROS_ASSIGNABLE = 32;
@@ -114,6 +115,9 @@ export function sourceCategories(profile, extraSource = []) {
         for (let d = 0; d < 8; d++) {
             pfx.push({ usage: pfxChordFiredUsage(b, d), label: 'Chord B' + (b + 1) + ' fired ' + PFX_DIRECTIONS[d] });
         }
+        for (let w = 0; w < 4; w++) {
+            pfx.push({ usage: pfxChordWheelFiredUsage(b, w), label: 'Chord B' + (b + 1) + ' ' + PFX_WHEEL_DIRS[w] });
+        }
     }
     cats.push({ name: 'Pointer FX', items: pfx });
 
@@ -164,6 +168,10 @@ function pfxName(usage) {
     if (n >= 0x80 && n < 0xC0) {
         const i = n - 0x80;
         return 'Chord B' + (Math.floor(i / 8) + 1) + ' fired ' + PFX_DIRECTIONS[i % 8];
+    }
+    if (n >= 0xC0 && n < 0xE0) {
+        const i = n - 0xC0;
+        return 'Chord B' + (Math.floor(i / 4) + 1) + ' ' + PFX_WHEEL_DIRS[i % 4];
     }
     return 'Pointer FX ' + n;
 }

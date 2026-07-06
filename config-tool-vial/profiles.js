@@ -30,20 +30,22 @@ export const ELECOM_HUGE_PLUS = {
 
     // Top-view geometry for the visual layout editor (SVG user units).
     // Thumb cluster on the left, ball center-right, front (palm) at bottom.
+    // Even margins, consistent gaps, room for a label line on every shape
+    // taller than 40 units.
     layout: {
-        viewBox: '0 0 440 300',
-        outline: { x: 8, y: 14, w: 424, h: 272, rx: 44 },
-        ball: { cx: 232, cy: 165, r: 74 },
-        wheel: { x: 34, y: 112, w: 30, h: 64, rx: 10, label: 'Wheel' },
+        viewBox: '0 0 480 330',
+        outline: { x: 10, y: 14, w: 460, h: 302, rx: 48 },
+        ball: { cx: 258, cy: 180, r: 78 },
+        wheel: { x: 36, y: 116, w: 44, h: 72, rx: 12, label: 'Wheel' },
         buttons: [
-            { id: 'b4', x: 30, y: 62, w: 34, h: 26, tag: 'B4' },
-            { id: 'b5', x: 68, y: 62, w: 34, h: 26, tag: 'B5' },
-            { id: 'b3', x: 34, y: 112, w: 30, h: 64, tag: 'B3', isWheelClick: true },
-            { id: 'b1', x: 26, y: 194, w: 78, h: 60, tag: 'B1' },
-            { id: 'b7', x: 118, y: 54, w: 54, h: 34, tag: 'B7' },
-            { id: 'b6', x: 118, y: 94, w: 54, h: 34, tag: 'B6' },
-            { id: 'b2', x: 316, y: 56, w: 54, h: 38, tag: 'B2' },
-            { id: 'b8', x: 376, y: 56, w: 48, h: 38, tag: 'B8' },
+            { id: 'b4', x: 30, y: 56, w: 42, h: 30, tag: 'B4' },
+            { id: 'b5', x: 82, y: 56, w: 42, h: 30, tag: 'B5' },
+            { id: 'b3', x: 36, y: 116, w: 44, h: 72, tag: 'B3', isWheelClick: true },
+            { id: 'b1', x: 30, y: 216, w: 88, h: 66, tag: 'B1' },
+            { id: 'b7', x: 140, y: 56, w: 66, h: 44, tag: 'B7' },
+            { id: 'b6', x: 140, y: 110, w: 66, h: 44, tag: 'B6' },
+            { id: 'b2', x: 352, y: 56, w: 56, h: 44, tag: 'B2' },
+            { id: 'b8', x: 414, y: 56, w: 50, h: 44, tag: 'B8' },
         ],
     },
 

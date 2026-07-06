@@ -314,6 +314,10 @@ function setApplyState(kind, title) {
 
 async function saveToDevice() {
     clearNotice();
+    // Don't interleave with a live apply already on the wire — the two
+    // suspend/rewrite/resume sequences would corrupt each other.
+    if (applyTimer) { clearTimeout(applyTimer); applyTimer = null; }
+    while (applying) await new Promise((r) => setTimeout(r, 50));
     let compiled;
     try {
         normalizeBehaviors();
@@ -322,6 +326,7 @@ async function saveToDevice() {
         showNotice('Could not compile behaviors: ' + errMsg(e));
         return;
     }
+    applying = true;
     try {
         const code = await dev.save(compiled);
         lastApplied = JSON.stringify(compiled);
@@ -330,6 +335,7 @@ async function saveToDevice() {
         else if (code === PERSIST_CONFIG_CONFIG_TOO_BIG) showNotice('Configuration is too big to persist on the device.');
         else showNotice('Unexpected save result (' + code + ').');
     } catch (e) { showNotice(errMsg(e)); }
+    finally { applying = false; }
 }
 
 function onConnected() {
@@ -477,10 +483,12 @@ function renderDiagram() {
             onclick: () => selectSlot(btn.source, btn.label),
         }, svgEl('title', { text: btn.label + ' — ' + view.text })));
         const cx = s.x + s.w / 2;
-        const roomy = s.h >= 34;
+        const roomy = s.h >= 40;
         svg.append(svgEl('text', { class: 'tag', x: cx, y: s.y + (roomy ? s.h / 2 - 4 : s.h / 2 + 4), 'text-anchor': 'middle', text: s.tag }));
         if (roomy) {
-            svg.append(svgEl('text', { class: 'lbl', x: cx, y: s.y + s.h / 2 + 10, 'text-anchor': 'middle', text: truncate(view.text, 13) }));
+            // Label budget scales with the shape so text never spills out.
+            const budget = Math.max(4, Math.floor(s.w / 5.5));
+            svg.append(svgEl('text', { class: 'lbl', x: cx, y: s.y + s.h / 2 + 11, 'text-anchor': 'middle', text: truncate(view.text, budget) }));
         }
     }
     if (lay.wheel && lay.wheel.label) {
@@ -722,7 +730,16 @@ function defaultBehavior(type) {
     if (type === 'dpi_shift') return { id, type, button: btnAt(4), mode: 'hold', factor: 0.4 };
     if (type === 'cursor_keys') return { id, type, gate: { mode: 'hold', button: btnAt(5) }, sens: 8, keys: { ...ARROWS } };
     if (type === 'chord_set') return { id, type, members: [], chords: [{ id: newBehaviorId(), members: [btnAt(0), btnAt(1)], output: '0x00070006' }] };
-    if (type === 'scroll_text') return { id, type, glyphs: ['0x00070004', '0x00070005', '0x00070006'], scroll: '0x00010038', accept: btnAt(0) };
+    if (type === 'scroll_text') {
+        // Default set: digits 1..9, 0 with dwell confirm (200 ms or any button).
+        const digits = [0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27]
+            .map((c) => '0x000700' + c.toString(16).padStart(2, '0'));
+        return {
+            id, type, glyphs: digits, scroll: '0x00010038',
+            confirm: 'dwell', timeout: 200, accept: btnAt(0),
+            confirmButtons: profile.buttons.map((pb) => pb.source),
+        };
+    }
     if (type === 'tap_dance') return { id, type, button: btnAt(2), tap1: '0x00070004', tap2: null, tap3: null, hold: '0xfff10001', window: 200 };
     if (type === 'drag_scroll') return { id, type, trigger: btnAt(5), mode: 'sticky', divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
     if (type === 'gesture_set') return { id, type, set: 0, trigger: btnAt(6), mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
@@ -732,12 +749,38 @@ function defaultBehavior(type) {
     throw new Error('unknown behavior ' + type);
 }
 
+// Add-bar buttons navigate: if a behavior of that type already exists, jump
+// to its card instead of silently creating a duplicate. "Duplicate" on the
+// card is the explicit way to get a second instance.
 function addBehavior(type) {
+    switchTab('behaviors');
+    const existing = project.behaviors.find((x) => x.type === type);
+    if (existing) {
+        flashBehavior(existing);
+        return;
+    }
     const b = defaultBehavior(type);
     b.layers = [0, 1, 2, 3, 4, 5, 6, 7];
+    b.enabled = true;
     project.behaviors.push(b);
-    switchTab('behaviors');
     renderBehaviors();
+    flashBehavior(b);
+}
+
+function flashBehavior(b) {
+    const card = document.querySelector('[data-bid="' + b.id + '"]');
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1200);
+}
+
+function duplicateBehavior(b) {
+    const copy = JSON.parse(JSON.stringify(b));
+    copy.id = newBehaviorId();
+    project.behaviors.splice(project.behaviors.indexOf(b) + 1, 0, copy);
+    renderBehaviors();
+    flashBehavior(copy);
 }
 
 // "Active on layers" selector shared by every behavior — scopes the behavior's
@@ -787,12 +830,19 @@ function behaviorCard(b) {
     const titles = {
         dpi_shift: 'DPI shift', cursor_keys: 'Cursor → keys', chord_set: 'Chord',
         scroll_text: 'Scroll-wheel text', tap_dance: 'Tap dance',
-        drag_scroll: 'Drag scroll', gesture_set: 'Gestures', wheel_chords: 'Wheel chords', shake_action: 'Shake action',
+        drag_scroll: 'Drag scroll', gesture_set: 'Gestures', wheel_chords: 'Mouse chords', shake_action: 'Shake action',
         os_shortcut: 'OS shortcut',
     };
+    const enabled = b.enabled !== false;
+    const en = el('input', { type: 'checkbox' });
+    en.checked = enabled;
+    en.addEventListener('change', () => { b.enabled = en.checked; renderBehaviors(); });
     const head = el('div', { class: 'bhead' },
         el('div', {}, el('span', { class: 'btitle', text: titles[b.type] }), el('span', { class: 'btype', text: b.type })),
-        el('button', { class: 'iconbtn', text: 'Remove', onclick: () => removeBehavior(b) }));
+        el('div', { style: 'display:flex;gap:8px;align-items:center' },
+            el('label', { class: 'flag', title: 'Compile this behavior into the device config' }, en, 'On'),
+            el('button', { class: 'iconbtn', text: 'Duplicate', onclick: () => duplicateBehavior(b) }),
+            el('button', { class: 'iconbtn', text: 'Remove', onclick: () => removeBehavior(b) })));
     const body = el('div', {});
     if (b.type === 'dpi_shift') body.append(...dpiBody(b));
     else if (b.type === 'cursor_keys') body.append(...cursorBody(b));
@@ -805,7 +855,7 @@ function behaviorCard(b) {
     else if (b.type === 'shake_action') body.append(...shakeActionBody(b));
     else if (b.type === 'os_shortcut') body.append(...osShortcutBody(b));
     body.insertBefore(layerField(b), body.firstChild);
-    return el('div', { class: 'bcard' }, head, body);
+    return el('div', { class: 'bcard' + (enabled ? '' : ' offb'), 'data-bid': b.id }, head, body);
 }
 
 // Compass-ordered direction slot editor shared by gestures and wheel chords.
@@ -840,10 +890,12 @@ function gestureSetBody(b) {
 }
 
 function wheelChordsBody(b) {
+    const wheelKeys = [['WU', 'Wheel ↑'], ['WD', 'Wheel ↓'], ['TL', 'Tilt ←'], ['TR', 'Tilt →']];
     return [
         field('Button', selectFrom(profile.buttons.slice(0, 8).map((pb, i) => [String(i), pb.label]), String(b.button), (v) => { b.button = parseInt(v, 10); })),
         ...directionSlotFields(b, 'Chord'),
-        el('div', { class: 'bcaption', text: 'Hold the button and roll the ball to fire direction keys; a quick click still clicks (hold delay in the Pointer tab). Needs the Flask-parity fork firmware.' }),
+        ...wheelKeys.map(([k, label]) => field(label, keyButton(b.slots[k], 'Chord ' + label, (u) => { b.slots[k] = u; renderBehaviors(); }))),
+        el('div', { class: 'bcaption', text: 'Hold the button, then roll the ball (8 directions, ratchet) or turn/tilt the wheel (per detent) to fire keys; a quick click still clicks (hold delay in the Pointer tab). Needs the Flask-parity fork firmware.' }),
     ];
 }
 
@@ -929,12 +981,20 @@ function scrollBody(b) {
             el('button', { class: 'iconbtn', text: '✕', title: 'Remove glyph', onclick: () => { b.glyphs.splice(i, 1); renderBehaviors(); } })));
     });
     glyphs.append(el('button', { class: 'iconbtn', text: '+ Add glyph', onclick: () => { b.glyphs.push('0x00070004'); renderBehaviors(); } }));
-    return [
+    const rows = [
         field('Glyphs', glyphs),
         field('Scroll source', selectFrom([['0x00010038', 'V scroll wheel'], ['0x000c0238', 'Tilt left / right']], b.scroll, (v) => { b.scroll = v; })),
-        field('Accept button', sourceButton(b.accept, 'Accept button', (u) => { b.accept = u; renderBehaviors(); })),
-        el('div', { class: 'bcaption', text: 'Scroll to choose a glyph, press accept to type it. Compiles to 2 expression channels + 1 mapping per glyph.' }),
+        field('Confirm', selectFrom([['dwell', 'Pause (timeout) or any button'], ['button', 'Accept button only']], b.confirm || 'dwell', (v) => { b.confirm = v; renderBehaviors(); })),
     ];
+    if ((b.confirm || 'dwell') === 'dwell') {
+        rows.push(field('Timeout', ...slider(50, 1000, 25, b.timeout || 200, (v) => v + ' ms', (v) => { b.timeout = v; })));
+        rows.push(el('div', { class: 'bcaption', text: 'Scroll to a glyph; it types after the pause, or instantly when you press any device button (the button still does its own action).' }));
+    } else {
+        rows.push(field('Accept button', sourceButton(b.accept, 'Accept button', (u) => { b.accept = u; renderBehaviors(); })));
+        rows.push(el('div', { class: 'bcaption', text: 'Scroll to choose a glyph, press accept to type it.' }));
+    }
+    rows.push(el('div', { class: 'bcaption', text: 'Compiles to 2 expression channels + 1 mapping per glyph.' }));
+    return rows;
 }
 
 // --- macros tab ---
@@ -1123,16 +1183,25 @@ function startWizard() {
     renderSettings();
 }
 
-// Press-to-identify: monitor traffic highlights the row of the pressed button.
+// Press-to-identify: monitor traffic highlights the row of the pressed
+// button. Highlight-only updates touch styles directly instead of
+// re-rendering — a full render would steal focus from the label input the
+// user is typing in every time monitor traffic arrives.
 function wizardMonitor(items) {
     if (!wizard) return;
     for (const it of items) {
         if (usagePage(it.usage) === 0x00090000 && it.value) {
+            wizard.highlight = it.usage;
             if (!wizard.buttons.some((b) => b.source === it.usage)) {
                 wizard.buttons.push({ source: it.usage, label: 'Button ' + (wizard.buttons.length + 1), hint: '' });
+                renderSettings();  // new row genuinely needs a render
+                return;
             }
-            wizard.highlight = it.usage;
-            renderSettings();
+            for (const row of document.querySelectorAll('[data-wsrc]')) {
+                const on = row.getAttribute('data-wsrc') === it.usage;
+                row.style.outline = on ? '2px solid var(--accent)' : '';
+                row.style.borderRadius = on ? '6px' : '';
+            }
             return;
         }
     }
@@ -1162,7 +1231,8 @@ function wizardCard() {
         const hint = el('input', { type: 'text', value: b.hint, placeholder: 'position hint (optional)', style: 'width:190px' });
         hint.addEventListener('change', () => { b.hint = hint.value; });
         card.append(el('div', {
-            class: 'actionrow', style: wizard.highlight === b.source ? 'outline:2px solid var(--accent);border-radius:6px' : '',
+            class: 'actionrow', 'data-wsrc': b.source,
+            style: wizard.highlight === b.source ? 'outline:2px solid var(--accent);border-radius:6px' : '',
         },
             el('span', { class: 'badge', text: b.source }), lab, hint,
             el('button', { class: 'iconbtn', text: '✕', onclick: () => { wizard.buttons = wizard.buttons.filter((x) => x !== b); renderSettings(); } })));
@@ -1273,8 +1343,8 @@ function renderPointer() {
     f.append(pfxToggle('Gestures', 'Flick the ball to fire keys while a set is latched (Behaviors tab defines sets).', PFX_FLAG_GESTURES));
     f.append(pfxSlider('Ratchet step', 'Ball travel (counts) per fired key.', 'gesture_ratchet', 50, 2000, 25, String));
 
-    f.append(h('Wheel chords'));
-    f.append(pfxToggle('Wheel chords', 'Hold a button + roll the ball for direction keys (Behaviors tab assigns them).', PFX_FLAG_CHORDS));
+    f.append(h('Mouse chords'));
+    f.append(pfxToggle('Mouse chords', 'Hold a button + roll the ball or turn the wheel for direction keys (Behaviors tab assigns them).', PFX_FLAG_CHORDS));
     f.append(pfxSlider('Chord step', 'Ball travel (counts) per fired key.', 'chord_step', 50, 2000, 25, String));
     f.append(pfxSlider('Hold delay', 'How long a button must be held before the ball is captured (ms). 0 = immediately.', 'chord_hold', 0, 2000, 50, String));
 

@@ -53,6 +53,8 @@
         .addbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
         .addbar > span { font-size: 13px; color: var(--muted); }
         .bcard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+        .bcard.flash { outline: 2px solid var(--accent); transition: outline 0.2s; }
+        .bcard.offb > div:last-child { opacity: 0.45; }
         .bhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
         .btitle { font-size: 15px; font-weight: 600; }
         .btype { font-size: 11px; color: var(--muted); border: 1px solid var(--border2); border-radius: 999px; padding: 2px 9px; margin-left: 8px; }
@@ -197,7 +199,7 @@
                 <span>Add behavior:</span>
                 <button class="btn" data-add="drag_scroll">Drag scroll</button>
                 <button class="btn" data-add="gesture_set">Gestures</button>
-                <button class="btn" data-add="wheel_chords">Wheel chords</button>
+                <button class="btn" data-add="wheel_chords">Mouse chords</button>
                 <button class="btn" data-add="shake_action">Shake action</button>
                 <button class="btn" data-add="os_shortcut">OS shortcut</button>
                 <button class="btn" data-add="dpi_shift">DPI shift</button>

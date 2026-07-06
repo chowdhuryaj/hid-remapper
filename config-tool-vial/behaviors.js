@@ -16,8 +16,11 @@
 import { newMapping } from './model.js?v=3';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
-    PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
+    pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
 } from './protocol.js?v=3';
+
+// Slot keys for the wheel/tilt chord directions (index = firmware w).
+export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
 
 const ALL_LAYERS = [0, 1, 2, 3, 4, 5, 6, 7];
 // Which layers a behavior's outputs/triggers are active on (defaults to all).
@@ -87,6 +90,7 @@ export function compile(baseConfig, behaviors, projectOs = 'mac') {
     const ctx = { os: projectOs === 'pc' ? 'pc' : 'mac' };
 
     for (const b of behaviors || []) {
+        if (b.enabled === false) continue;  // per-behavior kill switch
         switch (b.type) {
             case 'dpi_shift': compileDpiShift(b, config, alloc); break;
             case 'cursor_keys': compileCursorKeys(b, config, alloc); break;
@@ -205,28 +209,49 @@ function compileChordSet(b, config, alloc) {
 }
 
 // --- Scroll-wheel text input ------------------------------------------------
-// Scroll cycles a glyph index; the accept button (on its press edge) types the
-// glyph at the current index. Each glyph gets an output register surfaced as a
-// keycode mapping.
+// Scroll cycles a glyph index. Confirm modes:
+//   'dwell' (default): the glyph types after a configurable quiet period with
+//     no scrolling, or immediately when any device button is pressed;
+//   'button': legacy — only an explicit accept button types it.
 function compileScrollText(b, config, alloc) {
     const glyphs = b.glyphs;
     const n = glyphs.length;
     const regIdx = alloc.reg();
-    const regEdge = alloc.reg();
+    const regFire = alloc.reg();
 
     const idxCh = alloc.channel();
     config.expressions[idxCh] =
         `${regRef(regIdx)} recall ${b.scroll} input_state add ${n} add ${n} mod ${regRef(regIdx)} store`;
 
     const dispCh = alloc.channel();
-    let e = `${b.accept} input_state_binary ${b.accept} prev_input_state_binary not mul ${regRef(regEdge)} store`;
+    const lines = [];
+    if (b.confirm === 'button') {
+        lines.push(`${b.accept} input_state_binary ${b.accept} prev_input_state_binary not mul ${regRef(regFire)} store`);
+    } else {
+        const regT = alloc.reg();
+        const regDirty = alloc.reg();
+        const timeout = Math.max(50, Math.round(b.timeout || 200));
+        const moved = `${b.scroll} input_state abs 0 gt`;
+        // T = moved ? now : T  (last scroll activity)
+        lines.push(`${moved} dup time mul swap not ${regRef(regT)} recall mul add ${regRef(regT)} store`);
+        // dirty = max(dirty, moved)  (a glyph is pending)
+        lines.push(`${moved} ${regRef(regDirty)} recall max ${regRef(regDirty)} store`);
+        // fire = dirty AND (any-button press edge OR quiet > timeout)
+        const btns = (b.confirmButtons || []).slice(0, 8);
+        let cond = btns.map((u, i) =>
+            `${u} input_state_binary ${u} prev_input_state_binary not mul` + (i > 0 ? ' max' : '')).join(' ');
+        cond += (cond ? ' ' : '') + `time ${regRef(regT)} recall sub ${timeout} gt` + (cond ? ' max' : '');
+        lines.push(`${cond} ${regRef(regDirty)} recall mul ${regRef(regFire)} store`);
+        // consume the pending glyph once fired
+        lines.push(`${regRef(regDirty)} recall ${regRef(regFire)} recall not mul ${regRef(regDirty)} store`);
+    }
     const outRegs = [];
     for (let i = 0; i < n; i++) {
         const r = alloc.reg();
         outRegs.push(r);
-        e += ` ${regRef(regIdx)} recall ${i} eq ${regRef(regEdge)} recall mul ${regRef(r)} store`;
+        lines.push(`${regRef(regIdx)} recall ${i} eq ${regRef(regFire)} recall mul ${regRef(r)} store`);
     }
-    config.expressions[dispCh] = e;
+    config.expressions[dispCh] = lines.join(' eol ');
     for (let i = 0; i < n; i++) {
         config.mappings.push(newMapping(registerUsage(outRegs[i]), glyphs[i], layersOf(b)));
     }
@@ -267,13 +292,18 @@ function compileGestureSet(b, config, alloc) {
     });
 }
 
-// --- Wheel chords: hold a physical button + roll the ball (fork firmware) ---
-// No trigger mapping needed — the firmware watches the physical button and
-// captures motion only when at least one direction pulse is mapped.
+// --- Mouse chords: hold a physical button + roll ball / turn wheel ----------
+// (fork firmware) No trigger mapping needed — the firmware watches the
+// physical button and captures motion only when at least one pulse is mapped.
+// Ball = 8 ratchet directions; scroll wheel and tilt fire per detent.
 function compileWheelChords(b, config, alloc) {
     PFX_DIRECTIONS.forEach((dir, d) => {
         const out = b.slots && b.slots[dir];
         if (out) config.mappings.push(newMapping(pfxChordFiredUsage(b.button, d), out, layersOf(b)));
+    });
+    PFX_WHEEL_KEYS.forEach((k, w) => {
+        const out = b.slots && b.slots[k];
+        if (out) config.mappings.push(newMapping(pfxChordWheelFiredUsage(b.button, w), out, layersOf(b)));
     });
 }
 

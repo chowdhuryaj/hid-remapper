@@ -246,9 +246,13 @@ export const PFX_AUTOSCROLL_STOP_USAGE = pfxHex(0x0c);                    // tar
 export const pfxGestureFiredUsage = (set, dir) => pfxHex(0x20 + set * 8 + dir);  // source
 export const PFX_WIGGLE_FIRED_USAGE = pfxHex(0x70);                       // source
 export const pfxChordFiredUsage = (btn, dir) => pfxHex(0x80 + btn * 8 + dir);    // source
+// Mouse chords also capture the wheel: w = 0 wheel-up, 1 wheel-down,
+// 2 tilt-left, 3 tilt-right (firmware v101+).
+export const pfxChordWheelFiredUsage = (btn, w) => pfxHex(0xC0 + btn * 4 + w);   // source
 
 // Direction order used by the firmware (mouse +y = south): index 0..7.
 export const PFX_DIRECTIONS = ['E', 'SE', 'S', 'SW', 'W', 'NW', 'N', 'NE'];
+export const PFX_WHEEL_DIRS = ['Wheel ↑', 'Wheel ↓', 'Tilt ←', 'Tilt →'];
 
 export function maskToLayerList(layer_mask) {
     const layers = [];
