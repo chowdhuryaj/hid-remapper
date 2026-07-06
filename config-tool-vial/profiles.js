@@ -94,3 +94,115 @@ export function profileForVidPid(vendorId, productId) {
     }
     return null;
 }
+
+// --- custom profiles (created by the new-device wizard) ----------------------
+// Stored in localStorage; exported project files embed the profile so they
+// stay portable across machines.
+
+const CUSTOM_KEY = 'hrv-custom-profiles';
+
+export function loadCustomProfiles() {
+    try {
+        const raw = localStorage.getItem(CUSTOM_KEY);
+        const list = raw ? JSON.parse(raw) : [];
+        return Array.isArray(list) ? list.filter((p) => p && p.id && Array.isArray(p.buttons)) : [];
+    } catch {
+        return [];
+    }
+}
+
+export function saveCustomProfile(profile) {
+    const list = loadCustomProfiles().filter((p) => p.id !== profile.id);
+    list.push(profile);
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(list));
+}
+
+export function deleteCustomProfile(id) {
+    localStorage.setItem(CUSTOM_KEY, JSON.stringify(loadCustomProfiles().filter((p) => p.id !== id)));
+}
+
+export function allProfiles() {
+    const out = { ...profiles };
+    for (const p of loadCustomProfiles()) out[p.id] = p;
+    return out;
+}
+
+export function profileById(id) {
+    return allProfiles()[id] || null;
+}
+
+// Generic top-view layout for wizard-made profiles: buttons in a grid on the
+// left, a ball circle on the right when the device reports cursor axes.
+export function genericLayout(buttonCount, hasCursor) {
+    const perRow = 4, bw = 74, bh = 42, gapX = 14, gapY = 16, x0 = 26, y0 = 40;
+    const rows = Math.max(1, Math.ceil(buttonCount / perRow));
+    const gridW = perRow * (bw + gapX) - gapX;
+    const height = Math.max(200, y0 + rows * (bh + gapY) + 30);
+    const width = x0 + gridW + (hasCursor ? 190 : 30);
+    const buttons = [];
+    for (let i = 0; i < buttonCount; i++) {
+        buttons.push({
+            id: 'b' + (i + 1),
+            x: x0 + (i % perRow) * (bw + gapX),
+            y: y0 + Math.floor(i / perRow) * (bh + gapY),
+            w: bw, h: bh, tag: 'B' + (i + 1),
+        });
+    }
+    const layout = {
+        viewBox: `0 0 ${width} ${height}`,
+        outline: { x: 8, y: 12, w: width - 16, h: height - 24, rx: 30 },
+        buttons,
+    };
+    if (hasCursor) {
+        const r = Math.min(70, (height - 80) / 2);
+        layout.ball = { cx: width - r - 40, cy: height / 2, r };
+    }
+    return layout;
+}
+
+// Builds a wizard profile from named button usages and detected axes.
+export function buildCustomProfile(id, name, buttonDefs, axesDetected) {
+    const buttons = buttonDefs.map((b, i) => ({
+        id: 'b' + (i + 1),
+        label: b.label || 'Button ' + (i + 1),
+        native: b.native || ('Button ' + ((parseInt(b.source, 16) & 0xFFFF) || (i + 1))),
+        source: b.source,
+        hint: b.hint || '',
+    }));
+    const axes = [];
+    if (axesDetected.cursor) {
+        axes.push({
+            id: 'cursor', label: 'Cursor', native: 'Pointer movement', kind: 'cursor',
+            hint: 'X / Y passthrough',
+            dirs: [
+                { id: 'cur_x', label: 'Cursor X', axis: '0x00010030' },
+                { id: 'cur_y', label: 'Cursor Y', axis: '0x00010031' },
+            ],
+        });
+    }
+    if (axesDetected.wheel) {
+        axes.push({
+            id: 'wheel', label: 'Scroll wheel', native: 'Wheel up / down', kind: 'scroll',
+            axis: '0x00010038', hint: 'Scroll wheel',
+            dirs: [
+                { id: 'wh_ccw', label: 'Wheel up (CCW)', axis: '0x00010038', dir: -1, native: 'Wheel up' },
+                { id: 'wh_cw', label: 'Wheel down (CW)', axis: '0x00010038', dir: +1, native: 'Wheel down' },
+            ],
+        });
+    }
+    if (axesDetected.tilt) {
+        axes.push({
+            id: 'tilt', label: 'Tilt / AC pan', native: 'Wheel left / right', kind: 'tilt',
+            axis: '0x000c0238', hint: 'Horizontal wheel',
+            dirs: [
+                { id: 'tilt_l', label: 'Tilt left', axis: '0x000c0238', dir: -1, native: 'Wheel left' },
+                { id: 'tilt_r', label: 'Tilt right', axis: '0x000c0238', dir: +1, native: 'Wheel right' },
+            ],
+        });
+    }
+    return {
+        id, name, custom: true,
+        buttons, axes,
+        layout: genericLayout(buttons.length, !!axesDetected.cursor),
+    };
+}

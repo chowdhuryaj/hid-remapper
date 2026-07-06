@@ -9,7 +9,11 @@ import {
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES,
 } from './protocol.js?v=3';
-import { defaultProfile } from './profiles.js?v=3';
+import {
+    defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
+    buildCustomProfile,
+} from './profiles.js?v=3';
+import { usagePage } from './model.js?v=3';
 import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=3';
 import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=3';
 import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=3';
@@ -37,11 +41,67 @@ let applyTimer = null;
 let applying = false;
 let lastApplied = null;       // JSON of the last config pushed/loaded, to skip no-op applies
 
+// --- themes & zoom (Flask/Pipette-style, persisted per browser) ---
+// 'classic' clears every override so the stylesheet's light/dark auto-switch
+// applies; every other theme pins the full palette.
+const THEME_VARS = ['bg', 'surface', 'surface2', 'text', 'muted', 'faint', 'border', 'border2',
+    'accent', 'accent-bg', 'accent-text', 'ok', 'ok-bg', 'danger', 'danger-bg'];
+const THEMES = {
+    classic: { label: 'Classic (auto light/dark)' },
+    light: {
+        label: 'Light',
+        vars: { 'bg': '#f5f5f4', 'surface': '#ffffff', 'surface2': '#fafaf9', 'text': '#1c1c1a', 'muted': '#6b6b66', 'faint': '#9a9a93', 'border': '#e2e2dd', 'border2': '#cfcfc8', 'accent': '#2563eb', 'accent-bg': '#e8f0fe', 'accent-text': '#14458a', 'ok': '#15803d', 'ok-bg': '#e7f6ec', 'danger': '#b42318', 'danger-bg': '#fdeceb' },
+    },
+    dark: {
+        label: 'Dark',
+        vars: { 'bg': '#1a1a18', 'surface': '#242422', 'surface2': '#2c2c29', 'text': '#ececea', 'muted': '#a3a39d', 'faint': '#76766f', 'border': '#36352f', 'border2': '#45443d', 'accent': '#5b9aff', 'accent-bg': '#1c2a44', 'accent-text': '#bcd4ff', 'ok': '#69d28c', 'ok-bg': '#15301f', 'danger': '#f1857c', 'danger-bg': '#3a1714' },
+    },
+    nord: {
+        label: 'Nord',
+        vars: { 'bg': '#2e3440', 'surface': '#3b4252', 'surface2': '#434c5e', 'text': '#eceff4', 'muted': '#aeb8cc', 'faint': '#7b869c', 'border': '#4c566a', 'border2': '#596580', 'accent': '#88c0d0', 'accent-bg': '#274552', 'accent-text': '#c8e4ec', 'ok': '#a3be8c', 'ok-bg': '#33402c', 'danger': '#bf616a', 'danger-bg': '#40272b' },
+    },
+    dracula: {
+        label: 'Dracula',
+        vars: { 'bg': '#282a36', 'surface': '#313342', 'surface2': '#3a3d4f', 'text': '#f8f8f2', 'muted': '#b6b8c8', 'faint': '#7e8195', 'border': '#44475a', 'border2': '#565a72', 'accent': '#bd93f9', 'accent-bg': '#3b3354', 'accent-text': '#e3d3ff', 'ok': '#50fa7b', 'ok-bg': '#1f4030', 'danger': '#ff5555', 'danger-bg': '#4a2020' },
+    },
+    solarized: {
+        label: 'Solarized Light',
+        vars: { 'bg': '#fdf6e3', 'surface': '#fefbf0', 'surface2': '#f5efdc', 'text': '#073642', 'muted': '#657b83', 'faint': '#93a1a1', 'border': '#e6dfc8', 'border2': '#d3cbb0', 'accent': '#268bd2', 'accent-bg': '#e0eef8', 'accent-text': '#0d5a8f', 'ok': '#859900', 'ok-bg': '#eef0d8', 'danger': '#dc322f', 'danger-bg': '#fbe3e2' },
+    },
+};
+
+function applyTheme(name) {
+    const theme = THEMES[name] || THEMES.classic;
+    const root = document.documentElement;
+    for (const v of THEME_VARS) root.style.removeProperty('--' + v);
+    if (theme.vars) {
+        for (const [k, val] of Object.entries(theme.vars)) root.style.setProperty('--' + k, val);
+    }
+    localStorage.setItem('hrv-theme', name);
+}
+
+function applyZoom(pct) {
+    pct = Math.min(150, Math.max(70, Math.round(pct)));
+    document.body.style.zoom = pct / 100;
+    localStorage.setItem('hrv-zoom', String(pct));
+    return pct;
+}
+
+function currentTheme() { return localStorage.getItem('hrv-theme') || 'classic'; }
+function currentZoom() { return parseInt(localStorage.getItem('hrv-zoom') || '100', 10) || 100; }
+
 const dev = new RemapperDevice();
 const $ = (id) => document.getElementById(id);
 const base = () => project.base;
-const nativeBySource = {};
-for (const b of profile.buttons) nativeBySource[b.source] = b.native;
+let nativeBySource = {};
+function rebuildNativeBySource() {
+    nativeBySource = {};
+    for (const b of profile.buttons) nativeBySource[b.source] = b.native;
+}
+rebuildNativeBySource();
+// Safe button lookup for behavior defaults — custom profiles may have fewer
+// buttons than the Elecom's 8.
+const btnAt = (i) => (profile.buttons[i] || profile.buttons[0]).source;
 
 // --- tiny DOM helper ---
 function el(tag, attrs, ...kids) {
@@ -81,15 +141,29 @@ function init() {
         liveApply = $('live').checked;
         if (liveApply) scheduleApply();
     });
-    // Vial-style live apply: any interaction inside the editing surfaces may
-    // have mutated the project; schedule a (debounced, diffed) push. Clicks
-    // that changed nothing are filtered out by the compiled-JSON comparison.
+    // Vial-style live apply + undo snapshots: any interaction inside the
+    // editing surfaces may have mutated the project; schedule a (debounced,
+    // diffed) push and a history snapshot. No-op interactions are filtered
+    // out by the JSON comparisons.
     for (const id of ['panel-keymap', 'panel-behaviors', 'panel-macros', 'panel-settings', 'picker']) {
         const p = $(id);
         for (const ev of ['change', 'click', 'input']) {
-            p.addEventListener(ev, scheduleApply);
+            p.addEventListener(ev, () => { scheduleApply(); scheduleSnapshot(); });
         }
     }
+    $('undo').addEventListener('click', undo);
+    $('redo').addEventListener('click', redo);
+    window.addEventListener('keydown', (e) => {
+        if (!(e.metaKey || e.ctrlKey)) return;
+        if (isTextEditingTarget(e.target)) return;  // let text fields keep native undo
+        const k = e.key.toLowerCase();
+        if (k === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+        else if (k === 'y') { e.preventDefault(); redo(); }
+    });
+    historyInit();
+
+    applyTheme(currentTheme());
+    applyZoom(currentZoom());
 
     dev.onDisconnect = onDisconnected;
     if (NATIVE) {
@@ -134,6 +208,66 @@ async function loadFromDevice() {
         afterProjectChanged();
         showNotice('Loaded the device config as the base keymap. Note: behaviors can’t be read back from a device — keep your project file.', 'info');
     } catch (e) { showNotice(errMsg(e)); }
+}
+
+// --- undo / redo ---
+// Snapshot stack over the whole project (keymap, behaviors, macros, settings).
+// Snapshots are taken debounced after any editing interaction; undo/redo
+// restore, re-render and live-apply.
+let history = [];
+let histIndex = -1;
+let histTimer = null;
+const HIST_MAX = 100;
+
+function historyInit() {
+    history = [JSON.stringify(project)];
+    histIndex = 0;
+    updateHistoryButtons();
+}
+
+function scheduleSnapshot() {
+    if (histTimer) clearTimeout(histTimer);
+    histTimer = setTimeout(takeSnapshot, 350);
+}
+
+function takeSnapshot() {
+    histTimer = null;
+    if (histIndex < 0) return historyInit();
+    const snap = JSON.stringify(project);
+    if (snap === history[histIndex]) return;
+    history = history.slice(0, histIndex + 1);
+    history.push(snap);
+    if (history.length > HIST_MAX) history.shift();
+    histIndex = history.length - 1;
+    updateHistoryButtons();
+}
+
+function restoreHistory(i) {
+    histIndex = i;
+    project = JSON.parse(history[i]);
+    afterProjectChanged();  // re-render; its scheduleSnapshot no-ops (state == history entry)
+    scheduleApply();
+    updateHistoryButtons();
+}
+
+function undo() {
+    if (histTimer) { clearTimeout(histTimer); takeSnapshot(); }  // capture pending edits so redo can return to them
+    if (histIndex > 0) restoreHistory(histIndex - 1);
+}
+
+function redo() {
+    if (histIndex < history.length - 1) restoreHistory(histIndex + 1);
+}
+
+function updateHistoryButtons() {
+    if ($('undo')) $('undo').disabled = !(histIndex > 0);
+    if ($('redo')) $('redo').disabled = !(histIndex < history.length - 1);
+}
+
+function isTextEditingTarget(t) {
+    if (!t) return false;
+    if (t.tagName === 'TEXTAREA') return true;
+    return t.tagName === 'INPUT' && ['text', 'number', 'search'].includes(t.type);
 }
 
 // --- Vial-style live apply ---
@@ -228,7 +362,10 @@ function onDisconnected() {
 function exportJson() {
     clearNotice();
     normalizeBehaviors();
-    const blob = new Blob([JSON.stringify(project, null, 4)], { type: 'application/json' });
+    // Embed a custom profile so the file opens on machines that lack it.
+    const doc = { ...project };
+    if (profile.custom) doc.profileData = profile;
+    const blob = new Blob([JSON.stringify(doc, null, 4)], { type: 'application/json' });
     const a = el('a', { href: URL.createObjectURL(blob), download: 'hid-remapper-vial-project.json' });
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(a.href);
@@ -239,8 +376,14 @@ function importJson() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-        try { project = projectFromJson(JSON.parse(e.target.result)); afterProjectChanged(); }
-        catch (err) { showNotice('Could not read that file: ' + errMsg(err)); }
+        try {
+            const json = JSON.parse(e.target.result);
+            if (json && json.profileData && json.profileData.id) {
+                saveCustomProfile(json.profileData);  // make the embedded profile resolvable
+            }
+            project = projectFromJson(json);
+            afterProjectChanged();
+        } catch (err) { showNotice('Could not read that file: ' + errMsg(err)); }
     };
     reader.readAsText(file);
     $('file').value = '';
@@ -248,10 +391,13 @@ function importJson() {
 
 function afterProjectChanged() {
     explodeLayers(base());
+    profile = profileById(project.profile) || defaultProfile();
+    rebuildNativeBySource();
     categories = targetCategories(base().our_descriptor_number || 0);
     if (!categories.some((c) => c.name === currentCat)) currentCat = categories[0].name;
     selected = null; pickerTarget = null; focusedAction = null;
     renderAll();
+    scheduleSnapshot();
 }
 
 // --- main tabs ---
@@ -308,12 +454,15 @@ function renderDiagram() {
     svg.append(svgEl('rect', { class: 'outline', x: o.x, y: o.y, width: o.w, height: o.h, rx: o.rx }));
 
     // Ball and wheel are programmed via behaviors (they're axes, not buttons).
+    // Wizard-made profiles may have neither.
     const ball = lay.ball;
-    svg.append(svgEl('circle', {
-        class: 'ballshape', cx: ball.cx, cy: ball.cy, r: ball.r,
-        onclick: () => switchTab('behaviors'),
-    }, svgEl('title', { text: 'Trackball — programmed in the Behaviors tab' })));
-    svg.append(svgEl('text', { class: 'biglbl', x: ball.cx, y: ball.cy + 4, 'text-anchor': 'middle', text: 'Ball' }));
+    if (ball) {
+        svg.append(svgEl('circle', {
+            class: 'ballshape', cx: ball.cx, cy: ball.cy, r: ball.r,
+            onclick: () => switchTab('behaviors'),
+        }, svgEl('title', { text: 'Trackball — programmed in the Behaviors tab' })));
+        svg.append(svgEl('text', { class: 'biglbl', x: ball.cx, y: ball.cy + 4, 'text-anchor': 'middle', text: 'Ball' }));
+    }
 
     const byId = {};
     for (const b of profile.buttons) byId[b.id] = b;
@@ -570,17 +719,16 @@ function emptySlots() {
 
 function defaultBehavior(type) {
     const id = newBehaviorId();
-    const firstBtn = profile.buttons[0].source;
-    if (type === 'dpi_shift') return { id, type, button: profile.buttons[4].source, mode: 'hold', factor: 0.4 };
-    if (type === 'cursor_keys') return { id, type, gate: { mode: 'hold', button: profile.buttons[5].source }, sens: 8, keys: { ...ARROWS } };
-    if (type === 'chord_set') return { id, type, members: [], chords: [{ id: newBehaviorId(), members: [profile.buttons[0].source, profile.buttons[1].source], output: '0x00070006' }] };
-    if (type === 'scroll_text') return { id, type, glyphs: ['0x00070004', '0x00070005', '0x00070006'], scroll: '0x00010038', accept: firstBtn };
-    if (type === 'tap_dance') return { id, type, button: profile.buttons[2].source, tap1: '0x00070004', tap2: null, tap3: null, hold: '0xfff10001', window: 200 };
-    if (type === 'drag_scroll') return { id, type, trigger: profile.buttons[5].source, mode: 'sticky', divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
-    if (type === 'gesture_set') return { id, type, set: 0, trigger: profile.buttons[6] ? profile.buttons[6].source : firstBtn, mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
+    if (type === 'dpi_shift') return { id, type, button: btnAt(4), mode: 'hold', factor: 0.4 };
+    if (type === 'cursor_keys') return { id, type, gate: { mode: 'hold', button: btnAt(5) }, sens: 8, keys: { ...ARROWS } };
+    if (type === 'chord_set') return { id, type, members: [], chords: [{ id: newBehaviorId(), members: [btnAt(0), btnAt(1)], output: '0x00070006' }] };
+    if (type === 'scroll_text') return { id, type, glyphs: ['0x00070004', '0x00070005', '0x00070006'], scroll: '0x00010038', accept: btnAt(0) };
+    if (type === 'tap_dance') return { id, type, button: btnAt(2), tap1: '0x00070004', tap2: null, tap3: null, hold: '0xfff10001', window: 200 };
+    if (type === 'drag_scroll') return { id, type, trigger: btnAt(5), mode: 'sticky', divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
+    if (type === 'gesture_set') return { id, type, set: 0, trigger: btnAt(6), mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
     if (type === 'wheel_chords') return { id, type, button: 0, slots: emptySlots() };
     if (type === 'shake_action') return { id, type, action: '0xfff10001', sticky: true };
-    if (type === 'os_shortcut') return { id, type, trigger: profile.buttons[3].source, action: 'copy', os: 'inherit' };
+    if (type === 'os_shortcut') return { id, type, trigger: btnAt(3), action: 'copy', os: 'inherit' };
     throw new Error('unknown behavior ' + type);
 }
 
@@ -921,6 +1069,138 @@ function renderSettings() {
     f.append(settingToggle('Normalize gamepad inputs', 'Rescale analog gamepad axes to a standard range.', !!c.normalize_gamepad_inputs, (v) => { c.normalize_gamepad_inputs = v; }));
     f.append(settingSelect('Shortcut OS', 'Which modifier set “OS shortcut” behaviors use when set to “Project default”. Changing this recompiles them on the next apply/save.',
         [['mac', 'macOS (⌘)'], ['pc', 'Windows / Linux (Ctrl)']], project.os || 'mac', (v) => { project.os = v; }));
+
+    // --- appearance ---
+    f.append(el('h2', { text: 'Appearance', style: 'margin-top:26px' }));
+    f.append(settingSelect('Theme', 'Color palette for this tool (stored in this browser).',
+        Object.entries(THEMES).map(([k, t]) => [k, t.label]), currentTheme(), (v) => applyTheme(v)));
+    const zoomRow = (() => {
+        const [r, out] = slider(70, 150, 10, currentZoom(), (v) => v + '%', (v) => applyZoom(v));
+        return el('div', { class: 'settingrow' }, el('label', { text: 'Zoom' }), el('span', {}, r, out),
+            el('div', { class: 'desc', text: 'UI scale (stored in this browser).' }));
+    })();
+    f.append(zoomRow);
+
+    // --- device profile ---
+    f.append(el('h2', { text: 'Device profile', style: 'margin-top:26px' }));
+    const profs = allProfiles();
+    f.append(settingSelect('Profile', 'Which device layout the Keymap tab shows. Built-in: Elecom Huge Plus. Add others with the wizard below.',
+        Object.values(profs).map((p) => [p.id, p.name + (p.custom ? ' (custom)' : '')]), profile.id, (v) => setProfile(v)));
+    if (profile.custom) {
+        f.append(el('div', { class: 'settingrow' }, el('label', { text: 'This profile' }),
+            el('button', { class: 'iconbtn', text: 'Delete profile', onclick: () => { deleteCustomProfile(profile.id); setProfile(defaultProfile().id); renderSettings(); } }),
+            el('div', { class: 'desc', text: 'Removes the custom profile from this browser. The keymap itself is unaffected.' })));
+    }
+    f.append(el('div', { class: 'settingrow' }, el('label', { text: 'New device' }),
+        el('button', { class: 'btn', text: wizard ? 'Wizard in progress below…' : 'New profile from device…', onclick: startWizard }),
+        el('div', { class: 'desc', text: 'Build a layout profile for whatever is plugged into the remapper. Works best connected (auto-detects buttons; press a button on the device to identify a row).' })));
+    if (wizard) f.append(wizardCard());
+}
+
+// --- new-device profile wizard ---
+let wizard = null;  // { name, buttons: [{source,label,hint}], axes: {cursor,wheel,tilt}, highlight }
+
+function startWizard() {
+    const detected = (dev.isOpen && dev.extraUsages.source) || [];
+    const btnUsages = detected.filter((u) => usagePage(u) === 0x00090000).sort();
+    wizard = {
+        name: dev.isOpen ? (dev.productName + ' device') : 'My device',
+        buttons: btnUsages.map((u, i) => ({ source: u, label: 'Button ' + (i + 1), hint: '' })),
+        axes: {
+            cursor: detected.includes('0x00010030'),
+            wheel: detected.includes('0x00010038'),
+            tilt: detected.includes('0x000c0238'),
+        },
+        highlight: null,
+    };
+    if (wizard.buttons.length === 0) {
+        wizard.buttons.push({ source: '0x00090001', label: 'Button 1', hint: '' });
+    }
+    if (dev.isOpen) {
+        dev.onMonitor = wizardMonitor;
+        dev.setMonitorEnabled(true).catch(() => {});
+    }
+    renderSettings();
+}
+
+// Press-to-identify: monitor traffic highlights the row of the pressed button.
+function wizardMonitor(items) {
+    if (!wizard) return;
+    for (const it of items) {
+        if (usagePage(it.usage) === 0x00090000 && it.value) {
+            if (!wizard.buttons.some((b) => b.source === it.usage)) {
+                wizard.buttons.push({ source: it.usage, label: 'Button ' + (wizard.buttons.length + 1), hint: '' });
+            }
+            wizard.highlight = it.usage;
+            renderSettings();
+            return;
+        }
+    }
+}
+
+function endWizard() {
+    wizard = null;
+    if (dev.isOpen) {
+        dev.onMonitor = null;
+        dev.setMonitorEnabled(false).catch(() => {});
+    }
+    renderSettings();
+}
+
+function wizardCard() {
+    const card = el('div', { class: 'bcard', style: 'margin-top:12px' });
+    card.append(el('div', { class: 'bhead' },
+        el('div', {}, el('span', { class: 'btitle', text: 'New device profile' })),
+        el('button', { class: 'iconbtn', text: 'Cancel', onclick: endWizard })));
+    const nameInput = el('input', { type: 'text', value: wizard.name });
+    nameInput.addEventListener('change', () => { wizard.name = nameInput.value; });
+    card.append(field('Name', nameInput));
+    card.append(el('div', { class: 'koh', text: dev.isOpen ? 'Press a button on the device to highlight its row, then label it.' : 'Not connected — add buttons manually; connect to auto-detect instead.' }));
+    for (const b of wizard.buttons) {
+        const lab = el('input', { type: 'text', value: b.label, style: 'width:150px' });
+        lab.addEventListener('change', () => { b.label = lab.value; });
+        const hint = el('input', { type: 'text', value: b.hint, placeholder: 'position hint (optional)', style: 'width:190px' });
+        hint.addEventListener('change', () => { b.hint = hint.value; });
+        card.append(el('div', {
+            class: 'actionrow', style: wizard.highlight === b.source ? 'outline:2px solid var(--accent);border-radius:6px' : '',
+        },
+            el('span', { class: 'badge', text: b.source }), lab, hint,
+            el('button', { class: 'iconbtn', text: '✕', onclick: () => { wizard.buttons = wizard.buttons.filter((x) => x !== b); renderSettings(); } })));
+    }
+    card.append(el('button', {
+        class: 'iconbtn', text: '+ Add button', onclick: () => {
+            const next = wizard.buttons.length + 1;
+            wizard.buttons.push({ source: '0x0009000' + next.toString(16), label: 'Button ' + next, hint: '' });
+            renderSettings();
+        },
+    }));
+    card.append(field('Axes',
+        flagBox('Cursor', wizard.axes.cursor, (v) => { wizard.axes.cursor = v; }),
+        flagBox('Wheel', wizard.axes.wheel, (v) => { wizard.axes.wheel = v; }),
+        flagBox('Tilt', wizard.axes.tilt, (v) => { wizard.axes.tilt = v; })));
+    card.append(el('div', { style: 'margin-top:12px' },
+        el('button', {
+            class: 'btn primary', text: 'Create profile', onclick: () => {
+                if (wizard.buttons.length === 0) { showNotice('Add at least one button.'); return; }
+                const id = 'custom_' + wizard.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+                const p = buildCustomProfile(id || 'custom_device', wizard.name, wizard.buttons, wizard.axes);
+                saveCustomProfile(p);
+                endWizard();
+                setProfile(p.id);
+                switchTab('keymap');
+            },
+        })));
+    card.append(el('div', { class: 'bcaption', text: 'The wizard makes a generic grid layout for the diagram. Exported project files embed the profile, so they open anywhere.' }));
+    return card;
+}
+
+function setProfile(id) {
+    profile = profileById(id) || defaultProfile();
+    project.profile = profile.id;
+    rebuildNativeBySource();
+    selected = null; pickerTarget = null; focusedAction = null;
+    renderAll();
+    scheduleSnapshot();
 }
 
 // --- pointer tab (fork firmware live tuning) ---
