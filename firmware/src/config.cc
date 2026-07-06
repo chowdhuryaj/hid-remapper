@@ -967,6 +967,11 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     memcpy(config_buffer->data, src, PFX_PAGE0_SIZE);
                 } else if (requested_index == 1) {
                     memcpy(config_buffer->data, src + PFX_PAGE0_SIZE, PFX_PAGE1_SIZE);
+                } else if (requested_index == 2) {
+                    // Read-only live state (for the configurator's HUD):
+                    // currently just the active layer bitmask.
+                    extern uint8_t layer_state_mask;
+                    config_buffer->data[0] = layer_state_mask;
                 }
                 break;
             }

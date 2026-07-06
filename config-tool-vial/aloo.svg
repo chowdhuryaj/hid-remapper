@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- AlooMapper icon: Aloo the gray tabby (silver fur, hazel eyes, pink nose). -->
+  <defs>
+    <linearGradient id="fur" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9aa0a8"/>
+      <stop offset="1" stop-color="#7d838c"/>
+    </linearGradient>
+  </defs>
+  <!-- ears -->
+  <path d="M22 52 L14 14 L52 30 Z" fill="url(#fur)"/>
+  <path d="M106 52 L114 14 L76 30 Z" fill="url(#fur)"/>
+  <path d="M25 44 L20 22 L44 32 Z" fill="#e8b7bd"/>
+  <path d="M103 44 L108 22 L84 32 Z" fill="#e8b7bd"/>
+  <!-- head -->
+  <ellipse cx="64" cy="72" rx="48" ry="44" fill="url(#fur)"/>
+  <!-- forehead tabby M stripes -->
+  <path d="M50 30 Q52 44 47 52" stroke="#5f656e" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M64 27 Q64 42 64 50" stroke="#5f656e" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <path d="M78 30 Q76 44 81 52" stroke="#5f656e" stroke-width="5" fill="none" stroke-linecap="round"/>
+  <!-- cheek stripes -->
+  <path d="M17 68 Q26 70 32 74" stroke="#6a707a" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M111 68 Q102 70 96 74" stroke="#6a707a" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <!-- muzzle -->
+  <ellipse cx="64" cy="88" rx="26" ry="19" fill="#e6e3de"/>
+  <!-- eyes: hazel-gold, big kitten pupils -->
+  <ellipse cx="45" cy="66" rx="11.5" ry="12.5" fill="#c9ad55"/>
+  <ellipse cx="83" cy="66" rx="11.5" ry="12.5" fill="#c9ad55"/>
+  <ellipse cx="45" cy="67" rx="5.4" ry="9.4" fill="#23252a"/>
+  <ellipse cx="83" cy="67" rx="5.4" ry="9.4" fill="#23252a"/>
+  <circle cx="47.5" cy="62.5" r="2.4" fill="#f4efe4"/>
+  <circle cx="85.5" cy="62.5" r="2.4" fill="#f4efe4"/>
+  <!-- nose + mouth -->
+  <path d="M58 82 L70 82 L64 90 Z" fill="#d98a95" stroke="#c77784" stroke-width="1"/>
+  <path d="M64 90 Q64 96 57 98 M64 90 Q64 96 71 98" stroke="#8d939c" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+  <!-- whiskers -->
+  <g stroke="#f2f0ea" stroke-width="2" stroke-linecap="round" fill="none">
+    <path d="M36 84 Q22 82 10 78"/>
+    <path d="M36 90 Q22 91 10 92"/>
+    <path d="M92 84 Q106 82 118 78"/>
+    <path d="M92 90 Q106 91 118 92"/>
+  </g>
+</svg>

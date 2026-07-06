@@ -213,37 +213,52 @@ function compileChordSet(b, config, alloc) {
 //   'dwell' (default): the glyph types after a configurable quiet period with
 //     no scrolling, or immediately when any device button is pressed;
 //   'button': legacy — only an explicit accept button types it.
+// Gate ('sticky' toggle / 'hold' / 'always'): while gated OFF the set is
+// completely inert and the wheel scrolls normally; while ON, normal wheel
+// output is suppressed so spinning to a glyph doesn't also scroll the page
+// (the PACS window/level use case: toggle on, spin to a number, pause, off).
 function compileScrollText(b, config, alloc) {
     const glyphs = b.glyphs;
     const n = glyphs.length;
     const regIdx = alloc.reg();
     const regFire = alloc.reg();
 
+    // Gate: a spare layer tracks the on/off state; expressions test its bit.
+    let gateExpr = '';
+    const gateMode = (b.gate && b.gate.mode) || 'always';
+    if (gateMode !== 'always') {
+        const L = alloc.layer();
+        config.mappings.push({ ...newMapping(b.gate.button, layerUsage(L), layersOf(b)), sticky: gateMode === 'sticky' });
+        config.mappings.push(newMapping(b.scroll, NOTHING, [L]));  // suppress normal scrolling while on
+        gateExpr = `layer_state 0x${(1 << L).toString(16)} bitwise_and not not `;
+    }
+    const gated = (expr) => gateExpr ? `${expr} ${gateExpr}mul` : expr;
+
     const idxCh = alloc.channel();
     config.expressions[idxCh] =
-        `${regRef(regIdx)} recall ${b.scroll} input_state add ${n} add ${n} mod ${regRef(regIdx)} store`;
+        `${regRef(regIdx)} recall ${gated(`${b.scroll} input_state`)} add ${n} add ${n} mod ${regRef(regIdx)} store`;
 
     const dispCh = alloc.channel();
     const lines = [];
     if (b.confirm === 'button') {
-        lines.push(`${b.accept} input_state_binary ${b.accept} prev_input_state_binary not mul ${regRef(regFire)} store`);
+        lines.push(`${gated(`${b.accept} input_state_binary ${b.accept} prev_input_state_binary not mul`)} ${regRef(regFire)} store`);
     } else {
         const regT = alloc.reg();
         const regDirty = alloc.reg();
         const timeout = Math.max(50, Math.round(b.timeout || 200));
-        const moved = `${b.scroll} input_state abs 0 gt`;
+        const moved = gated(`${b.scroll} input_state abs 0 gt`);
         // T = moved ? now : T  (last scroll activity)
         lines.push(`${moved} dup time mul swap not ${regRef(regT)} recall mul add ${regRef(regT)} store`);
         // dirty = max(dirty, moved)  (a glyph is pending)
         lines.push(`${moved} ${regRef(regDirty)} recall max ${regRef(regDirty)} store`);
-        // fire = dirty AND (any-button press edge OR quiet > timeout)
+        // fire = dirty AND gate AND (any-button press edge OR quiet > timeout)
         const btns = (b.confirmButtons || []).slice(0, 8);
         let cond = btns.map((u, i) =>
             `${u} input_state_binary ${u} prev_input_state_binary not mul` + (i > 0 ? ' max' : '')).join(' ');
         cond += (cond ? ' ' : '') + `time ${regRef(regT)} recall sub ${timeout} gt` + (cond ? ' max' : '');
-        lines.push(`${cond} ${regRef(regDirty)} recall mul ${regRef(regFire)} store`);
-        // consume the pending glyph once fired
-        lines.push(`${regRef(regDirty)} recall ${regRef(regFire)} recall not mul ${regRef(regDirty)} store`);
+        lines.push(`${gated(cond)} ${regRef(regDirty)} recall mul ${regRef(regFire)} store`);
+        // consume the pending glyph once fired; also drop it if the gate went off
+        lines.push(`${gated(`${regRef(regDirty)} recall`)} ${regRef(regFire)} recall not mul ${regRef(regDirty)} store`);
     }
     const outRegs = [];
     for (let i = 0; i < n; i++) {

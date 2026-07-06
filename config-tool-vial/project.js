@@ -14,6 +14,7 @@ export function defaultProject() {
         format: PROJECT_FORMAT,
         profile: 'elecom_huge_plus',
         os: 'mac',  // project-wide OS for os_shortcut behaviors set to 'inherit'
+        ports: {},  // renamable hub-port labels for multi-device setups
         base: defaultConfig(),
         behaviors: [],
     };
@@ -31,6 +32,7 @@ export function projectFromJson(json) {
         const p = defaultProject();
         p.profile = json.profile || p.profile;
         p.os = (json.os === 'pc' || json.os === 'mac') ? json.os : p.os;
+        p.ports = (json.ports && typeof json.ports === 'object') ? json.ports : {};
         p.base = migrateConfig(json.base);
         p.behaviors = Array.isArray(json.behaviors) ? json.behaviors : [];
         return p;

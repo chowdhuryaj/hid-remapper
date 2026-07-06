@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Aloo HUD</title>
+    <style>
+        /* Aloo palette, translucent HUD card. Drag anywhere (easy_drag). */
+        body {
+            margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: rgba(38, 40, 44, 0.92); color: #ecedee; font-size: 13px;
+            border-radius: 14px; overflow: hidden; height: 100vh; box-sizing: border-box;
+            padding: 12px 14px; border: 1px solid #4d535b;
+        }
+        .head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+        .head img { width: 22px; height: 22px; }
+        .head .t { font-weight: 600; }
+        .head .x { margin-left: auto; cursor: pointer; color: #7c828a; font-size: 15px; padding: 0 4px; }
+        .head .x:hover { color: #ecedee; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #7c828a; display: inline-block; }
+        .dot.on { background: #7fc8a9; }
+        .layers { display: flex; gap: 5px; margin: 8px 0; }
+        .layer { font-size: 11px; padding: 3px 8px; border-radius: 6px; border: 1px solid #4d535b; color: #7c828a; }
+        .layer.on { background: #3a3423; color: #ecd9a0; border-color: #d4b458; }
+        .row { display: flex; gap: 10px; margin: 6px 0; color: #a8adb4; flex-wrap: wrap; }
+        .badge { border: 1px solid #4d535b; border-radius: 999px; padding: 2px 9px; font-size: 11px; }
+        .badge.on { color: #ecd9a0; border-color: #d4b458; }
+        .recent { min-height: 18px; color: #ecedee; font-size: 12px; }
+        .hint { color: #7c828a; font-size: 11px; margin-top: 8px; }
+    </style>
+</head>
+
+<body>
+    <div class="head">
+        <img src="aloo.svg" alt=""><span class="t">Aloo HUD</span>
+        <span class="dot" id="conn"></span>
+        <span class="x" id="close" title="Close">✕</span>
+    </div>
+    <div class="layers" id="layers"></div>
+    <div class="row" id="badges"></div>
+    <div class="recent" id="recent"></div>
+    <div class="hint" id="profile"></div>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        for (let i = 0; i < 8; i++) {
+            const s = document.createElement('span');
+            s.className = 'layer'; s.textContent = 'L' + i; s.id = 'ly' + i;
+            $('layers').append(s);
+        }
+        window.hudUpdate = function (st) {
+            $('conn').className = 'dot' + (st.connected ? ' on' : '');
+            for (let i = 0; i < 8; i++) {
+                $('ly' + i).className = 'layer' + ((st.layers != null && (st.layers & (1 << i))) ? ' on' : '');
+            }
+            const badges = [];
+            if (st.speed != null) badges.push('<span class="badge on">Speed ' + st.speed + '%</span>');
+            if (st.accel != null) badges.push('<span class="badge' + (st.accel ? ' on' : '') + '">Accel</span>');
+            if (st.smooth != null) badges.push('<span class="badge' + (st.smooth ? ' on' : '') + '">Smooth</span>');
+            $('badges').innerHTML = badges.join('');
+            $('recent').textContent = (st.recent && st.recent.length) ? st.recent.join(' · ') : '';
+            $('profile').textContent = (st.profile || '') + (st.layers == null && st.connected ? ' — layer state needs the fork firmware' : '');
+        };
+        $('close').addEventListener('click', () => {
+            if (window.pywebview && window.pywebview.api) window.pywebview.api.hud_close();
+        });
+    </script>
+</body>
+
+</html>

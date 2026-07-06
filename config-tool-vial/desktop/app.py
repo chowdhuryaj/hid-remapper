@@ -16,6 +16,7 @@ Run:  python3 app.py   (see requirements.txt and README.md in this folder)
 
 import functools
 import http.server
+import json
 import os
 import socket
 import threading
@@ -26,6 +27,8 @@ import webview
 
 CONFIG_USAGE_PAGE = 0xFF00
 CONFIG_USAGE = 0x0020
+
+SERVER_PORT = None  # set in main(), used by the HUD window URL
 
 
 def _remapper_devices():
@@ -40,6 +43,46 @@ class HidBridge:
 
     def __init__(self):
         self.device = None
+        self.hud = None
+
+    # --- HUD overlay (Flask-style always-on-top panel) ---
+    def toggle_hud(self):
+        if self.hud is not None:
+            try:
+                self.hud.destroy()
+            except Exception:
+                pass
+            self.hud = None
+            return {"open": False}
+        self.hud = webview.create_window(
+            "Aloo HUD",
+            f"http://127.0.0.1:{SERVER_PORT}/hud.html",
+            width=340,
+            height=240,
+            on_top=True,
+            frameless=True,
+            easy_drag=True,
+            resizable=True,
+            js_api=self,
+        )
+        self.hud.events.closed += self._hud_closed
+        return {"open": True}
+
+    def _hud_closed(self):
+        self.hud = None
+
+    def hud_push(self, state):
+        if self.hud is not None:
+            try:
+                self.hud.evaluate_js(
+                    "window.hudUpdate && window.hudUpdate(" + json.dumps(state) + ")")
+            except Exception:
+                pass
+        return True
+
+    def hud_close(self):
+        # called from inside the HUD window (its close button)
+        return self.toggle_hud()
 
     def list_devices(self):
         return [
@@ -101,13 +144,14 @@ def _serve(directory, port):
 
 
 def main():
+    global SERVER_PORT
     webroot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # config-tool-vial/
-    port = _free_port()
-    threading.Thread(target=_serve, args=(webroot, port), daemon=True).start()
+    SERVER_PORT = _free_port()
+    threading.Thread(target=_serve, args=(webroot, SERVER_PORT), daemon=True).start()
 
     webview.create_window(
-        "HID Remapper — Vial configurator",
-        f"http://127.0.0.1:{port}/index.html?native=1",
+        "AlooMapper",
+        f"http://127.0.0.1:{SERVER_PORT}/index.html?native=1",
         js_api=HidBridge(),
         width=980,
         height=920,

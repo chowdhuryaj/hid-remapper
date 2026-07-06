@@ -36,6 +36,16 @@ let categories = targetCategories(0);
 let currentCat = categories[0].name;
 let pointerFx = null;         // live Pointer FX params (fork firmware only)
 let pfxSendTimer = null;
+let hudOpen = false;          // desktop-only HUD overlay window
+let hudPoll = null;
+let hudRecent = [];           // last few pressed inputs for the HUD
+// Monitor stream refcount: wizard and HUD both consume it; the device's
+// monitor mode stays on while anyone needs it.
+const monitorUsers = new Set();
+function requestMonitor(tag, on) {
+    if (on) monitorUsers.add(tag); else monitorUsers.delete(tag);
+    if (dev.isOpen) dev.setMonitorEnabled(monitorUsers.size > 0).catch(() => {});
+}
 let liveApply = true;         // Vial-style: push keymap/behavior edits to device RAM as you make them
 let applyTimer = null;
 let applying = false;
@@ -47,6 +57,12 @@ let lastApplied = null;       // JSON of the last config pushed/loaded, to skip 
 const THEME_VARS = ['bg', 'surface', 'surface2', 'text', 'muted', 'faint', 'border', 'border2',
     'accent', 'accent-bg', 'accent-text', 'ok', 'ok-bg', 'danger', 'danger-bg'];
 const THEMES = {
+    aloo: {
+        label: 'Aloo (default)',
+        // Palette from Aloo the tabby: silver-gray fur neutrals, hazel-gold
+        // eyes as accent, teal blanket for OK, pink nose for danger.
+        vars: { 'bg': '#26282c', 'surface': '#2f3237', 'surface2': '#383c42', 'text': '#ecedee', 'muted': '#a8adb4', 'faint': '#7c828a', 'border': '#3f444b', 'border2': '#4d535b', 'accent': '#d4b458', 'accent-bg': '#3a3423', 'accent-text': '#ecd9a0', 'ok': '#7fc8a9', 'ok-bg': '#23392f', 'danger': '#e8a0a8', 'danger-bg': '#3d2426' },
+    },
     classic: { label: 'Classic (auto light/dark)' },
     light: {
         label: 'Light',
@@ -87,7 +103,7 @@ function applyZoom(pct) {
     return pct;
 }
 
-function currentTheme() { return localStorage.getItem('hrv-theme') || 'classic'; }
+function currentTheme() { return localStorage.getItem('hrv-theme') || 'aloo'; }
 function currentZoom() { return parseInt(localStorage.getItem('hrv-zoom') || '100', 10) || 100; }
 
 const dev = new RemapperDevice();
@@ -164,6 +180,14 @@ function init() {
 
     applyTheme(currentTheme());
     applyZoom(currentZoom());
+    renderStatusBar();
+
+    // Single monitor dispatcher — wizard and HUD both feed off it.
+    dev.onMonitor = (items) => { wizardMonitor(items); hudMonitor(items); };
+    if (NATIVE) {
+        $('hudbtn').classList.remove('hidden');
+        $('hudbtn').addEventListener('click', toggleHud);
+    }
 
     dev.onDisconnect = onDisconnected;
     if (NATIVE) {
@@ -310,6 +334,16 @@ function setApplyState(kind, title) {
     if (!dot) return;
     dot.className = 'applystate ' + kind;
     dot.title = title || '';
+    if ($('sb-apply')) $('sb-apply').textContent = title || '';
+}
+
+function renderStatusBar() {
+    if (!$('sb-conn')) return;
+    $('sb-conn').textContent = dev.isOpen
+        ? (dev.productName + ' · config v' + (dev.configVersion || '?') + (dev.isFork ? ' (Flask fork)' : ' (stock)'))
+        : 'Not connected';
+    $('sb-profile').textContent = profile ? profile.name : '';
+    $('sb-hud').textContent = hudOpen ? 'HUD on' : '';
 }
 
 async function saveToDevice() {
@@ -343,6 +377,8 @@ function onConnected() {
     $('status').className = 'status on';
     $('load').disabled = false;
     $('save').disabled = false;
+    renderStatusBar();
+    if (monitorUsers.size > 0) dev.setMonitorEnabled(true).catch(() => {});
     // Don't auto-push the local project over an unseen device config; the
     // first edit (or an explicit Save/Load) decides whose state wins.
     lastApplied = null;
@@ -361,6 +397,7 @@ function onDisconnected() {
     $('load').disabled = true;
     $('save').disabled = true;
     pointerFx = null;
+    renderStatusBar();
     if (currentTab === 'pointer') renderPointer();
 }
 
@@ -480,7 +517,9 @@ function renderDiagram() {
         const cls = 'btnshape' + (isSel ? ' sel' : '') + (view.cls === 'transparent' ? '' : ' assigned');
         svg.append(svgEl('rect', {
             class: cls, x: s.x, y: s.y, width: s.w, height: s.h, rx: s.rx || 7,
-            onclick: () => selectSlot(btn.source, btn.label),
+            // The device card is visible on every tab (Flask layout); clicking
+            // a control jumps to its editor.
+            onclick: () => { if (currentTab !== 'keymap') switchTab('keymap'); selectSlot(btn.source, btn.label); },
         }, svgEl('title', { text: btn.label + ' — ' + view.text })));
         const cx = s.x + s.w / 2;
         const roomy = s.h >= 40;
@@ -581,11 +620,19 @@ function renderKeyOptions() {
         box.append(el('div', { class: 'hint', text: 'Transparent — passes through to the default. Pick a keycode below to assign.' }));
     }
     for (const a of acts) {
+        // Per-action source port: 0 = the input from any device; 1..4 pin the
+        // action to a specific hub port (multi-device setups). Renamable in
+        // Settings.
+        const portSel = selectFrom(
+            [['0', 'Any device'], ...[1, 2, 3, 4].map((p) => [String(p), portName(p)])],
+            String(a.source_port || 0), (v) => { a.source_port = parseInt(v, 10); renderButtons(); });
+        portSel.title = 'Which hub port this input must come from';
         box.append(el('div', { class: 'actionrow' + (a === focusedAction ? ' focus' : '') },
             el('button', { class: 'keybtn', text: readableTargetName(a.target_usage, base().our_descriptor_number), onclick: () => { focusedAction = a; renderKeyOptions(); } }),
             flagBox('Sticky', a.sticky, (v) => { a.sticky = v; renderButtons(); }),
             flagBox('Tap', a.tap, (v) => { a.tap = v; renderButtons(); }),
             flagBox('Hold', a.hold, (v) => { a.hold = v; renderButtons(); }),
+            portSel,
             el('button', { class: 'iconbtn', text: '✕', title: 'Remove action', onclick: () => { removeAction(base(), a); if (focusedAction === a) focusedAction = null; renderButtons(); renderKeyOptions(); } })));
     }
     box.append(el('button', { class: 'iconbtn', text: '+ Add action', onclick: () => { focusedAction = addAction(base(), selected.source, currentLayer); renderButtons(); renderKeyOptions(); } }));
@@ -731,12 +778,15 @@ function defaultBehavior(type) {
     if (type === 'cursor_keys') return { id, type, gate: { mode: 'hold', button: btnAt(5) }, sens: 8, keys: { ...ARROWS } };
     if (type === 'chord_set') return { id, type, members: [], chords: [{ id: newBehaviorId(), members: [btnAt(0), btnAt(1)], output: '0x00070006' }] };
     if (type === 'scroll_text') {
-        // Default set: digits 1..9, 0 with dwell confirm (200 ms or any button).
+        // Default set: digits 1..9, 0 with dwell confirm (200 ms or any
+        // button), gated behind a sticky toggle so normal scrolling never
+        // types digits by accident.
         const digits = [0x1e, 0x1f, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27]
             .map((c) => '0x000700' + c.toString(16).padStart(2, '0'));
         return {
             id, type, glyphs: digits, scroll: '0x00010038',
             confirm: 'dwell', timeout: 200, accept: btnAt(0),
+            gate: { mode: 'sticky', button: btnAt(4) },
             confirmButtons: profile.buttons.map((pb) => pb.source),
         };
     }
@@ -981,19 +1031,24 @@ function scrollBody(b) {
             el('button', { class: 'iconbtn', text: '✕', title: 'Remove glyph', onclick: () => { b.glyphs.splice(i, 1); renderBehaviors(); } })));
     });
     glyphs.append(el('button', { class: 'iconbtn', text: '+ Add glyph', onclick: () => { b.glyphs.push('0x00070004'); renderBehaviors(); } }));
+    if (!b.gate) b.gate = { mode: 'always', button: btnAt(4) };
     const rows = [
         field('Glyphs', glyphs),
         field('Scroll source', selectFrom([['0x00010038', 'V scroll wheel'], ['0x000c0238', 'Tilt left / right']], b.scroll, (v) => { b.scroll = v; })),
-        field('Confirm', selectFrom([['dwell', 'Pause (timeout) or any button'], ['button', 'Accept button only']], b.confirm || 'dwell', (v) => { b.confirm = v; renderBehaviors(); })),
+        field('Active when', selectFrom([['sticky', 'Toggled on (sticky tap)'], ['hold', 'While button held'], ['always', 'Always on']], b.gate.mode, (v) => { b.gate.mode = v; renderBehaviors(); })),
     ];
+    if (b.gate.mode !== 'always') {
+        rows.push(field('Toggle button', sourceButton(b.gate.button, 'Scroll-text toggle', (u) => { b.gate.button = u; renderBehaviors(); })));
+    }
+    rows.push(field('Confirm', selectFrom([['dwell', 'Pause (timeout) or any button'], ['button', 'Accept button only']], b.confirm || 'dwell', (v) => { b.confirm = v; renderBehaviors(); })));
     if ((b.confirm || 'dwell') === 'dwell') {
         rows.push(field('Timeout', ...slider(50, 1000, 25, b.timeout || 200, (v) => v + ' ms', (v) => { b.timeout = v; })));
-        rows.push(el('div', { class: 'bcaption', text: 'Scroll to a glyph; it types after the pause, or instantly when you press any device button (the button still does its own action).' }));
+        rows.push(el('div', { class: 'bcaption', text: 'Scroll to a glyph; it types after the pause, or instantly when you press any device button (the button still does its own action). E.g. toggle on, spin to a PACS window/level number, pause — it types — toggle off.' }));
     } else {
         rows.push(field('Accept button', sourceButton(b.accept, 'Accept button', (u) => { b.accept = u; renderBehaviors(); })));
         rows.push(el('div', { class: 'bcaption', text: 'Scroll to choose a glyph, press accept to type it.' }));
     }
-    rows.push(el('div', { class: 'bcaption', text: 'Compiles to 2 expression channels + 1 mapping per glyph.' }));
+    rows.push(el('div', { class: 'bcaption', text: 'While toggled on, normal scrolling is suppressed. Compiles to 2 expression channels + 1 mapping per glyph (+1 layer unless “Always on”).' }));
     return rows;
 }
 
@@ -1155,6 +1210,27 @@ function renderSettings() {
         el('button', { class: 'btn', text: wizard ? 'Wizard in progress below…' : 'New profile from device…', onclick: startWizard }),
         el('div', { class: 'desc', text: 'Build a layout profile for whatever is plugged into the remapper. Works best connected (auto-detects buttons; press a button on the device to identify a row).' })));
     if (wizard) f.append(wizardCard());
+
+    // --- hub ports ---
+    f.append(el('h2', { text: 'Hub ports', style: 'margin-top:26px' }));
+    if (!project.ports) project.ports = {};
+    const portRow = el('div', { class: 'layerchecks' });
+    for (const p of [1, 2, 3, 4]) {
+        const inp = el('input', { type: 'text', value: project.ports[p] || '', placeholder: 'Port ' + p, style: 'width:110px' });
+        inp.addEventListener('change', () => {
+            if (inp.value.trim()) project.ports[p] = inp.value.trim();
+            else delete project.ports[p];
+        });
+        portRow.append(inp);
+    }
+    f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Port names' }), portRow,
+        el('div', { class: 'desc', text: 'Plug several devices in through a USB hub and they all feed the same engine (split-keyboard style). Name the ports here; per-action “from device” pickers in the Keymap tab use these names.' })));
+}
+
+// Renamable hub-port labels (multi-device setups: mouse on port 1, macropad
+// on port 2, …). Stored in the project so exports carry them.
+function portName(p) {
+    return (project.ports && project.ports[p]) || ('Port ' + p);
 }
 
 // --- new-device profile wizard ---
@@ -1176,10 +1252,7 @@ function startWizard() {
     if (wizard.buttons.length === 0) {
         wizard.buttons.push({ source: '0x00090001', label: 'Button 1', hint: '' });
     }
-    if (dev.isOpen) {
-        dev.onMonitor = wizardMonitor;
-        dev.setMonitorEnabled(true).catch(() => {});
-    }
+    requestMonitor('wizard', true);
     renderSettings();
 }
 
@@ -1209,10 +1282,7 @@ function wizardMonitor(items) {
 
 function endWizard() {
     wizard = null;
-    if (dev.isOpen) {
-        dev.onMonitor = null;
-        dev.setMonitorEnabled(false).catch(() => {});
-    }
+    requestMonitor('wizard', false);
     renderSettings();
 }
 
@@ -1270,7 +1340,60 @@ function setProfile(id) {
     rebuildNativeBySource();
     selected = null; pickerTarget = null; focusedAction = null;
     renderAll();
+    renderStatusBar();
     scheduleSnapshot();
+}
+
+// --- HUD overlay (desktop app only) ---
+// Flask-style always-on-top panel: active layers live from the fork firmware
+// (Pointer FX page 2), recently pressed inputs from the Monitor stream, and
+// the pointer setup at a glance.
+async function toggleHud() {
+    if (!NATIVE || !window.pywebview) return;
+    try {
+        const res = await window.pywebview.api.toggle_hud();
+        hudOpen = !!(res && res.open);
+    } catch (e) { showNotice('HUD: ' + errMsg(e)); return; }
+    requestMonitor('hud', hudOpen);
+    if (hudOpen && !hudPoll) {
+        hudPoll = setInterval(hudTick, 180);
+    } else if (!hudOpen && hudPoll) {
+        clearInterval(hudPoll);
+        hudPoll = null;
+    }
+    renderStatusBar();
+}
+
+function hudMonitor(items) {
+    if (!hudOpen) return;
+    for (const it of items) {
+        if (usagePage(it.usage) === 0x00090000 && it.value) {
+            const btn = profile.buttons.find((b) => b.source === it.usage);
+            hudRecent.unshift(btn ? btn.label : readableSourceName(it.usage));
+            hudRecent = hudRecent.slice(0, 5);
+        }
+    }
+}
+
+async function hudTick() {
+    if (!hudOpen || !window.pywebview) return;
+    let layers = null;
+    // Skip the layer read while a config write is on the wire — feature-report
+    // send/read pairs must not interleave.
+    if (dev.isOpen && dev.isFork && !applying) {
+        try { layers = await dev.readLayerState(); } catch { layers = null; }
+    }
+    const state = {
+        connected: dev.isOpen,
+        profile: profile ? profile.name : '',
+        layers,
+        recent: hudRecent,
+        speed: pointerFx ? Math.round(pointerFx.cursor_gain / 10) : null,
+        accel: pointerFx ? !!(pointerFx.flags & PFX_FLAG_ACCEL) : null,
+        smooth: pointerFx ? !!(pointerFx.flags & PFX_FLAG_SMOOTHING) : null,
+        apply: $('sb-apply') ? $('sb-apply').textContent : '',
+    };
+    try { await window.pywebview.api.hud_push(state); } catch { /* HUD closed */ }
 }
 
 // --- pointer tab (fork firmware live tuning) ---

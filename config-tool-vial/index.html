@@ -4,7 +4,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>HID Remapper — Vial configurator</title>
+    <title>AlooMapper</title>
+    <link rel="icon" type="image/svg+xml" href="aloo.svg">
     <style>
         :root {
             --bg: #f5f5f4; --surface: #ffffff; --surface2: #fafaf9; --text: #1c1c1a;
@@ -124,6 +125,13 @@
         .code.special { border-style: dashed; }
         .notice { font-size: 14px; padding: 10px 14px; border-radius: var(--radius); margin: 12px 0;
             background: var(--danger-bg); color: var(--danger); border: 1px solid transparent; }
+        .applogo { width: 30px; height: 30px; vertical-align: -6px; margin-right: 9px; }
+        .devicecard { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px 2px; margin-top: 14px; }
+        .statusbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; gap: 16px; align-items: center;
+            padding: 7px 18px; font-size: 12px; color: var(--muted); background: var(--surface);
+            border-top: 1px solid var(--border); z-index: 5; }
+        .statusbar .sbver { color: var(--faint); }
+        .wrap { padding-bottom: 88px; }
         .applystate { width: 10px; height: 10px; border-radius: 50%; background: var(--border2); display: inline-block; }
         .applystate.ok { background: var(--ok); }
         .applystate.busy { background: var(--accent); }
@@ -151,7 +159,7 @@
 <body>
     <div class="wrap">
         <header>
-            <h1>HID Remapper <span class="lite">— Vial configurator</span></h1>
+            <h1><img src="aloo.svg" alt="" class="applogo">AlooMapper <span class="lite">— HID Remapper configurator</span></h1>
             <div id="status" class="status off">Not connected</div>
         </header>
 
@@ -163,6 +171,7 @@
             <button id="redo" class="btn" title="Redo (⇧⌘Z)" disabled>↪</button>
             <label class="flag" title="Push keymap/behavior edits to the device as you make them (RAM only — Save persists)"><input type="checkbox" id="live" checked> Live</label>
             <span id="applystate" class="applystate" title=""></span>
+            <button id="hudbtn" class="btn hidden" title="Toggle the always-on-top HUD overlay (desktop app)">HUD</button>
             <span class="spacer"></span>
             <button id="import" class="btn">Import</button>
             <button id="export" class="btn">Export</button>
@@ -170,6 +179,10 @@
         </div>
 
         <div id="notice" class="notice hidden"></div>
+
+        <!-- Flask/Pipette layout: the device card stays visible above the
+             tabbed "palette"; clicking a control jumps to its editor. -->
+        <div id="diagram" class="diagram devicecard"></div>
 
         <div class="maintabs">
             <button id="mt-keymap" class="mtab on">Keymap</button>
@@ -181,7 +194,6 @@
 
         <div id="panel-keymap">
             <div id="tabs" class="tabs"></div>
-            <div id="diagram" class="diagram"></div>
             <main>
                 <section>
                     <h2>Buttons</h2>
@@ -232,11 +244,20 @@
         </section>
 
         <footer>
-            Works with stock HID Remapper firmware and with the Flask-parity fork (which unlocks the
-            Pointer tab: acceleration, smoothing, gestures, wheel chords, shake detection, autoscroll).
-            Run the desktop app (no browser needed) or use a Chromium browser for WebHID.
+            AlooMapper works with stock HID Remapper firmware and with the Flask-parity fork (which
+            unlocks the Pointer tab: acceleration, smoothing, gestures, mouse chords, shake detection,
+            autoscroll). Run the desktop app (no browser needed) or use a Chromium browser for WebHID.
             Cursor, wheel and tilt are programmed in the Behaviors tab.
         </footer>
+    </div>
+
+    <div id="statusbar" class="statusbar">
+        <span id="sb-conn">Not connected</span>
+        <span id="sb-profile"></span>
+        <span id="sb-apply"></span>
+        <span class="spacer"></span>
+        <span id="sb-hud"></span>
+        <span class="sbver">AlooMapper</span>
     </div>
 </body>
 

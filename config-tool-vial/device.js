@@ -17,6 +17,7 @@ import {
     CLEAR_MACROS, APPEND_TO_MACRO, GET_MACRO, CLEAR_EXPRESSIONS, APPEND_TO_EXPRESSION,
     GET_EXPRESSION, SET_MONITOR_ENABLED, CLEAR_QUIRKS, ADD_QUIRK, GET_QUIRK,
     PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG,
+    GET_POINTER_FX,
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
     setActiveConfigVersion, readPointerFx, writePointerFx,
 } from './protocol.js?v=3';
@@ -145,6 +146,13 @@ export class RemapperDevice {
 
     async loadPointerFx() {
         return await readPointerFx(this.io);
+    }
+
+    // Fork firmware: live layer bitmask (Pointer FX read-only page 2).
+    async readLayerState() {
+        await sendFeatureCommand(this.io, GET_POINTER_FX, [[UINT32, 2]]);
+        const [mask] = await readConfigFeature(this.io, [UINT8]);
+        return mask;
     }
 
     async savePointerFx(params) {
