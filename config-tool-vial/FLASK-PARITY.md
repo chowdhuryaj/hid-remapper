@@ -358,6 +358,19 @@ Dev server: use `serve.py` (adds `Cache-Control: no-cache`) — the default
 `http.server` let the browser heuristically cache edited ES modules for
 hours (`vial.js` imports `./profiles.js?v=2` to bust one poisoned entry).
 
+### Round 2 (2026-07-05 evening, commits 9dd8886 + 39079a6)
+
+Hardware-confirmed by the user: remapping + Pointer FX protocol work live.
+Added since: firmware v101 `cursor_gain_mil` (software pointer speed; v100
+flash blobs still load), Vial-style live apply (RAM push, debounced+diffed;
+Save persists), project-wide OS for shortcut presets, full-palette themes +
+zoom, undo/redo (snapshot stack, ⌘Z/⇧⌘Z), and the new-device profile wizard
+(auto-detect from GET_THEIR_USAGES, press-to-identify via Monitor, generic
+grid layout, localStorage + project-embedded custom profiles). All module
+imports carry `?v=3` — the browser held cache entries from before serve.py
+sent no-cache and served stale modules without revalidating (bit us three
+times; bump the stamp if it ever recurs).
+
 ### Hardware pass (remaining)
 
 1. Flash `firmware/build/remapper.uf2` (hold BOOTSEL on the Feather while
