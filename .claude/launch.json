@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "config-tool-vial",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["serve.py"],
+      "cwd": "config-tool-vial",
+      "port": 8731
+    }
+  ]
+}

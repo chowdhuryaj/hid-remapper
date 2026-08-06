@@ -21,9 +21,9 @@ import {
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
     setActiveConfigVersion, setForkGeneration, readPointerFx, writePointerFx,
     readForkStatus, readDiagnostics,
-} from './protocol.js?v=5';
-import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=5';
-import { usageToHex } from './model.js?v=5';
+} from './protocol.js?v=7';
+import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=7';
+import { usageToHex } from './model.js?v=7';
 
 // Native (desktop) transport: speaks the same sendFeatureReport /
 // receiveFeatureReport surface as a WebHID HIDDevice, but routes through the
@@ -117,6 +117,9 @@ export class RemapperDevice {
                 data: new DataView(u8.buffer, 1),
             });
         };
+        // Fired by the Python reader thread when its read loop dies (real
+        // unplug); intentional close() never triggers it.
+        window.__nativeDisconnected = () => this.handleNativeDisconnect();
         await this._checkDeviceVersion();
         await this.setMonitorEnabled(this.monitorEnabled);
         await this.getUsages();
@@ -125,10 +128,27 @@ export class RemapperDevice {
 
     handleDisconnect(event) {
         if (this.device != null && event.device === this.device) {
-            this.device = null;
-            if (this.onDisconnect) {
-                this.onDisconnect();
-            }
+            this._markClosed();
+        }
+    }
+
+    // Native (pywebview) path: the Python reader thread calls
+    // window.__nativeDisconnected() when its read loop dies.
+    handleNativeDisconnect() {
+        if (this._open && this.device == null) {
+            this._markClosed();
+        }
+    }
+
+    _markClosed() {
+        // isOpen must go false HERE, not just the UI banner — every poller
+        // (status bar, diagnostics interval, HUD tick, live apply) gates on
+        // it, and a stale true leaves them hammering a dead handle forever.
+        this._open = false;
+        this.device = null;
+        this.io = null;
+        if (this.onDisconnect) {
+            this.onDisconnect();
         }
     }
 
@@ -179,11 +199,23 @@ export class RemapperDevice {
         return (this.forkGeneration || 0) > 0;
     }
 
+    // The firmware's config protocol is a two-step SET(command)/GET(answer)
+    // with ONE global command slot: any transaction that interleaves with
+    // another (HUD layer poll vs a Pointer write, diagnostics poll vs Save)
+    // reads the wrong answer or throws. Every wire transaction therefore
+    // queues through this one promise chain. Errors propagate to the caller
+    // but never wedge the chain.
+    _serial(fn) {
+        const run = (this._txq || Promise.resolve()).then(fn, fn);
+        this._txq = run.catch(() => {});
+        return run;
+    }
+
     // Sidecar-era fork: live status {layerMask, generation, descriptorPending,
     // safeMode}, or null on stock / legacy-fork firmware.
     async readStatus() {
         if ((this.forkGeneration || 0) < 2) return null;
-        const status = await readForkStatus(this.io);
+        const status = await this._serial(() => readForkStatus(this.io));
         this.forkStatus = status;
         return status;
     }
@@ -191,36 +223,40 @@ export class RemapperDevice {
     // Sidecar-era fork: diagnostics counters, or null.
     async readDiag() {
         if ((this.forkGeneration || 0) < 2) return null;
-        return await readDiagnostics(this.io);
+        return await this._serial(() => readDiagnostics(this.io));
     }
 
     // Fork: clean device reboot (applies a pending descriptor-number change
     // without replugging). The device drops off USB and re-enumerates.
     async reboot() {
-        await sendFeatureCommand(this.io, REBOOT);
+        await this._serial(() => sendFeatureCommand(this.io, REBOOT));
     }
 
     async loadPointerFx() {
-        return await readPointerFx(this.io);
+        return await this._serial(() => readPointerFx(this.io));
     }
 
     // Fork firmware: live layer bitmask (Pointer FX read-only page 2).
     async readLayerState() {
-        await sendFeatureCommand(this.io, GET_POINTER_FX, [[UINT32, 2]]);
-        const [mask] = await readConfigFeature(this.io, [UINT8]);
-        return mask;
+        return await this._serial(async () => {
+            await sendFeatureCommand(this.io, GET_POINTER_FX, [[UINT32, 2]]);
+            const [mask] = await readConfigFeature(this.io, [UINT8]);
+            return mask;
+        });
     }
 
     async savePointerFx(params) {
-        await writePointerFx(this.io, params);
+        await this._serial(() => writePointerFx(this.io, params));
     }
 
     // Persists the device's current live state (including Pointer FX params)
     // without rewriting mappings — used by the Pointer tab's save button.
     async persistOnly() {
-        await sendFeatureCommand(this.io, PERSIST_CONFIG);
-        const [code] = await readConfigFeature(this.io, [UINT8]);
-        return code;
+        return await this._serial(async () => {
+            await sendFeatureCommand(this.io, PERSIST_CONFIG);
+            const [code] = await readConfigFeature(this.io, [UINT8]);
+            return code;
+        });
     }
 
     async _readGlobalConfig() {
@@ -238,7 +274,8 @@ export class RemapperDevice {
     }
 
     // Reads the full config from the device into a plain object (model shape).
-    async load() {
+    async load() { return this._serial(() => this._loadInner()); }
+    async _loadInner() {
         const g = await this._readGlobalConfig();
         const config = {
             'version': g.config_version,
@@ -352,7 +389,8 @@ export class RemapperDevice {
 
     // Writes the config to the device and persists it. Returns a code; throws on
     // communication errors.
-    async save(config) {
+    async save(config) { return this._serial(() => this._saveInner(config)); }
+    async _saveInner(config) {
         return await this._push(config, true);
     }
 
@@ -468,7 +506,8 @@ export class RemapperDevice {
         }
     }
 
-    async getUsages() {
+    async getUsages() { return this._serial(() => this._getUsagesInner()); }
+    async _getUsagesInner() {
         const g = await this._readGlobalConfig();
         this.extraUsages['target'] = await this._doGetUsages(GET_OUR_USAGES, g.our_usage_count);
         this.extraUsages['source'] = await this._doGetUsages(GET_THEIR_USAGES, g.their_usage_count);
@@ -497,7 +536,8 @@ export class RemapperDevice {
         return out;
     }
 
-    async setMonitorEnabled(enabled) {
+    async setMonitorEnabled(enabled) { return this._serial(() => this._setMonitorEnabledInner(enabled)); }
+    async _setMonitorEnabledInner(enabled) {
         this.monitorEnabled = enabled;
         if (this.io != null) {
             await sendFeatureCommand(this.io, SET_MONITOR_ENABLED, [[UINT8, enabled ? 1 : 0]]);

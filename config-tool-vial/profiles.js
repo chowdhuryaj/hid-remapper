@@ -103,27 +103,31 @@ export const CORSAIR_NIGHTSWORD = {
         { id: 'b3', label: 'Button 3', native: 'Middle / wheel click', source: '0x00090003', hint: 'Scroll-wheel click' },
         { id: 'b4', label: 'Button 4', native: 'Back', source: '0x00090004', hint: 'Thumb · rear side button' },
         { id: 'b5', label: 'Button 5', native: 'Forward', source: '0x00090005', hint: 'Thumb · front side button' },
-        { id: 'sniper', label: 'Sniper', native: 'Grave ` (onboard mapping)', source: '0x00070035', hint: 'Left side · below the thumb pair' },
-        { id: 'bw', label: 'Behind wheel', native: 'Backslash \\ (onboard mapping)', source: '0x00070031', hint: 'Top · behind the scroll wheel' },
+        { id: 'sniper', label: 'Sniper', native: 'Grave ` (onboard mapping)', source: '0x00070035', hint: 'Left side · in front of the thumb pair' },
+        { id: 'bw', label: 'Behind wheel', native: 'Backslash \\ (onboard mapping)', short: '\\', source: '0x00070031', hint: 'Top · behind the scroll wheel' },
         { id: 'ft1', label: 'Fingertip front', native: 'Home (onboard mapping)', source: '0x0007004a', hint: 'Index fingertip · front edge' },
         { id: 'ft2', label: 'Fingertip rear', native: 'End (onboard mapping)', source: '0x0007004d', hint: 'Index fingertip · behind front' },
     ],
 
-    // Top view, front (buttons/wheel) at top, USB cable leaving the top edge.
+    // Top view, front (buttons/wheel) at top. Proportions follow the real
+    // body (~85 mm wide x 129 mm long => ~1:1.5): button plates cover the
+    // front ~40%, wheel between them, the fingertip pair on the LMB's left
+    // flank, and the thumb cluster mid-body. Physical order on the flank,
+    // front to rear: sniper, then Forward (B5), then Back (B4).
     layout: {
-        viewBox: '0 0 400 480',
-        outline: { x: 44, y: 16, w: 312, h: 448, rx: 96 },
-        wheel: { x: 204, y: 60, w: 40, h: 88, rx: 12, label: 'Wheel' },
+        viewBox: '0 0 400 500',
+        outline: { x: 50, y: 14, w: 300, h: 470, rx: 110 },
+        wheel: { x: 202, y: 48, w: 36, h: 76, rx: 12, label: 'Wheel' },
         buttons: [
-            { id: 'ft1', x: 56, y: 60, w: 46, h: 36, tag: 'F1' },
-            { id: 'ft2', x: 56, y: 104, w: 46, h: 36, tag: 'F2' },
-            { id: 'b1', x: 110, y: 36, w: 88, h: 170, tag: 'B1' },
-            { id: 'b3', x: 204, y: 60, w: 40, h: 88, tag: 'B3', isWheelClick: true },
-            { id: 'bw', x: 204, y: 158, w: 40, h: 34, tag: 'BW' },
-            { id: 'b2', x: 250, y: 36, w: 94, h: 170, tag: 'B2' },
-            { id: 'b5', x: 52, y: 210, w: 54, h: 36, tag: 'B5' },
-            { id: 'b4', x: 52, y: 252, w: 54, h: 36, tag: 'B4' },
-            { id: 'sniper', x: 52, y: 294, w: 54, h: 36, tag: 'SNP' },
+            { id: 'ft1', x: 56, y: 44, w: 46, h: 40, tag: 'F1' },
+            { id: 'ft2', x: 56, y: 92, w: 46, h: 40, tag: 'F2' },
+            { id: 'b1', x: 108, y: 28, w: 88, h: 160, tag: 'B1' },
+            { id: 'b3', x: 202, y: 48, w: 36, h: 76, tag: 'B3', isWheelClick: true },
+            { id: 'bw', x: 202, y: 132, w: 36, h: 40, tag: 'BW' },
+            { id: 'b2', x: 244, y: 28, w: 100, h: 160, tag: 'B2' },
+            { id: 'sniper', x: 52, y: 200, w: 56, h: 40, tag: 'SNP' },
+            { id: 'b5', x: 52, y: 248, w: 56, h: 40, tag: 'B5' },
+            { id: 'b4', x: 52, y: 296, w: 56, h: 40, tag: 'B4' },
         ],
     },
 

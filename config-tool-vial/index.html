@@ -9,7 +9,9 @@
     <style>
         :root {
             --bg: #f5f5f4; --surface: #ffffff; --surface2: #fafaf9; --text: #1c1c1a;
-            --muted: #6b6b66; --faint: #9a9a93; --border: #e2e2dd; --border2: #cfcfc8;
+            /* --faint carries 12px hint text: #71716c = 4.50:1 on --bg (WCAG AA);
+               the old #9a9a93 measured 2.60:1. */
+            --muted: #6b6b66; --faint: #71716c; --border: #e2e2dd; --border2: #cfcfc8;
             --accent: #2563eb; --accent-bg: #e8f0fe; --accent-text: #14458a;
             --ok: #15803d; --ok-bg: #e7f6ec; --danger: #b42318; --danger-bg: #fdeceb;
             --radius: 8px;
@@ -17,7 +19,7 @@
         @media (prefers-color-scheme: dark) {
             :root {
                 --bg: #1a1a18; --surface: #242422; --surface2: #2c2c29; --text: #ececea;
-                --muted: #a3a39d; --faint: #76766f; --border: #36352f; --border2: #45443d;
+                --muted: #a3a39d; --faint: #8e8e87; --border: #36352f; --border2: #45443d;
                 --accent: #5b9aff; --accent-bg: #1c2a44; --accent-text: #bcd4ff;
                 --ok: #69d28c; --ok-bg: #15301f; --danger: #f1857c; --danger-bg: #3a1714;
             }
@@ -26,6 +28,13 @@
         body { margin: 0; background: var(--bg); color: var(--text);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             line-height: 1.5; }
+        /* Keyboard navigation: one consistent focus ring everywhere. */
+        :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius); }
+        .btn, .tab, .mtab, .chip, .mchip, .code, .keybtn, .iconbtn {
+            transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out; }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
+        }
         .wrap { max-width: 880px; margin: 0 auto; padding: 24px 20px 64px; }
         header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
         h1 { font-size: 22px; font-weight: 600; margin: 8px 0 0; }
@@ -110,7 +119,7 @@
             border-radius: 999px; padding: 2px 8px; }
         .picker { margin-top: 28px; padding: 16px; background: var(--surface); border: 1px solid var(--border);
             border-radius: 12px; }
-        .picker.disabled { opacity: 0.55; }
+        .picker.disabled { opacity: 0.55; pointer-events: none; }
         .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
         .chip { font-size: 13px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border2);
             background: var(--surface); color: var(--muted); cursor: pointer; }
@@ -131,13 +140,20 @@
             padding: 7px 18px; font-size: 12px; color: var(--muted); background: var(--surface);
             border-top: 1px solid var(--border); z-index: 5; }
         .statusbar .sbver { color: var(--faint); }
+        @media (max-width: 560px) {
+            .statusbar { gap: 10px; padding: 6px 12px; }
+            .statusbar .sbver { display: none; }
+        }
         .wrap { padding-bottom: 88px; }
         .applystate { width: 10px; height: 10px; border-radius: 50%; background: var(--border2); display: inline-block; }
         .applystate.ok { background: var(--ok); }
         .applystate.busy { background: var(--accent); }
         .applystate.err { background: var(--danger); }
         .diagram { margin: 14px 0 4px; }
-        .diagram svg { width: 100%; max-width: 560px; display: block; margin: 0 auto; }
+        /* The device card must never crowd out the editor below it: cap by
+           height so portrait (mouse) and landscape (trackball) layouts both
+           leave the tab row above the fold. */
+        .diagram svg { display: block; margin: 0 auto; width: auto; max-width: 100%; max-height: 330px; }
         .diagram .outline { fill: var(--surface); stroke: var(--border2); stroke-width: 1.5; }
         .diagram .ballshape { fill: var(--surface2); stroke: var(--border2); stroke-width: 1.5; cursor: pointer; }
         .diagram .btnshape { fill: var(--surface2); stroke: var(--border2); stroke-width: 1.2; cursor: pointer; }
@@ -146,14 +162,14 @@
         .diagram .btnshape.assigned { fill: var(--accent-bg); }
         .diagram text { pointer-events: none; user-select: none; }
         .diagram .tag { font-size: 11px; font-weight: 600; fill: var(--text); }
-        .diagram .lbl { font-size: 9px; fill: var(--muted); }
+        .diagram .lbl { font-size: 10px; fill: var(--muted); }
         .diagram .biglbl { font-size: 12px; fill: var(--faint); }
         .ok { color: var(--ok); }
         .hidden { display: none; }
         footer { margin-top: 36px; font-size: 12px; color: var(--faint); }
         a { color: var(--accent); }
     </style>
-    <script src="vial.js?v=6" type="module"></script>
+    <script src="vial.js?v=7" type="module"></script>
 </head>
 
 <body>
@@ -184,16 +200,16 @@
              tabbed "palette"; clicking a control jumps to its editor. -->
         <div id="diagram" class="diagram devicecard"></div>
 
-        <div class="maintabs">
-            <button id="mt-keymap" class="mtab on">Keymap</button>
-            <button id="mt-behaviors" class="mtab">Behaviors</button>
-            <button id="mt-pointer" class="mtab">Pointer</button>
-            <button id="mt-macros" class="mtab">Macros</button>
-            <button id="mt-settings" class="mtab">Settings</button>
+        <div class="maintabs" role="tablist" aria-label="Sections">
+            <button id="mt-keymap" class="mtab on" role="tab" aria-selected="true">Keymap</button>
+            <button id="mt-behaviors" class="mtab" role="tab" aria-selected="false">Behaviors</button>
+            <button id="mt-pointer" class="mtab" role="tab" aria-selected="false">Pointer</button>
+            <button id="mt-macros" class="mtab" role="tab" aria-selected="false">Macros</button>
+            <button id="mt-settings" class="mtab" role="tab" aria-selected="false">Settings</button>
         </div>
 
         <div id="panel-keymap">
-            <div id="tabs" class="tabs"></div>
+            <div id="tabs" class="tabs" role="tablist" aria-label="Layers"></div>
             <main>
                 <section>
                     <h2>Buttons</h2>

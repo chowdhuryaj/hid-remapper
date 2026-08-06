@@ -18,7 +18,6 @@ import functools
 import http.server
 import json
 import os
-import socket
 import threading
 import time
 
@@ -57,7 +56,14 @@ class HidBridge:
             try:
                 data = device.read(64, timeout=250)  # first byte = report id
             except Exception:
-                break  # device closed/unplugged; the JS side notices on next command
+                if not stop.is_set():
+                    try:
+                        if self.window is not None:
+                            self.window.evaluate_js(
+                                "window.__nativeDisconnected && window.__nativeDisconnected()")
+                    except Exception:
+                        pass
+                break  # device closed/unplugged
             if not data or self.window is None:
                 continue
             try:
@@ -75,8 +81,11 @@ class HidBridge:
         self._reader.start()
 
     def _stop_reader(self):
+        reader = self._reader
         if self._reader_stop is not None:
             self._reader_stop.set()
+        if reader is not None:
+            reader.join(timeout=1.0)
         self._reader = None
         self._reader_stop = None
 
@@ -167,24 +176,13 @@ class HidBridge:
         return True
 
 
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _serve(directory, port):
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
-    http.server.ThreadingHTTPServer(("127.0.0.1", port), handler).serve_forever()
-
-
 def main():
     global SERVER_PORT
     webroot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # config-tool-vial/
-    SERVER_PORT = _free_port()
-    threading.Thread(target=_serve, args=(webroot, SERVER_PORT), daemon=True).start()
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=webroot)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    SERVER_PORT = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
     bridge = HidBridge()
     bridge.window = webview.create_window(

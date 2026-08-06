@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=5';
+import { newMapping } from './model.js?v=7';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=5';
+} from './protocol.js?v=7';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -175,11 +175,17 @@ function compileCursorKeys(b, config, alloc) {
 // member buttons; when the chord is released, the completed mask is pulsed for a
 // single frame and matched against each defined chord, whose output register
 // drives a mapping.
+// Returns null when any member is missing from memberSources (e.g. the row
+// was built on a different device profile). Callers must skip such rows: a
+// silently-dropped member either degrades the chord to fewer buttons or —
+// with mask 0 — matches the "no chord" register state on almost every tick,
+// spamming the output key.
 export function chordMask(members, memberSources) {
     let mask = 0;
     for (const m of members) {
         const i = memberSources.indexOf(m);
-        if (i >= 0) mask |= (1 << i);
+        if (i < 0) return null;
+        mask |= (1 << i);
     }
     return mask;
 }
@@ -201,6 +207,10 @@ function compileChordSet(b, config, alloc) {
 
     for (const c of b.chords) {
         const mask = chordMask(c.members, members);
+        // Skip stale or degenerate rows outright: mask null = a member is
+        // not on this profile; a chord needs at least two live members to
+        // mean anything. Compiling anyway would spam or misfire the output.
+        if (mask === null || c.members.length < 2) continue;
         const rOut = alloc.reg();
         e += ` ${regRef(regDone)} recall ${mask} eq ${regRef(rOut)} store`;
         config.mappings.push(newMapping(registerUsage(rOut), c.output, layersOf(b)));

@@ -4,9 +4,9 @@
 // reverse-engineered from a compiled device config. Saving to the device
 // compiles base + behaviors together (see behaviors.compile).
 
-import { defaultConfig, migrateConfig } from './model.js?v=5';
-import { compile } from './behaviors.js?v=5';
-import { defaultProfile } from './profiles.js?v=5';
+import { defaultConfig, migrateConfig } from './model.js?v=7';
+import { compile } from './behaviors.js?v=7';
+import { defaultProfile } from './profiles.js?v=7';
 
 export const PROJECT_FORMAT = 1;
 
@@ -39,6 +39,7 @@ export function projectFromJson(json) {
         p.ports = (json.ports && typeof json.ports === 'object') ? json.ports : {};
         p.base = migrateConfig(json.base);
         p.behaviors = Array.isArray(json.behaviors) ? json.behaviors : [];
+        seedBehaviorIds(p.behaviors);
         return p;
     }
     // Plain HID Remapper config: adopt it as the base, no behaviors.
@@ -50,4 +51,19 @@ export function projectFromJson(json) {
 let nextId = 1;
 export function newBehaviorId() {
     return 'bh' + (nextId++);
+}
+
+// Advance the id counter past every id already present in a loaded project.
+// The counter is module-lifetime, so importing a project saved in an earlier
+// session would otherwise mint ids that collide with the imported ones
+// (duplicate data-bid cards, wrong card flashed/scrolled after add).
+function seedBehaviorIds(behaviors) {
+    for (const b of behaviors) {
+        for (const id of [b.id, ...(b.chords || []).map((c) => c.id)]) {
+            const m = /^bh(\d+)$/.exec(id || '');
+            if (m && parseInt(m[1], 10) >= nextId) {
+                nextId = parseInt(m[1], 10) + 1;
+            }
+        }
+    }
 }
