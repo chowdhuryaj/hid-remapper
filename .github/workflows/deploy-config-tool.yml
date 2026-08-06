@@ -26,3 +26,9 @@ jobs:
           path: config-tool-vial
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Pages' deployment queue occasionally stalls for 10+ minutes
+          # (2026-08-06: five failed deploys from queue congestion). The
+          # default 10-minute timeout then cancels a deployment that would
+          # have succeeded — wait up to 30 instead.
+          timeout: 1800000
