@@ -44,6 +44,41 @@ class HidBridge:
     def __init__(self):
         self.device = None
         self.hud = None
+        self.window = None  # main webview window, set in main()
+        self._reader = None
+        self._reader_stop = None
+
+    # --- input-report stream (monitor, report id 101) ---
+    # WebHID delivers input reports as events; hidapi needs a blocking read
+    # loop. Forward each report to the page so the Monitor-driven features
+    # (profile wizard press-to-identify, HUD recent inputs) work natively too.
+    def _read_loop(self, device, stop):
+        while not stop.is_set():
+            try:
+                data = device.read(64, timeout=250)  # first byte = report id
+            except Exception:
+                break  # device closed/unplugged; the JS side notices on next command
+            if not data or self.window is None:
+                continue
+            try:
+                self.window.evaluate_js(
+                    "window.__nativeInputReport && window.__nativeInputReport("
+                    + json.dumps(list(data)) + ")")
+            except Exception:
+                pass
+
+    def _start_reader(self):
+        self._stop_reader()
+        self._reader_stop = threading.Event()
+        self._reader = threading.Thread(
+            target=self._read_loop, args=(self.device, self._reader_stop), daemon=True)
+        self._reader.start()
+
+    def _stop_reader(self):
+        if self._reader_stop is not None:
+            self._reader_stop.set()
+        self._reader = None
+        self._reader_stop = None
 
     # --- HUD overlay (Flask-style always-on-top panel) ---
     def toggle_hud(self):
@@ -102,6 +137,7 @@ class HidBridge:
             if self.device is not None:
                 self.close()
             self.device = hid.Device(path=devices[0]["path"])
+            self._start_reader()
             return {"ok": True, "product": devices[0].get("product_string") or "HID Remapper"}
         except Exception as e:  # surfaced to the UI as a notice
             return {"ok": False, "error": str(e)}
@@ -122,6 +158,7 @@ class HidBridge:
             delay *= 2
 
     def close(self):
+        self._stop_reader()
         if self.device is not None:
             try:
                 self.device.close()
@@ -149,10 +186,11 @@ def main():
     SERVER_PORT = _free_port()
     threading.Thread(target=_serve, args=(webroot, SERVER_PORT), daemon=True).start()
 
-    webview.create_window(
+    bridge = HidBridge()
+    bridge.window = webview.create_window(
         "AlooMapper",
         f"http://127.0.0.1:{SERVER_PORT}/index.html?native=1",
-        js_api=HidBridge(),
+        js_api=bridge,
         width=980,
         height=920,
         min_size=(720, 600),

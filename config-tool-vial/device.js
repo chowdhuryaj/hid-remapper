@@ -106,7 +106,19 @@ export class RemapperDevice {
         this.device = null;
         this._nativeName = res.product || 'HID Remapper';
         this._open = true;
+        // The Python side pushes input reports (first byte = report id) via
+        // this global; route them through the same monitor parsing WebHID
+        // events use, so press-to-identify and the HUD work natively too.
+        window.__nativeInputReport = (bytes) => {
+            if (!bytes || bytes.length < 2) return;
+            const u8 = new Uint8Array(bytes);
+            this._onInputReport({
+                reportId: u8[0],
+                data: new DataView(u8.buffer, 1),
+            });
+        };
         await this._checkDeviceVersion();
+        await this.setMonitorEnabled(this.monitorEnabled);
         await this.getUsages();
         return true;
     }
@@ -487,7 +499,7 @@ export class RemapperDevice {
 
     async setMonitorEnabled(enabled) {
         this.monitorEnabled = enabled;
-        if (this.device != null) {
+        if (this.io != null) {
             await sendFeatureCommand(this.io, SET_MONITOR_ENABLED, [[UINT8, enabled ? 1 : 0]]);
         }
     }
@@ -501,7 +513,7 @@ export class RemapperDevice {
             return;
         }
         const list = [];
-        for (let i = 0; i < 7; i++) {
+        for (let i = 0; i < 7 && (i + 1) * 9 <= event.data.byteLength; i++) {
             const usage = usageToHex(event.data.getUint32(i * 9, true));
             const value = event.data.getInt32(i * 9 + 4, true);
             const hubPort = event.data.getUint8(i * 9 + 8);
