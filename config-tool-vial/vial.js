@@ -2,22 +2,22 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=8';
-import { migrateConfig } from './model.js?v=8';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=9';
+import { migrateConfig } from './model.js?v=9';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-} from './protocol.js?v=8';
+} from './protocol.js?v=9';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=8';
-import { usagePage } from './model.js?v=8';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=8';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=8';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=8';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=8';
+} from './profiles.js?v=9';
+import { usagePage } from './model.js?v=9';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=9';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=9';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=9';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=9';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -1008,6 +1008,12 @@ function defaultBehavior(type) {
     if (type === 'wheel_chords') return { id, type, button: 0, slots: emptySlots() };
     if (type === 'shake_action') return { id, type, action: '0xfff10001', sticky: true };
     if (type === 'os_shortcut') return { id, type, trigger: btnAt(3), action: 'copy', os: 'inherit' };
+    if (type === 'leader_seq') {
+        // Leader = sniper-position button; one starter sequence: leader,
+        // then Back -> browser refresh (F5) as a harmless demonstrable.
+        return { id, type, leader: btnAt(5), window: 600,
+            seqs: [{ id: newBehaviorId(), steps: [btnAt(3)], output: '0x0007003e' }] };
+    }
     throw new Error('unknown behavior ' + type);
 }
 
@@ -1102,7 +1108,7 @@ function staleSources(b) {
     };
     // Only trigger/member fields name profile inputs; outputs legitimately
     // use arbitrary keyboard usages, so scan just the known input fields.
-    for (const key of ['trigger', 'button', 'accept', 'members', 'buttons', 'confirmButtons']) {
+    for (const key of ['trigger', 'button', 'accept', 'members', 'buttons', 'confirmButtons', 'leader', 'seqs']) {
         if (key in b) scan(b[key]);
     }
     for (const c of b.chords || []) scan(c.members);
@@ -1114,7 +1120,7 @@ function behaviorCard(b) {
         dpi_shift: 'DPI shift', cursor_keys: 'Cursor → keys', chord_set: 'Chord',
         scroll_text: 'Scroll-wheel text', tap_dance: 'Tap dance',
         drag_scroll: 'Drag scroll', gesture_set: 'Gestures', wheel_chords: 'Mouse chords', shake_action: 'Shake action',
-        os_shortcut: 'OS shortcut',
+        os_shortcut: 'OS shortcut', leader_seq: 'Leader key',
     };
     const enabled = b.enabled !== false;
     const en = el('input', { type: 'checkbox' });
@@ -1146,6 +1152,7 @@ function behaviorCard(b) {
     else if (b.type === 'wheel_chords') body.append(...wheelChordsBody(b));
     else if (b.type === 'shake_action') body.append(...shakeActionBody(b));
     else if (b.type === 'os_shortcut') body.append(...osShortcutBody(b));
+    else if (b.type === 'leader_seq') body.append(...leaderBody(b));
     body.insertBefore(layerField(b), body.firstChild);
     return el('div', { class: 'bcard' + (enabled ? '' : ' offb'), 'data-bid': b.id }, head, body);
 }
@@ -1242,14 +1249,50 @@ function chordBody(b) {
                 renderBehaviors();
             },
         }));
+        const danceBits = [];
+        if (c.hold !== undefined || c.double !== undefined || c._dance) {
+            danceBits.push(
+                el('span', { class: 'hint', text: 'hold' }),
+                keyButton(c.hold, 'Chord hold action', (u) => { c.hold = u; renderBehaviors(); }),
+                el('span', { class: 'hint', text: '2×' }),
+                keyButton(c.double, 'Chord double-tap action', (u) => { c.double = u; renderBehaviors(); }));
+        } else {
+            danceBits.push(el('button', { class: 'iconbtn', text: '+ hold / 2×', title: 'Add Hold and Double-tap stages to this chord (tap then waits out the window — that’s inherent to telling a single tap from a double)', onclick: () => { c._dance = true; renderBehaviors(); } }));
+        }
         rows.push(el('div', { class: 'chordrow' },
             el('div', { class: 'glyphs' }, ...chips),
             el('span', { class: 'hint', text: '→' }),
-            keyButton(c.output, 'Chord output', (u) => { c.output = u; renderBehaviors(); }),
+            keyButton(c.output, 'Chord output (tap)', (u) => { c.output = u; renderBehaviors(); }),
+            ...danceBits,
             el('button', { class: 'iconbtn', text: '✕', title: 'Delete chord', onclick: () => { b.chords = b.chords.filter((x) => x !== c); renderBehaviors(); } })));
     });
     rows.push(el('button', { class: 'iconbtn', text: '+ Add chord', onclick: () => { b.chords.push({ id: newBehaviorId(), members: [], output: '0x00070028' }); renderBehaviors(); } }));
-    rows.push(el('div', { class: 'bcaption', text: 'Press 2–4 buttons together; fires on release. Compiles to 1 expression + 1 mapping per chord.' }));
+    rows.push(field('Window', ...slider(100, 500, 10, b.window || 200, (v) => v + ' ms', (v) => { b.window = v; })));
+    rows.push(el('div', { class: 'bcaption', text: 'Press 2–4 buttons together. Plain rows fire on release (1 expression + 1 mapping each). Rows with Hold / Double-tap stages judge all-held-together and cost ~6 registers each — the tap output then waits out the window, like tap dance.' }));
+    return rows;
+}
+
+function leaderBody(b) {
+    const rows = [];
+    rows.push(field('Leader', sourceButton(b.leader, 'Leader button', (u) => { b.leader = u; renderBehaviors(); })));
+    b.seqs.forEach((s) => {
+        const stepEls = [];
+        s.steps.forEach((st, i) => {
+            stepEls.push(sourceButton(st, 'Step ' + (i + 1), (u) => { s.steps[i] = u; renderBehaviors(); }));
+            if (s.steps.length > 1) stepEls.push(el('button', { class: 'iconbtn', text: '−', title: 'Remove this step', onclick: () => { s.steps.splice(i, 1); renderBehaviors(); } }));
+        });
+        if (s.steps.length < 3) stepEls.push(el('button', { class: 'iconbtn', text: '+ step', onclick: () => { s.steps.push(btnAt(4)); renderBehaviors(); } }));
+        rows.push(el('div', { class: 'chordrow' },
+            el('span', { class: 'hint', text: 'then' }), ...stepEls,
+            el('span', { class: 'hint', text: '→' }),
+            keyButton(s.output, 'Sequence output', (u) => { s.output = u; renderBehaviors(); }),
+            el('button', { class: 'iconbtn', text: '✕', title: 'Delete sequence', onclick: () => { b.seqs = b.seqs.filter((x) => x !== s); renderBehaviors(); } })));
+    });
+    if (b.seqs.length < 4) {
+        rows.push(el('button', { class: 'iconbtn', text: '+ Add sequence', onclick: () => { b.seqs.push({ id: newBehaviorId(), steps: [btnAt(3)], output: '0x00070004' }); renderBehaviors(); } }));
+    }
+    rows.push(field('Step window', ...slider(200, 1500, 50, b.window || 600, (v) => v + ' ms', (v) => { b.window = v; })));
+    rows.push(el('div', { class: 'bcaption', text: 'Press the leader, then the steps in order — each within the window — and the sequence fires. While a sequence is live, the leader and every step button are swallowed (they do nothing on their own); unrelated buttons work normally. The leader button is fully taken over. Up to 4 sequences, 1–3 steps each.' }));
     return rows;
 }
 

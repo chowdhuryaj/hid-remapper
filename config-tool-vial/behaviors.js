@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=8';
+import { newMapping } from './model.js?v=9';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=8';
+} from './protocol.js?v=9';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -102,6 +102,7 @@ export function compile(baseConfig, behaviors, projectOs = 'mac') {
             case 'wheel_chords': compileWheelChords(b, config, alloc); break;
             case 'shake_action': compileShakeAction(b, config, alloc); break;
             case 'os_shortcut': compileOsShortcut(b, config, alloc, ctx); break;
+            case 'leader_seq': compileLeader(b, config, alloc); break;
             default: throw new Error('Unknown behavior type: ' + b.type);
         }
     }
@@ -211,11 +212,120 @@ function compileChordSet(b, config, alloc) {
         // not on this profile; a chord needs at least two live members to
         // mean anything. Compiling anyway would spam or misfire the output.
         if (mask === null || c.members.length < 2) continue;
+        if (c.hold || c.double) {
+            // Rows with dance stages get their own machine (below); they
+            // don't participate in the release-fire accumulator.
+            compileChordDance(b, c, config, alloc);
+            continue;
+        }
         const rOut = alloc.reg();
         e += ` ${regRef(regDone)} recall ${mask} eq ${regRef(rOut)} store`;
         config.mappings.push(newMapping(registerUsage(rOut), c.output, layersOf(b)));
     }
     config.expressions[ch] = e;
+}
+
+// A chord row with Hold and/or Double-tap stages: the tap_dance skeleton with
+// "press" redefined as the chord-complete edge (every member down at once)
+// and "held" as all members still down. Costs ~6 registers + 1 channel per
+// row, so only rows that use the stages pay for it. Semantics note: unlike
+// plain rows (which accumulate presses and fire on first release), dance
+// rows judge simultaneity — all members must be down together.
+function compileChordDance(b, c, config, alloc) {
+    const win = Math.max(50, Math.round(b.window || 200));
+    const r = regRef;
+    const lvlNow = c.members.map((m, i) => `${m} input_state_binary` + (i > 0 ? ' mul' : '')).join(' ');
+    const lvlPrev = c.members.map((m, i) => `${m} prev_input_state_binary` + (i > 0 ? ' mul' : '')).join(' ');
+    const PE = alloc.reg(), C = alloc.reg(), T = alloc.reg(), HOLD = alloc.reg(), TAP = alloc.reg(), F1 = alloc.reg();
+    const F2 = c.double ? alloc.reg() : 0;
+    const ch = alloc.channel();
+    const lines = [
+        // chord-complete edge
+        `${lvlNow} ${lvlPrev} not mul ${r(PE)} store`,
+        `${r(C)} recall ${r(PE)} recall add ${r(C)} store`,
+        `${r(PE)} recall time mul ${r(PE)} recall not ${r(T)} recall mul add ${r(T)} store`,
+        // hold = still fully down past the window
+        `${lvlNow} time ${r(T)} recall sub ${win} gt mul ${r(HOLD)} store`,
+        `${r(C)} recall ${r(HOLD)} recall not mul ${r(C)} store`,
+        // tap fire = chord released, count pending, window quiet
+        `${lvlNow} not ${r(C)} recall 0 gt mul time ${r(T)} recall sub ${win} gt mul ${r(TAP)} store`,
+        `${r(TAP)} recall ${r(C)} recall 1 eq mul ${r(F1)} store`,
+    ];
+    if (c.double) {
+        lines.push(`${r(TAP)} recall ${r(C)} recall 1 gt mul ${r(F2)} store`);
+    }
+    lines.push(`${r(C)} recall ${r(TAP)} recall not mul ${r(C)} store`);
+    config.expressions[ch] = lines.join(' eol ');
+
+    config.mappings.push(newMapping(registerUsage(F1), c.output, layersOf(b)));
+    if (c.double) config.mappings.push(newMapping(registerUsage(F2), c.double, layersOf(b)));
+    if (c.hold) config.mappings.push(newMapping(registerUsage(HOLD), c.hold, layersOf(b)));
+}
+
+// --- Leader key sequences ---------------------------------------------------
+// Press the leader button, then a short sequence of buttons (1-3 steps),
+// each within the window — the matching sequence fires its output. While
+// armed, a claimed layer swallows the leader and every sequence button so
+// nothing leaks its normal function mid-sequence; unrelated buttons are
+// untouched. Each sequence progresses independently (trie-style): a press
+// that matches nothing resets only the sequences it belongs to.
+function compileLeader(b, config, alloc) {
+    const win = Math.max(150, Math.round(b.window || 600));
+    const seqs = (b.seqs || []).filter((s) => s.steps && s.steps.length >= 1 && s.steps.every(Boolean) && s.output);
+    if (!b.leader || seqs.length === 0) return;
+    const r = regRef;
+    const pe = (m) => `${m} input_state_binary ${m} prev_input_state_binary not mul`;
+    const L = alloc.layer();
+    const rArm = alloc.reg(), rT = alloc.reg();
+    const perSeq = seqs.map((s) => ({ s, rP: alloc.reg(), rF: alloc.reg() }));
+    const ch = alloc.channel();
+
+    const stepButtons = [...new Set(seqs.flatMap((s) => s.steps))];
+    const anyStepPE = stepButtons.map((m, i) => pe(m) + (i > 0 ? ' bitwise_or' : '')).join(' ');
+
+    const lines = [
+        // leader press arms and stamps the clock
+        `${pe(b.leader)} ${r(rArm)} recall bitwise_or ${r(rArm)} store`,
+        `${pe(b.leader)} time mul ${pe(b.leader)} not ${r(rT)} recall mul add ${r(rT)} store`,
+        // any step press while armed re-stamps the clock (per-step timeout)
+        `${anyStepPE} ${r(rArm)} recall mul dup time mul swap not ${r(rT)} recall mul add ${r(rT)} store`,
+        // timeout disarms
+        `${r(rArm)} recall time ${r(rT)} recall sub ${win} gt not mul ${r(rArm)} store`,
+    ];
+    for (const { s, rP, rF } of perSeq) {
+        // progress dies with the arm flag
+        lines.push(`${r(rP)} recall ${r(rArm)} recall mul ${r(rP)} store`);
+        const match = s.steps.map((st, k) =>
+            `${r(rP)} recall ${k} eq ${pe(st)} mul ${r(rArm)} recall mul`);
+        // fire = the last step matched at full progress
+        lines.push(`${match[s.steps.length - 1]} ${r(rF)} store`);
+        // advance through non-final matches; reset on a member press that
+        // matched nothing (leader-style strictness within this sequence)
+        const anyMatch = match.map((m, i) => m + (i > 0 ? ' bitwise_or' : '')).join(' ');
+        const ownPE = [...new Set(s.steps)].map((m, i) => pe(m) + (i > 0 ? ' bitwise_or' : '')).join(' ');
+        const advance = s.steps.length > 1
+            ? match.slice(0, -1).map((m, i) => m + (i > 0 ? ' add' : '')).join(' ')
+            : '0';
+        lines.push(`${r(rP)} recall ${advance} add ` +
+            `${ownPE} ${anyMatch} not mul ${r(rArm)} recall mul not mul ` +  // zero on mismatch
+            `${r(rF)} recall not mul ${r(rP)} store`);                        // zero on fire
+    }
+    // any fire disarms
+    const orFires = perSeq.map(({ rF }, i) => `${r(rF)} recall` + (i > 0 ? ' bitwise_or' : '')).join(' ');
+    lines.push(`${r(rArm)} recall ${orFires} not mul ${r(rArm)} store`);
+    config.expressions[ch] = lines.join(' eol ');
+
+    // armed drives the swallow layer; on it, the leader and every step
+    // button do nothing. Fires map on all layers so a sequence works
+    // wherever it was started.
+    config.mappings.push(newMapping(registerUsage(rArm), layerUsage(L), layersOf(b)));
+    config.mappings.push(newMapping(b.leader, NOTHING, layersOf(b)));  // leader is taken over
+    for (const m of stepButtons) {
+        config.mappings.push(newMapping(m, NOTHING, [L]));
+    }
+    for (const { s, rF } of perSeq) {
+        config.mappings.push(newMapping(registerUsage(rF), s.output, ALL_LAYERS));
+    }
 }
 
 // --- Scroll-wheel text input ------------------------------------------------
