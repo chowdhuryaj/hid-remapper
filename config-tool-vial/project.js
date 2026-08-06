@@ -6,13 +6,17 @@
 
 import { defaultConfig, migrateConfig } from './model.js?v=5';
 import { compile } from './behaviors.js?v=5';
+import { defaultProfile } from './profiles.js?v=5';
 
 export const PROJECT_FORMAT = 1;
 
 export function defaultProject() {
     return {
         format: PROJECT_FORMAT,
-        profile: 'elecom_huge_plus',
+        // Follow the tool's default profile — hardcoding a device id here
+        // silently pinned every new project to the Elecom regardless of
+        // which profile was the default.
+        profile: defaultProfile().id,
         os: 'mac',  // project-wide OS for os_shortcut behaviors set to 'inherit'
         ports: {},  // renamable hub-port labels for multi-device setups
         base: defaultConfig(),

@@ -16,7 +16,7 @@ import {
 import { usagePage } from './model.js?v=5';
 import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=5';
 import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=5';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=5';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=6';
 import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=5';
 
 const TRANSPARENT = '__transparent__';
