@@ -27,8 +27,10 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
         with:
-          # Pages' deployment queue occasionally stalls for 10+ minutes
-          # (2026-08-06: five failed deploys from queue congestion). The
-          # default 10-minute timeout then cancels a deployment that would
-          # have succeeded — wait up to 30 instead.
+          # NOTE: deploy-pages@v4 clamps this to 10 minutes internally
+          # (observed 2026-08-06: input echoed 1800000, abort at exactly
+          # 600s), so it cannot outlast a long Pages-queue stall. Kept at
+          # the documented max as a no-op-today, works-if-they-unclamp-it.
+          # When the queue stalls (deployment_queued for 10+ min), the only
+          # fix is re-dispatching once GitHub's backend recovers.
           timeout: 1800000
