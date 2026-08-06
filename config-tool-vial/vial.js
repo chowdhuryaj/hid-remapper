@@ -12,7 +12,7 @@ import {
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=4';
+} from './profiles.js?v=5';
 import { usagePage } from './model.js?v=4';
 import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=4';
 import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=4';

@@ -80,12 +80,90 @@ export const ELECOM_HUGE_PLUS = {
     ],
 };
 
+// Corsair Nightsword (v2). Right-handed gaming mouse, top view, front at top.
+// The five standard buttons and the wheel/tilt arrive as ordinary mouse
+// usages. The other four buttons are programmed by the mouse's ONBOARD
+// (iCUE) profile to send keyboard keys, so through the remapper they arrive
+// as keyboard usages — remap those usages, not button numbers:
+//   Sniper (left side, below the thumb pair) -> Grave `   (0x00070035)
+//   Behind the scroll wheel                  -> Backslash (0x00070031)
+//   Index fingertip, front                   -> Home      (0x0007004a)
+//   Index fingertip, rear                    -> End       (0x0007004d)
+// If the onboard profile is ever changed in iCUE, these sources move with it
+// (verify with the Monitor / press-to-identify in the wizard).
+// No `match` VID/PID: auto-detect PIDs vary across Nightsword revisions and a
+// wrong guess is worse than selecting the profile by hand once.
+export const CORSAIR_NIGHTSWORD = {
+    id: 'corsair_nightsword',
+    name: 'Corsair Nightsword',
+
+    buttons: [
+        { id: 'b1', label: 'Button 1', native: 'Left click', source: '0x00090001', hint: 'Main · left plate' },
+        { id: 'b2', label: 'Button 2', native: 'Right click', source: '0x00090002', hint: 'Main · right plate' },
+        { id: 'b3', label: 'Button 3', native: 'Middle / wheel click', source: '0x00090003', hint: 'Scroll-wheel click' },
+        { id: 'b4', label: 'Button 4', native: 'Back', source: '0x00090004', hint: 'Thumb · rear side button' },
+        { id: 'b5', label: 'Button 5', native: 'Forward', source: '0x00090005', hint: 'Thumb · front side button' },
+        { id: 'sniper', label: 'Sniper', native: 'Grave ` (onboard mapping)', source: '0x00070035', hint: 'Left side · below the thumb pair' },
+        { id: 'bw', label: 'Behind wheel', native: 'Backslash \\ (onboard mapping)', source: '0x00070031', hint: 'Top · behind the scroll wheel' },
+        { id: 'ft1', label: 'Fingertip front', native: 'Home (onboard mapping)', source: '0x0007004a', hint: 'Index fingertip · front edge' },
+        { id: 'ft2', label: 'Fingertip rear', native: 'End (onboard mapping)', source: '0x0007004d', hint: 'Index fingertip · behind front' },
+    ],
+
+    // Top view, front (buttons/wheel) at top, USB cable leaving the top edge.
+    layout: {
+        viewBox: '0 0 400 480',
+        outline: { x: 44, y: 16, w: 312, h: 448, rx: 96 },
+        wheel: { x: 204, y: 60, w: 40, h: 88, rx: 12, label: 'Wheel' },
+        buttons: [
+            { id: 'ft1', x: 56, y: 60, w: 46, h: 36, tag: 'F1' },
+            { id: 'ft2', x: 56, y: 104, w: 46, h: 36, tag: 'F2' },
+            { id: 'b1', x: 110, y: 36, w: 88, h: 170, tag: 'B1' },
+            { id: 'b3', x: 204, y: 60, w: 40, h: 88, tag: 'B3', isWheelClick: true },
+            { id: 'bw', x: 204, y: 158, w: 40, h: 34, tag: 'BW' },
+            { id: 'b2', x: 250, y: 36, w: 94, h: 170, tag: 'B2' },
+            { id: 'b5', x: 52, y: 210, w: 54, h: 36, tag: 'B5' },
+            { id: 'b4', x: 52, y: 252, w: 54, h: 36, tag: 'B4' },
+            { id: 'sniper', x: 52, y: 294, w: 54, h: 36, tag: 'SNP' },
+        ],
+    },
+
+    axes: [
+        {
+            id: 'cursor', label: 'Cursor', native: 'Pointer movement', kind: 'cursor',
+            hint: 'Sensor · X / Y passthrough',
+            dirs: [
+                { id: 'cur_x', label: 'Cursor X', axis: '0x00010030' },
+                { id: 'cur_y', label: 'Cursor Y', axis: '0x00010031' },
+            ],
+        },
+        {
+            id: 'wheel', label: 'Scroll wheel', native: 'Wheel up / down', kind: 'scroll',
+            axis: '0x00010038', hint: 'Main scroll wheel',
+            dirs: [
+                { id: 'wh_ccw', label: 'Wheel up', axis: '0x00010038', dir: -1, native: 'Wheel up' },
+                { id: 'wh_cw', label: 'Wheel down', axis: '0x00010038', dir: +1, native: 'Wheel down' },
+            ],
+        },
+        {
+            id: 'tilt', label: 'Tilt', native: 'Wheel left / right', kind: 'tilt',
+            axis: '0x000c0238', hint: 'Scroll-wheel tilt',
+            dirs: [
+                { id: 'tilt_l', label: 'Tilt left', axis: '0x000c0238', dir: -1, native: 'Wheel left' },
+                { id: 'tilt_r', label: 'Tilt right', axis: '0x000c0238', dir: +1, native: 'Wheel right' },
+            ],
+        },
+    ],
+};
+
 export const profiles = {
+    [CORSAIR_NIGHTSWORD.id]: CORSAIR_NIGHTSWORD,
     [ELECOM_HUGE_PLUS.id]: ELECOM_HUGE_PLUS,
 };
 
 export function defaultProfile() {
-    return ELECOM_HUGE_PLUS;
+    // The device currently on the desk. The Elecom profile stays available
+    // in Settings -> Device profile.
+    return CORSAIR_NIGHTSWORD;
 }
 
 export function profileForVidPid(vendorId, productId) {
