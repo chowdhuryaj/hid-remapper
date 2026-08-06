@@ -371,6 +371,33 @@ imports carry `?v=3` — the browser held cache entries from before serve.py
 sent no-cache and served stale modules without revalidating (bit us three
 times; bump the stamp if it ever recurs).
 
+### Round 3 (2026-08-05 — reliability rework after the Windows failure)
+
+The device failed completely ("no cursor at all") on a Windows machine and
+there was no way to diagnose or recover in the field. Root-cause candidates
+identified by analysis (accel floor 0.20 force-enabled by default; USB
+selective suspend waking only on buttons; boot-protocol lock; downstream
+power) — see TROUBLESHOOTING.md for the desk discriminators. The rework
+(commit on this branch) reverses two earlier architectural decisions,
+knowingly:
+
+1. **CONFIG_VERSION 101 → 18.** The wire protocol and persisted blob are
+   upstream-v18 again; Pointer FX persists in a self-validating sidecar at
+   the end of the config sector and rides commands 26/27 only. remapper.org
+   works again as a fallback; stock firmware flashed over the fork keeps all
+   mappings. Fork detection = 'PFX' signature probe on GET_POINTER_FX page 2.
+2. **Force-enabled effects → master-gated, default OFF** (flag bit 15,
+   derived automatically by the GUI). Fresh flash = upstream behavior
+   exactly. Accel low-speed floor default 0.20 → 1.00. Legacy v100/101
+   configs keep tuning but load with effects off.
+
+New: BOOTSEL safe mode (hold ~2 s at runtime → factory-defaults boot, flash
+untouched + persist refused), watchdog, LED status patterns (slow blink = no
+downstream device, fast = safe mode), diagnostics page 3, REBOOT command 28,
+motion-triggered remote wakeup, EMA tail drain + stroke-start accel fix,
+hosted configurator at https://chowdhuryaj.github.io/hid-remapper/ (GitHub
+Pages, repo forked to chowdhuryaj/hid-remapper).
+
 ### Hardware pass (remaining)
 
 1. Flash `firmware/build/remapper.uf2` (hold BOOTSEL on the Feather while

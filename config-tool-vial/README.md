@@ -5,8 +5,10 @@ that presents the device as a **Vial/QMK-style keymap** — a picture of your
 device, layer tabs, and a searchable keycode picker — instead of a flat list of
 input→output mappings.
 
-It talks to the **stock, unmodified firmware** over the same WebHID protocol as
-the official tool, so no reflash is needed. It targets a USB-to-USB converter
+It talks to stock firmware **and** the fork firmware over the same v18 WebHID
+protocol as the official tool (fork features are detected by probing, not by
+version — so the official remapper.org tool always works as a fallback, and
+this tool works against unmodified devices). It targets a USB-to-USB converter
 build (e.g. an Adafruit Feather RP2040 USB Host driving an Elecom Huge Plus
 trackball), but works with any HID Remapper.
 
@@ -45,8 +47,17 @@ with the stock tool** — you can move between the two freely.
 
 ## Running it
 
-**Desktop app (recommended — no Chromium, no browser):** a native-webview wrapper
-that talks to the device over hidapi. See [`desktop/README.md`](desktop/README.md):
+**Hosted (recommended — zero install):** the tool is published at
+
+> **https://chowdhuryaj.github.io/hid-remapper/**
+
+Open it in Chrome/Edge (any WebHID-capable browser) on any computer — no
+Python, no pip, no copied folder. HTTPS is a secure context, so WebHID works
+exactly like remapper.org's official tool. This is the path to use on a
+machine that isn't yours.
+
+**Desktop app (offline fallback — no Chromium, no browser):** a native-webview
+wrapper that talks to the device over hidapi. See [`desktop/README.md`](desktop/README.md):
 
 ```
 cd config-tool-vial/desktop
