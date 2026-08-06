@@ -208,6 +208,16 @@ static void pulse_fire(pulse_slot_t* p) {
     }
 }
 
+// Immediately release a pulse and drop anything queued. Used when the master
+// gate turns off mid-flight: a press written last tick would otherwise never
+// see its releasing drain and the virtual key would stick down.
+static void pulse_quiesce(pulse_slot_t* p) {
+    p->pending = 0;
+    if ((p->state != NULL) && (*p->state != 0)) {
+        *p->state = 0;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Shared ratchet math (pd_gestures.c / wheel_chords.c, verbatim semantics)
 
@@ -587,13 +597,36 @@ static void autoscroll_stage(int32_t dy, bool jog_captured_input, uint64_t now_m
 // Per-tick hooks
 
 void pfx_input_stage(uint64_t now_ms) {
+    static bool was_enabled = false;
     if (!pfx_enabled()) {
         // Master gate clear: do nothing at all. Clear the activation bits the
         // walk may still be writing so no stale state survives into a later
         // enable, then leave the tick exactly as upstream would have run it.
         memset(pfx_out_state, 0, sizeof(pfx_out_state));
+        if (was_enabled) {
+            // Turned off mid-flight (live toggle from the tool): release any
+            // pulse pressed last tick so no virtual key sticks down, and
+            // drop captured state.
+            was_enabled = false;
+            for (int s = 0; s < PFX_NUM_GESTURE_SETS; s++) {
+                for (int d = 0; d < PFX_NUM_DIRECTIONS; d++) {
+                    pulse_quiesce(&gesture_pulses[s][d]);
+                }
+            }
+            for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
+                for (int d = 0; d < PFX_NUM_DIRECTIONS; d++) {
+                    pulse_quiesce(&chord_pulses[b][d]);
+                }
+                for (int w = 0; w < PFX_NUM_CHORD_WHEEL_DIRS; w++) {
+                    pulse_quiesce(&chord_wheel_pulses[b][w]);
+                }
+            }
+            pulse_quiesce(&wiggle_pulse);
+            pfx_reset_runtime_state();
+        }
         return;
     }
+    was_enabled = true;
 
     // Sample last tick's activation bits (written by the reverse-mapping
     // walk into pfx_out_state, GPIO-out style) and clear for this tick.
