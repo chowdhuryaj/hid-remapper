@@ -1055,6 +1055,7 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     memcpy(config_buffer->data + 2, &diag_reports_in, 4);
                     memcpy(config_buffer->data + 6, &diag_ticks, 4);
                     memcpy(config_buffer->data + 10, &diag_max_tick_us, 4);
+                    memcpy(config_buffer->data + 14, &diag_umounts, 4);
                 }
                 break;
             }

@@ -17,6 +17,7 @@
 // Counters. Updated from the USB host callbacks (single build) and the
 // main loop; read from the config protocol. Plain globals, single-core use.
 extern uint8_t diag_hid_itf_count;   // downstream HID interfaces currently mounted
+extern uint32_t diag_umounts;        // cumulative downstream unmounts since boot — the "keeps disconnecting" meter
 extern uint32_t diag_reports_in;     // input reports received since boot
 extern uint32_t diag_ticks;          // 1 kHz ticks processed since boot
 extern uint32_t diag_max_tick_us;    // slowest process_mapping() tick, us (high-water)

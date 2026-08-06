@@ -2,22 +2,22 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=4';
-import { migrateConfig } from './model.js?v=4';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=5';
+import { migrateConfig } from './model.js?v=5';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-} from './protocol.js?v=4';
+} from './protocol.js?v=5';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
 } from './profiles.js?v=5';
-import { usagePage } from './model.js?v=4';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=4';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=4';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=4';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=4';
+import { usagePage } from './model.js?v=5';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=5';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=5';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=5';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=5';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -36,6 +36,7 @@ let categories = targetCategories(0);
 let currentCat = categories[0].name;
 let pointerFx = null;         // live Pointer FX params (fork firmware only)
 let pfxSendTimer = null;
+let diagTimer = null;
 let hudOpen = false;          // desktop-only HUD overlay window
 let hudPoll = null;
 let hudRecent = [];           // last few pressed inputs for the HUD
@@ -1246,6 +1247,25 @@ function renderSettings() {
 
     // --- device actions ---
     f.append(el('h2', { text: 'Device', style: 'margin-top:26px' }));
+    if (dev.isOpen && dev.forkGeneration >= 2) {
+        const diagOut = el('div', { class: 'desc', text: 'Reading…' });
+        f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Diagnostics' }), diagOut,
+            el('div', { class: 'desc', text: 'Live from the device. “Drops” counts downstream disconnects since power-on — if it climbs while you use the mouse, the mouse↔dongle link is unstable (power or USB timing), not the computer side.' })));
+        if (diagTimer) clearInterval(diagTimer);
+        let prev = null;
+        diagTimer = setInterval(async () => {
+            if (currentTab !== 'settings' || !dev.isOpen) { clearInterval(diagTimer); diagTimer = null; return; }
+            try {
+                const d = await dev.readDiag();
+                if (!d) return;
+                const rate = prev ? Math.max(0, d.reportsIn - prev.reportsIn) : 0;
+                prev = d;
+                diagOut.textContent =
+                    `Downstream interfaces: ${d.hidItfCount} · reports: ${rate}/s · ` +
+                    `drops since power-on: ${d.umounts} · worst tick: ${d.maxTickUs} µs`;
+            } catch (e) { /* transient read failure — keep polling */ }
+        }, 1000);
+    }
     f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Reboot' }),
         el('button', {
             class: 'btn', text: 'Reboot device', disabled: !(dev.isOpen && dev.forkGeneration >= 2) || undefined,

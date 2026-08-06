@@ -92,6 +92,7 @@ void umount_callback(uint8_t dev_addr, uint8_t instance) {
     if (diag_hid_itf_count > 0) {
         diag_hid_itf_count--;
     }
+    diag_umounts++;
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {

@@ -226,15 +226,21 @@ void reset_to_bootloader() {
 
 // Reads the BOOTSEL button state. Standard RP2040 technique: briefly float
 // the flash CS line and sample it. Safe here because this build runs
-// entirely from RAM (copy_to_ram) so nothing touches flash concurrently;
-// interrupts are disabled for the few microseconds of the sample.
+// entirely from RAM (copy_to_ram) so nothing touches flash concurrently.
+// Interrupts are off for the sample, which delays the 1 kHz PIO-USB SOF
+// timer if one lands in the window — so the settle loop is kept short
+// (~150 iterations ≈ 5 µs; the pad needs ~1 µs) and the caller runs only
+// right after a tick was serviced, when the next SOF is ~1 ms away. A
+// full-speed gaming mouse at 1000 Hz drops off the bus if SOF timing is
+// repeatedly disturbed; the original 30 µs sample at a random loop phase
+// did exactly that.
 static bool __no_inline_not_in_flash_func(get_bootsel_button)() {
     const uint CS_PIN_INDEX = 1;
     uint32_t flags = save_and_disable_interrupts();
     hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
         GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
         IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
-    for (volatile int i = 0; i < 1000; ++i) {
+    for (volatile int i = 0; i < 150; ++i) {
     }
     bool button_state = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
     hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
@@ -244,8 +250,9 @@ static bool __no_inline_not_in_flash_func(get_bootsel_button)() {
     return button_state;
 }
 
-// Polled from the main loop at ~4 Hz; two consecutive seconds of held
-// button trigger the safe-mode reboot.
+// Polled at ~2 Hz, and ONLY right after a tick was processed (i.e. just
+// after a SOF, maximally far from the next one). Two consecutive seconds
+// of held button trigger the safe-mode reboot.
 static void safe_mode_button_task() {
     static uint64_t next_check = 0;
     static uint64_t held_since = 0;
@@ -253,7 +260,7 @@ static void safe_mode_button_task() {
     if (now < next_check) {
         return;
     }
-    next_check = now + 250000;
+    next_check = now + 500000;
     if (get_bootsel_button()) {
         if (held_since == 0) {
             held_since = now;
@@ -372,6 +379,13 @@ int main() {
                 diag_max_tick_us = tick_us;
             }
             diag_ticks++;
+#ifdef REMAPPER_SINGLE_EXTRAS
+            // Right after a tick = just after a SOF fired, so the brief
+            // IRQ-off window inside the BOOTSEL sample is as far from the
+            // next SOF as it can get. Never sample at a random loop phase —
+            // 1000 Hz full-speed devices drop off the bus over SOF jitter.
+            safe_mode_button_task();
+#endif
             write_gpio();
 #ifdef MCP4651_ENABLED
             mcp4651_write();
@@ -416,7 +430,6 @@ int main() {
             watchdog_reboot(0, 0, 100);
         }
 #ifdef REMAPPER_SINGLE_EXTRAS
-        safe_mode_button_task();
         watchdog_update();
 #endif
 
