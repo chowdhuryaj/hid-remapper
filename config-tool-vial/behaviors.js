@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=7';
+import { newMapping } from './model.js?v=8';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=7';
+} from './protocol.js?v=8';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -388,9 +388,13 @@ function compileTapDance(b, config, alloc) {
     const r = regRef;
     const PE = alloc.reg(), C = alloc.reg(), T = alloc.reg(), HOLD = alloc.reg(), TAP = alloc.reg();
     const F1 = alloc.reg(), F2 = alloc.reg(), F3 = alloc.reg();
+    // tap-then-hold needs the hold split by prior tap count; only pay the
+    // two extra registers when the slot is used.
+    const wantsTapHold = !!b.tapHold;
+    const H1 = wantsTapHold ? alloc.reg() : 0, H2 = wantsTapHold ? alloc.reg() : 0;
     const ch = alloc.channel();
 
-    config.expressions[ch] = [
+    const lines = [
         // press edge -> PE
         `${btn} input_state_binary ${btn} prev_input_state_binary not mul ${r(PE)} store`,
         // count += press edge
@@ -399,6 +403,15 @@ function compileTapDance(b, config, alloc) {
         `${r(PE)} recall time mul ${r(PE)} recall not ${r(T)} recall mul add ${r(T)} store`,
         // hold active = held AND (now - T) > window
         `${btn} input_state_binary time ${r(T)} recall sub ${win} gt mul ${r(HOLD)} store`,
+    ];
+    if (wantsTapHold) {
+        // At hold time the count includes the current press: C==1 means a
+        // plain hold, C>1 means at least one full tap came first. Split
+        // BEFORE the consume line zeroes C.
+        lines.push(`${r(HOLD)} recall ${r(C)} recall 1 eq mul ${r(H1)} store`);
+        lines.push(`${r(HOLD)} recall ${r(C)} recall 1 gt mul ${r(H2)} store`);
+    }
+    lines.push(
         // holding consumes the tap count so a tap doesn't also fire on release
         `${r(C)} recall ${r(HOLD)} recall not mul ${r(C)} store`,
         // tap fire = released AND count>=1 AND quiet for > window
@@ -409,13 +422,20 @@ function compileTapDance(b, config, alloc) {
         `${r(TAP)} recall ${r(C)} recall 2 gt mul ${r(F3)} store`,
         // clear count once a tap has fired
         `${r(C)} recall ${r(TAP)} recall not mul ${r(C)} store`,
-    ].join(' eol ');
+    );
+    config.expressions[ch] = lines.join(' eol ');
 
     config.mappings.push(newMapping(btn, NOTHING, layersOf(b))); // suppress native button
     if (b.tap1) config.mappings.push(newMapping(registerUsage(F1), b.tap1, layersOf(b)));
     if (b.tap2) config.mappings.push(newMapping(registerUsage(F2), b.tap2, layersOf(b)));
     if (b.tap3) config.mappings.push(newMapping(registerUsage(F3), b.tap3, layersOf(b)));
-    if (b.hold) config.mappings.push(newMapping(registerUsage(HOLD), b.hold, layersOf(b)));
+    if (wantsTapHold) {
+        // hold fires only for a plain hold; tap-then-hold gets its own slot
+        if (b.hold) config.mappings.push(newMapping(registerUsage(H1), b.hold, layersOf(b)));
+        config.mappings.push(newMapping(registerUsage(H2), b.tapHold, layersOf(b)));
+    } else if (b.hold) {
+        config.mappings.push(newMapping(registerUsage(HOLD), b.hold, layersOf(b)));
+    }
 }
 
 export { val };

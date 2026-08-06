@@ -2,22 +2,22 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=7';
-import { migrateConfig } from './model.js?v=7';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=8';
+import { migrateConfig } from './model.js?v=8';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-} from './protocol.js?v=7';
+} from './protocol.js?v=8';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=7';
-import { usagePage } from './model.js?v=7';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=7';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=7';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=7';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=7';
+} from './profiles.js?v=8';
+import { usagePage } from './model.js?v=8';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=8';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=8';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=8';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=8';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -657,7 +657,9 @@ function renderAxes() {
 
 function selectSlot(source, label) {
     selected = { source, label };
-    pickerTarget = { kind: 'slot', source: false };
+    // Land on the plan pane's Tap row: click a button, click a key, done.
+    // The raw actions editor stays available under Advanced.
+    pickerTarget = { kind: 'plan', row: 'tap' };
     const acts = getActions(base(), source, currentLayer);
     focusedAction = acts.length ? acts[0] : null;
     $('picker').classList.remove('disabled');
@@ -667,18 +669,151 @@ function selectSlot(source, label) {
     renderPicker();
 }
 
+// --- the per-button plan: Tap / Hold / Double tap / Tap→hold in one pane ---
+// A semantic view over the underlying primitives: plain and tap/hold-flagged
+// mappings for the simple rows, plus one auto-managed tap_dance behavior
+// (marked .auto) once Double tap or Tap→hold is used. "Eager" holds compile
+// as PLAIN (level) mappings — they engage the instant the button goes down,
+// no tap-hold threshold, and a quick release still fires the Tap row. Made
+// for hold-to-autoscroll and layer shifts, where instant engagement matters
+// and a brief accidental activation is harmless.
+
+function autoDanceFor(source) {
+    return project.behaviors.find((b) => b.type === 'tap_dance' && b.auto && b.button === source);
+}
+
+function getButtonPlan(source) {
+    const dance = autoDanceFor(source);
+    const acts = getActions(base(), source, currentLayer);
+    const plain = acts.find((a) => !a.tap && !a.hold && !a.sticky);
+    const tapA = acts.find((a) => a.tap);
+    const holdA = acts.find((a) => a.hold);
+    if (dance) {
+        return { tap: dance.tap1 || null, hold: plain ? plain.target_usage : (dance.hold || null),
+            eager: !!plain, double: dance.tap2 || null, tapHold: dance.tapHold || null,
+            window: dance.window || 200, dance: true };
+    }
+    if (tapA || holdA) {
+        return { tap: tapA ? tapA.target_usage : null,
+            hold: plain ? plain.target_usage : (holdA ? holdA.target_usage : null),
+            eager: !!plain, double: null, tapHold: null, window: 200, dance: false };
+    }
+    return { tap: plain ? plain.target_usage : null, hold: null, eager: false,
+        double: null, tapHold: null, window: 200, dance: false };
+}
+
+function setButtonPlan(source, plan) {
+    clearActions(base(), source, currentLayer);
+    let dance = autoDanceFor(source);
+    const needsDance = !!(plan.double || plan.tapHold);
+    if (needsDance) {
+        if (!dance) {
+            dance = { id: newBehaviorId(), type: 'tap_dance', auto: true, enabled: true, button: source, layers: [currentLayer] };
+            project.behaviors.push(dance);
+        }
+        dance.button = source;
+        dance.layers = [currentLayer];
+        dance.window = plan.window || 200;
+        dance.tap1 = plan.tap || null;
+        dance.tap2 = plan.double || null;
+        dance.tap3 = dance.tap3 || null;
+        dance.hold = plan.eager ? null : (plan.hold || null);
+        dance.tapHold = plan.tapHold || null;
+        if (plan.eager && plan.hold) addAction(base(), source, currentLayer, plan.hold);
+    } else {
+        if (dance) project.behaviors = project.behaviors.filter((x) => x !== dance);
+        if (plan.hold) {
+            const h = addAction(base(), source, currentLayer, plan.hold);
+            if (!plan.eager) h.hold = true;
+            if (plan.tap) {
+                const t = addAction(base(), source, currentLayer, plan.tap);
+                t.tap = true;
+            }
+        } else if (plan.tap) {
+            addAction(base(), source, currentLayer, plan.tap);
+        }
+    }
+    scheduleApply();
+    scheduleSnapshot();
+}
+
+function planRow(label, hint, row, plan, extra) {
+    const has = plan[row];
+    const chip = el('button', {
+        class: 'keybtn' + (pickerTarget && pickerTarget.kind === 'plan' && pickerTarget.row === row ? ' focus' : ''),
+        text: has ? readableTargetName(has, base().our_descriptor_number) : '—',
+        title: hint,
+        onclick: () => { pickerTarget = { kind: 'plan', row }; renderKeyOptions(); renderPicker(); },
+    });
+    if (pickerTarget && pickerTarget.kind === 'plan' && pickerTarget.row === row) {
+        chip.style.borderColor = 'var(--accent)';
+        chip.style.boxShadow = '0 0 0 1px var(--accent)';
+    }
+    const kids = [el('label', { style: 'font-size:13px;color:var(--muted);min-width:88px', text: label, title: hint }), chip];
+    if (extra) kids.push(...extra);
+    if (has) kids.push(el('button', { class: 'iconbtn', text: '✕', title: 'Clear ' + label, onclick: () => {
+        const p = getButtonPlan(selected.source); p[row] = null;
+        if (row === 'hold') p.eager = false;
+        setButtonPlan(selected.source, p); renderAllKeymap();
+    } }));
+    return el('div', { class: 'actionrow' }, ...kids);
+}
+
+function renderAllKeymap() {
+    renderButtons();
+    renderKeyOptions();
+    renderPicker();
+    renderDiagram();
+}
+
 // The per-key actions editor (target + sticky/tap/hold flags), HID Remapper's
 // native model. Several actions on one key = tap-hold (one Tap, one Hold).
 function renderKeyOptions() {
     const box = $('keyoptions');
-    if (!selected || !pickerTarget || pickerTarget.kind !== 'slot') {
+    if (!selected || !pickerTarget || (pickerTarget.kind !== 'slot' && pickerTarget.kind !== 'plan')) {
         box.classList.add('hidden');
         box.replaceChildren();
         return;
     }
     box.classList.remove('hidden');
     box.replaceChildren();
-    box.append(el('div', { class: 'koh', text: 'Actions on layer ' + currentLayer + '. Pick a keycode below to set the highlighted action. For tap-hold, add a second action and flag one Tap, one Hold.' }));
+
+    const plan = getButtonPlan(selected.source);
+    box.append(el('div', { class: 'koh', text: 'What “' + selected.label + '” does on layer ' + currentLayer + ' — click a field, then pick its key below.' }));
+    box.append(planRow('Tap', 'A quick press-and-release.', 'tap', plan));
+    box.append(planRow('Hold', plan.eager
+        ? 'Engages the instant the button goes down (eager) — a quick release still fires Tap.'
+        : 'Fires after the button is held past the threshold.', 'hold', plan,
+        [flagBox('Eager', plan.eager, (v) => {
+            const p = getButtonPlan(selected.source); p.eager = v; setButtonPlan(selected.source, p); renderAllKeymap();
+        }, 'Eager: the hold action engages immediately on press — no waiting to see if it’s a tap. Perfect for Autoscroll jog; the brief activation during a tap is harmless for level actions like scrolling or layers.')]));
+    box.append(planRow('Double tap', 'Two quick taps within the window.', 'double', plan));
+    box.append(planRow('Tap → hold', 'One tap, then press again and keep holding.', 'tapHold', plan));
+    if (plan.dance || plan.double || plan.tapHold) {
+        box.append(el('div', { class: 'actionrow' },
+            el('label', { style: 'font-size:13px;color:var(--muted);min-width:88px', text: 'Window' }),
+            ...(() => {
+                const readout = el('span', { class: 'readout', text: (plan.window || 200) + ' ms' });
+                const range = el('input', { type: 'range', min: 100, max: 500, step: 10, value: plan.window || 200 });
+                range.addEventListener('input', () => { readout.textContent = range.value + ' ms'; });
+                range.addEventListener('change', () => {
+                    const p = getButtonPlan(selected.source); p.window = parseInt(range.value, 10);
+                    setButtonPlan(selected.source, p); renderAllKeymap();
+                });
+                return [range, readout];
+            })(),
+        ));
+        box.append(el('div', { class: 'bcaption', text: 'Double tap / Tap → hold wait out the window before firing a single Tap — that’s inherent to telling them apart.' }));
+    }
+
+    const adv = el('details', {});
+    adv.append(el('summary', { style: 'cursor:pointer;font-size:12px;color:var(--muted);margin:10px 0 6px', text: 'Advanced (sticky, hub ports, raw actions)' }));
+    renderRawActions(adv);
+    box.append(adv);
+}
+
+function renderRawActions(box) {
+    box.append(el('div', { class: 'koh', text: 'Raw actions on layer ' + currentLayer + '. Pick a keycode below to set the highlighted action. For tap-hold, add a second action and flag one Tap, one Hold.' }));
     const acts = getActions(base(), selected.source, currentLayer);
     if (acts.length === 0) {
         box.append(el('div', { class: 'hint', text: 'Transparent — passes through to the default. Pick a keycode below to assign.' }));
@@ -792,6 +927,14 @@ function assign(usage) {
         return;
     }
     if (!selected) return;
+    if (pickerTarget && pickerTarget.kind === 'plan') {
+        const p = getButtonPlan(selected.source);
+        p[pickerTarget.row] = (usage === TRANSPARENT) ? null : usage;
+        if (pickerTarget.row === 'hold' && !p.hold) p.eager = false;
+        setButtonPlan(selected.source, p);
+        renderAllKeymap();
+        return;
+    }
     if (usage === TRANSPARENT) {
         clearActions(base(), selected.source, currentLayer);
         focusedAction = null;
@@ -978,7 +1121,9 @@ function behaviorCard(b) {
     en.checked = enabled;
     en.addEventListener('change', () => { b.enabled = en.checked; renderBehaviors(); });
     const head = el('div', { class: 'bhead' },
-        el('div', {}, el('span', { class: 'btitle', text: titles[b.type] }), el('span', { class: 'btype', text: b.type })),
+        el('div', {}, el('span', { class: 'btitle', text: titles[b.type] }),
+            el('span', { class: 'btype', text: b.type }),
+            b.auto ? el('span', { class: 'btype', text: 'from key editor', title: 'Created and updated by the per-button pane on the Keymap tab. Edits here are fine; reassigning the button there rewrites it.' }) : null),
         el('div', { style: 'display:flex;gap:8px;align-items:center' },
             el('label', { class: 'flag', title: 'Compile this behavior into the device config' }, en, 'On'),
             el('button', { class: 'iconbtn', text: 'Duplicate', onclick: () => duplicateBehavior(b) }),
@@ -1115,8 +1260,9 @@ function tapDanceBody(b) {
         field('2 taps', keyButton(b.tap2, '2-tap action', (u) => { b.tap2 = u; renderBehaviors(); })),
         field('3 taps', keyButton(b.tap3, '3-tap action', (u) => { b.tap3 = u; renderBehaviors(); })),
         field('Hold', keyButton(b.hold, 'Hold action', (u) => { b.hold = u; renderBehaviors(); })),
+        field('Tap → hold', keyButton(b.tapHold, 'Tap-then-hold action', (u) => { b.tapHold = u; renderBehaviors(); })),
         field('Window', ...slider(100, 500, 10, b.window, (v) => v + ' ms', (v) => { b.window = v; })),
-        el('div', { class: 'bcaption', text: 'Counts taps within the window, then fires the matching action — or Hold if held past the window. Takes over the button (don’t also map it in the keymap). Leave a stage as None to skip it.' }),
+        el('div', { class: 'bcaption', text: 'Counts taps within the window, then fires the matching action — or Hold if held past the window (Tap → hold = one tap, press again and keep holding). Takes over the button (don’t also map it in the keymap). Leave a stage as None to skip it.' }),
     ];
 }
 
