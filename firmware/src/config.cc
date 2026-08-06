@@ -4,18 +4,41 @@
 
 #include "config.h"
 #include "crc.h"
+#include "diagnostics.h"
 #include "globals.h"
 #include "interval_override.h"
 #include "our_descriptor.h"
 #include "platform.h"
 #include "remapper.h"
 
-// Fork-local version: upstream v18 layout + the Pointer FX parameter block.
-// 100+ so upstream's own 19+ can never collide with this fork's numbering.
-// 100 = first fork version; 101 adds cursor_gain_mil (software pointer speed).
-const uint8_t CONFIG_VERSION = 101;
+// Wire-format guards for the Pointer FX pages. SET frames carry
+// [page u8][page bytes] in set_feature_t's 26-byte data field; GET responses
+// carry a bare page in get_feature_t's 28-byte data field. Growing
+// pointer_fx_config_t past either budget must be a build error, not a silent
+// overrun into the frame CRC.
+static_assert(1 + PFX_PAGE0_SIZE <= sizeof(((set_feature_t*) 0)->data),
+    "SET_POINTER_FX page 0 overruns set_feature_t::data");
+static_assert(1 + PFX_PAGE1_SIZE <= sizeof(((set_feature_t*) 0)->data),
+    "SET_POINTER_FX page 1 overruns set_feature_t::data");
+static_assert(PFX_PAGE0_SIZE <= sizeof(((get_feature_t*) 0)->data),
+    "GET_POINTER_FX page 0 overruns get_feature_t::data");
+static_assert(PFX_PAGE1_SIZE <= sizeof(((get_feature_t*) 0)->data),
+    "GET_POINTER_FX page 1 overruns get_feature_t::data");
+// The sidecar loader memcpy()s this struct out of flash by layout; drift
+// must be deliberate (bump PFX_SIDECAR_MAGIC when it is).
+static_assert(sizeof(pointer_fx_config_t) == 36,
+    "pointer_fx_config_t layout changed - migrate the sidecar (new magic) before shipping");
+
+// Back on upstream's version: the persisted blob and the wire protocol are
+// byte-identical to stock v18, so the official remapper.org tool and the
+// upstream CLI always work as a fallback configurator. Fork-only state
+// (Pointer FX) lives in a self-validating sidecar at the end of the config
+// sector (see pfx_sidecar_t) and behind commands 26/27, which upstream
+// tools never send. Versions 100/101 are the fork's own earlier layouts,
+// still accepted read-only so existing devices migrate on first persist.
+const uint8_t CONFIG_VERSION = 18;
 const uint8_t FIRST_FORK_CONFIG_VERSION = 100;
-const uint8_t LAST_UPSTREAM_CONFIG_VERSION = 18;
+const uint8_t LAST_FORK_CONFIG_VERSION = 101;
 
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH = 0x01;
 const uint8_t CONFIG_FLAG_UNMAPPED_PASSTHROUGH_MASK = 0b00001111;
@@ -34,10 +57,11 @@ bool checksum_ok(const uint8_t* buffer, uint16_t data_size) {
 
 bool persisted_version_ok(const uint8_t* buffer) {
     uint8_t version = ((config_version_t*) buffer)->version;
-    // Accept every upstream layout we know how to parse, plus this fork's
-    // versions — but NOT unknown upstream versions 19..99.
-    return ((version >= 3) && (version <= LAST_UPSTREAM_CONFIG_VERSION)) ||
-        ((version >= FIRST_FORK_CONFIG_VERSION) && (version <= CONFIG_VERSION));
+    // Every upstream layout we can parse (3..18), plus the fork's legacy
+    // inline layouts (100/101) for migration — but NOT unknown upstream
+    // versions 19..99.
+    return ((version >= 3) && (version <= CONFIG_VERSION)) ||
+        ((version >= FIRST_FORK_CONFIG_VERSION) && (version <= LAST_FORK_CONFIG_VERSION));
 }
 
 bool command_version_ok(const uint8_t* buffer) {
@@ -646,15 +670,37 @@ void load_config(const uint8_t* persisted_config) {
     macro_entry_duration = config->macro_entry_duration;
     size_t header_size = sizeof(persist_config_v18_t);
     if (version == 100) {
-        // Legacy fork block (34 bytes, no cursor_gain_mil); the missing tail
-        // keeps its pfx_set_defaults() value.
+        // Legacy fork blob (params inline, 34 bytes, no cursor_gain_mil; the
+        // missing tail keeps its pfx_set_defaults() value). Those builds
+        // force-enabled every effect as the DEFAULT, so the flags in old
+        // blobs encode a firmware bug, not a user decision — and one of the
+        // effects (the accel floor) is the prime suspect for the dead cursor
+        // on Windows. Migration policy: keep the numeric tuning, clear every
+        // flag. Stock-first means an upgraded device comes up behaving like
+        // upstream; re-enabling is one toggle in the Pointer tab.
         memcpy(&pointer_fx_config, persisted_config + sizeof(persist_config_v18_t), PFX_V100_BLOCK_SIZE);
+        pointer_fx_config.flags = 0;
         pfx_clamp_config();
         header_size = sizeof(persist_config_v18_t) + PFX_V100_BLOCK_SIZE;
-    } else if (version == CONFIG_VERSION) {
+    } else if (version == 101) {
+        // Legacy fork blob, params inline. Same migration policy.
         pointer_fx_config = ((persist_config_v101_t*) persisted_config)->pointer_fx;
+        pointer_fx_config.flags = 0;
         pfx_clamp_config();
         header_size = sizeof(persist_config_v101_t);
+    } else if (version == CONFIG_VERSION) {
+        // Current layout: pure upstream v18 blob; Pointer FX params ride in
+        // the self-validating sidecar at the end of the sector. Written with
+        // master-gate semantics, so no flag migration. An invalid sidecar
+        // (blank flash, stock-firmware persist, garbage) leaves the
+        // pfx_set_defaults() state: everything off.
+        const pfx_sidecar_t* sidecar =
+            (const pfx_sidecar_t*) (persisted_config + PERSISTED_CONFIG_SIZE - 4 - sizeof(pfx_sidecar_t));
+        if ((sidecar->magic == PFX_SIDECAR_MAGIC) &&
+            (sidecar->crc32 == crc32((const uint8_t*) sidecar, offsetof(pfx_sidecar_t, crc32)))) {
+            pointer_fx_config = sidecar->params;
+            pfx_clamp_config();
+        }
     }
     mapping_config11_t* buffer_mappings = (mapping_config11_t*) (persisted_config + header_size);
     for (uint32_t i = 0; i < config->mapping_count; i++) {
@@ -748,10 +794,16 @@ void fill_persist_config(persist_config_t* config) {
     my_mutex_enter(MutexId::QUIRKS);
     config->quirk_count = quirks.size();
     my_mutex_exit(MutexId::QUIRKS);
-    config->pointer_fx = pointer_fx_config;
+    // Pointer FX params are NOT part of this struct — they persist in the
+    // sidecar written by persist_config(), keeping this blob upstream-v18.
 }
 
 PersistConfigReturnCode persist_config() {
+    if (diag_safe_mode) {
+        // Safe mode exists to recover from a bad persisted config; nothing —
+        // not a stuck tool, not a retry loop — may write flash while in it.
+        return PersistConfigReturnCode::SAFE_MODE;
+    }
     // stack size is 2KB
     static uint8_t buffer[PERSISTED_CONFIG_SIZE];
     memset(buffer, 0, sizeof(buffer));
@@ -786,6 +838,9 @@ PersistConfigReturnCode persist_config() {
     real_persisted_config_size += quirks.size() * sizeof(quirk_t);
     my_mutex_exit(MutexId::QUIRKS);
     real_persisted_config_size += 4;  // CRC32
+    // The Pointer FX sidecar occupies the tail of the region (just before
+    // the CRC32); the v18 data must never grow into it.
+    real_persisted_config_size += sizeof(pfx_sidecar_t);
     if (real_persisted_config_size > PERSISTED_CONFIG_SIZE) {
         printf("config too large to be persisted!\n");
         return PersistConfigReturnCode::CONFIG_TOO_BIG;
@@ -836,9 +891,17 @@ PersistConfigReturnCode persist_config() {
     }
     my_mutex_exit(MutexId::QUIRKS);
 
+    // Pointer FX sidecar, at a fixed offset from the end so its location
+    // never depends on how much v18 data precedes it. Written before the
+    // region CRC below so that CRC covers it.
+    pfx_sidecar_t* sidecar = (pfx_sidecar_t*) (buffer + PERSISTED_CONFIG_SIZE - 4 - sizeof(pfx_sidecar_t));
+    sidecar->magic = PFX_SIDECAR_MAGIC;
+    sidecar->params = pointer_fx_config;
+    sidecar->crc32 = crc32((const uint8_t*) sidecar, offsetof(pfx_sidecar_t, crc32));
+
     ((crc32_t*) (buffer + PERSISTED_CONFIG_SIZE - 4))->crc32 = crc32(buffer, PERSISTED_CONFIG_SIZE - 4);
 
-    if (real_persisted_config_size != 4 + ((uint8_t*) quirk_config_ptr) - buffer) {
+    if (real_persisted_config_size != 4 + (int32_t) sizeof(pfx_sidecar_t) + ((uint8_t*) quirk_config_ptr) - buffer) {
         printf("we calculated real persisted config size wrong!\n");
     }
 
@@ -969,9 +1032,29 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     memcpy(config_buffer->data, src + PFX_PAGE0_SIZE, PFX_PAGE1_SIZE);
                 } else if (requested_index == 2) {
                     // Read-only live state (for the configurator's HUD):
-                    // currently just the active layer bitmask.
+                    // the active layer bitmask, plus the fork signature.
+                    // The wire version is upstream's 18 now, so tools detect
+                    // fork features by probing this page: stock firmware
+                    // answers any unknown command with an all-0xFF frame,
+                    // the fork answers with this.
                     extern uint8_t layer_state_mask;
                     config_buffer->data[0] = layer_state_mask;
+                    config_buffer->data[1] = 'P';
+                    config_buffer->data[2] = 'F';
+                    config_buffer->data[3] = 'X';
+                    config_buffer->data[4] = 2;  // module generation: 2 = sidecar era
+                    // A descriptor-number change only takes effect on the
+                    // next enumeration; until then the device would emit
+                    // nothing. Tools should watch this and offer REBOOT.
+                    config_buffer->data[5] = (our_descriptor != &our_descriptors[our_descriptor_number]) ? 1 : 0;
+                    config_buffer->data[6] = diag_safe_mode ? 1 : 0;
+                } else if (requested_index == 3) {
+                    // Diagnostics counters (see diagnostics.h). Little-endian.
+                    config_buffer->data[0] = diag_hid_itf_count;
+                    config_buffer->data[1] = diag_downstream_tracking ? 1 : 0;
+                    memcpy(config_buffer->data + 2, &diag_reports_in, 4);
+                    memcpy(config_buffer->data + 6, &diag_ticks, 4);
+                    memcpy(config_buffer->data + 10, &diag_max_tick_us, 4);
                 }
                 break;
             }
@@ -1005,6 +1088,11 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     break;
                 case ConfigCommand::RESET_INTO_BOOTSEL:
                     reset_to_bootloader();
+                    break;
+                case ConfigCommand::REBOOT:
+                    // Deferred to the platform main loop so this SET report
+                    // completes cleanly before the USB controller resets.
+                    need_to_reboot = true;
                     break;
                 case ConfigCommand::SET_CONFIG: {
                     set_config_t* config = (set_config_t*) config_buffer->data;

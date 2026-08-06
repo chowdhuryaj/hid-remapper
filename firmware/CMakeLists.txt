@@ -32,6 +32,7 @@ add_executable(remapper
     src/main.cc
     src/remapper.cc
     src/pointer_fx.cc
+    src/diagnostics.cc
     src/remapper_single.cc
     src/crc.cc
     src/descriptor_parser.cc
@@ -61,12 +62,18 @@ target_include_directories(remapper PRIVATE
     ${PICO_PIO_USB_PATH}
 )
 
+# Single-build extras (fork): watchdog, BOOTSEL safe-mode gesture, no-device
+# LED pattern. Kept off the dual/serial variants so their behavior stays
+# exactly upstream.
+target_compile_definitions(remapper PRIVATE REMAPPER_SINGLE_EXTRAS)
+
 target_link_libraries(remapper
     pico_stdlib
     pico_unique_id
     hardware_pio
     hardware_dma
     hardware_flash
+    hardware_watchdog
     $<$<STREQUAL:${PICO_BOARD},remapper_v8>:hardware_adc>
     tinyusb_device
     tinyusb_host
@@ -90,6 +97,7 @@ add_executable(remapper_dual_a
     src/main.cc
     src/remapper.cc
     src/pointer_fx.cc
+    src/diagnostics.cc
     src/remapper_dual_a.cc
     src/crc.cc
     src/descriptor_parser.cc
@@ -118,6 +126,7 @@ target_include_directories(remapper_dual_a PRIVATE
 target_link_libraries(remapper_dual_a
     pico_stdlib
     hardware_flash
+    hardware_watchdog
     $<$<STREQUAL:${PICO_BOARD},remapper_v7>:hardware_i2c>
     hardware_pio
     tinyusb_device
@@ -134,6 +143,7 @@ add_executable(remapper_dual_b
     src/serial.cc
     src/out_report.cc
     src/activity_led.cc
+    src/diagnostics.cc
     src/app_driver.cc
     src/xbox.cc
 )
@@ -161,6 +171,7 @@ add_executable(remapper_serial
     src/main.cc
     src/remapper.cc
     src/pointer_fx.cc
+    src/diagnostics.cc
     src/remapper_serial.cc
     src/crc.cc
     src/descriptor_parser.cc
@@ -182,6 +193,7 @@ target_link_libraries(remapper_serial
     pico_stdlib
     pico_unique_id
     hardware_flash
+    hardware_watchdog
     tinyusb_device
     tinyusb_board
 )

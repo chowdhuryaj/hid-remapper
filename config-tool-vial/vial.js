@@ -2,22 +2,22 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG } from './device.js?v=3';
-import { migrateConfig } from './model.js?v=3';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=4';
+import { migrateConfig } from './model.js?v=4';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
-    PFX_FLAG_CHORDS, PFX_FLAG_GESTURES,
-} from './protocol.js?v=3';
+    PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
+} from './protocol.js?v=4';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=3';
-import { usagePage } from './model.js?v=3';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=3';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=3';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=3';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=3';
+} from './profiles.js?v=4';
+import { usagePage } from './model.js?v=4';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=4';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=4';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=4';
+import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=4';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -321,6 +321,13 @@ async function doApply() {
     try {
         await dev.apply(compiled);
         lastApplied = snapshot;
+        // Mappings may have started (or stopped) using Pointer FX usages —
+        // keep the firmware's master gate in sync.
+        if (dev.isFork && pointerFx) {
+            const before = pointerFx.flags;
+            applyPfxMaster();
+            if (pointerFx.flags !== before) await dev.savePointerFx(pointerFx);
+        }
         setApplyState('ok', 'Applied (not yet persisted — Save to keep across power cycles)');
     } catch (e) {
         setApplyState('err', 'Apply failed: ' + errMsg(e));
@@ -362,11 +369,19 @@ async function saveToDevice() {
     }
     applying = true;
     try {
+        // Sync the Pointer FX master gate first — persist snapshots device
+        // RAM, so the flag must be correct before the save.
+        if (dev.isFork && pointerFx) {
+            const before = pointerFx.flags;
+            applyPfxMaster();
+            if (pointerFx.flags !== before) await dev.savePointerFx(pointerFx);
+        }
         const code = await dev.save(compiled);
         lastApplied = JSON.stringify(compiled);
         setApplyState('ok', 'Saved and persisted');
         if (code === PERSIST_CONFIG_SUCCESS) flashSaved();
         else if (code === PERSIST_CONFIG_CONFIG_TOO_BIG) showNotice('Configuration is too big to persist on the device.');
+        else if (code === PERSIST_CONFIG_SAFE_MODE) showNotice('Device is in safe mode (recovery boot) — persisting is disabled so recovery can’t overwrite your saved config. Power-cycle the device to exit safe mode.');
         else showNotice('Unexpected save result (' + code + ').');
     } catch (e) { showNotice(errMsg(e)); }
     finally { applying = false; }
@@ -386,6 +401,9 @@ function onConnected() {
     if (dev.isFork) {
         dev.loadPointerFx().then((p) => { pointerFx = p; if (currentTab === 'pointer') renderPointer(); })
             .catch((e) => showNotice('Could not read Pointer FX parameters: ' + errMsg(e)));
+        if (dev.forkStatus && dev.forkStatus.safeMode) {
+            showNotice('Device is in SAFE MODE: booted with factory defaults, your saved config untouched (and protected — persisting is disabled). Power-cycle the device to return to the saved config.', 'info');
+        }
     } else {
         pointerFx = null;
         if (currentTab === 'pointer') renderPointer();
@@ -1225,6 +1243,28 @@ function renderSettings() {
     }
     f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Port names' }), portRow,
         el('div', { class: 'desc', text: 'Plug several devices in through a USB hub and they all feed the same engine (split-keyboard style). Name the ports here; per-action “from device” pickers in the Keymap tab use these names.' })));
+
+    // --- device actions ---
+    f.append(el('h2', { text: 'Device', style: 'margin-top:26px' }));
+    f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Reboot' }),
+        el('button', {
+            class: 'btn', text: 'Reboot device', disabled: !(dev.isOpen && dev.forkGeneration >= 2) || undefined,
+            onclick: async () => {
+                try { await dev.reboot(); showNotice('Rebooting — the device will drop off USB and come back in a couple of seconds. Reconnect when it does.', 'info'); }
+                catch (e) { showNotice(errMsg(e)); }
+            },
+        }),
+        el('div', { class: 'desc', text: 'Clean restart (fork firmware). Needed after changing the emulated device type; also a handy first fix. Your persisted config is untouched.' })));
+    f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Firmware' }),
+        el('button', {
+            class: 'btn', text: 'Reset into bootloader', disabled: !dev.isOpen || undefined,
+            onclick: async () => {
+                if (!confirm('Reset into the UF2 bootloader? The device will disconnect and show up as a USB drive (RPI-RP2). Drag a .uf2 firmware file onto it to flash; power-cycle to abort.')) return;
+                try { await dev.resetIntoBootsel(); } catch (e) { /* device drops off USB mid-command; that's success */ }
+                showNotice('Device is in bootloader mode — look for an “RPI-RP2” drive.', 'info');
+            },
+        }),
+        el('div', { class: 'desc', text: 'Reflash firmware without touching the physical BOOTSEL button. Works on stock and fork firmware.' })));
 }
 
 // Renamable hub-port labels (multi-device setups: mouse on port 1, macropad
@@ -1400,12 +1440,35 @@ async function hudTick() {
 // Parameters live on the device, not in the project: every change is sent
 // live (debounced), and "Persist" snapshots them into device flash — the
 // same GET/SET/SAVE model Flask uses over its raw-HID channels.
+// The firmware's master gate (PFX_FLAG_MASTER): with it clear the device
+// runs the exact upstream code path. The tool derives it — never the user:
+// on whenever any effect is enabled, pointer speed is non-default, or the
+// project maps any Pointer FX usage (0xFFFB…, e.g. autoscroll/gesture
+// triggers, which have no effect flag of their own). Off otherwise, so an
+// unconfigured device stays byte-for-byte stock in behavior.
+function applyPfxMaster() {
+    if (!pointerFx) return;
+    let needs = (pointerFx.flags & PFX_EFFECT_FLAGS) != 0 ||
+        (pointerFx.cursor_gain != null && pointerFx.cursor_gain != 1000);
+    if (!needs) {
+        try {
+            needs = compileProject(project).mappings.some((m) =>
+                String(m.source_usage || '').toLowerCase().startsWith('0xfffb') ||
+                String(m.target_usage || '').toLowerCase().startsWith('0xfffb'));
+        } catch (e) { /* uncompilable project: leave the gate as derived from flags */ }
+    }
+    if (needs) pointerFx.flags |= PFX_FLAG_MASTER;
+    else pointerFx.flags &= ~PFX_FLAG_MASTER;
+}
+
 function pfxChanged() {
     if (!dev.isOpen || !dev.isFork || !pointerFx) return;
     if (pfxSendTimer) clearTimeout(pfxSendTimer);
     pfxSendTimer = setTimeout(async () => {
-        try { await dev.savePointerFx(pointerFx); }
-        catch (e) { showNotice('Pointer FX write failed: ' + errMsg(e)); }
+        try {
+            applyPfxMaster();
+            await dev.savePointerFx(pointerFx);
+        } catch (e) { showNotice('Pointer FX write failed: ' + errMsg(e)); }
     }, 150);
 }
 
@@ -1490,9 +1553,12 @@ function renderPointer() {
             class: 'btn primary', text: 'Persist on device', onclick: async () => {
                 try {
                     if (pfxSendTimer) { clearTimeout(pfxSendTimer); pfxSendTimer = null; }
+                    applyPfxMaster();
                     await dev.savePointerFx(pointerFx);
                     const code = await dev.persistOnly();
-                    if (code === PERSIST_CONFIG_SUCCESS) flashSaved(); else showNotice('Persist failed (' + code + ').');
+                    if (code === PERSIST_CONFIG_SUCCESS) flashSaved();
+                    else if (code === PERSIST_CONFIG_SAFE_MODE) showNotice('Device is in safe mode — persisting is disabled. Power-cycle to exit safe mode.');
+                    else showNotice('Persist failed (' + code + ').');
                 } catch (e) { showNotice(errMsg(e)); }
             },
         })));

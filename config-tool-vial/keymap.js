@@ -6,7 +6,7 @@
 // and it's how tap-hold works (one action flagged Tap, another flagged Hold).
 // No actions at all = transparent, so the engine's unmapped-passthrough applies.
 
-import { newMapping } from './model.js?v=3';
+import { newMapping } from './model.js?v=4';
 
 // Splits any multi-layer mapping into single-layer copies so the editor can
 // mutate a mapping in place without touching other layers. Call after loading

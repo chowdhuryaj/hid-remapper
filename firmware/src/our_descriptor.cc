@@ -552,8 +552,15 @@ bool kb_mouse_should_cause_wakeup(uint8_t report_id, const uint8_t* buffer, uint
     }
 
     if (report_id == REPORT_ID_MOUSE) {
-        if ((len > 0) && (buffer[0] != 0)) {
-            return true;
+        // Any nonzero byte: buttons OR motion/wheel. Waking only on buttons
+        // (upstream behavior) leaves the cursor dead after USB selective
+        // suspend — common on Windows, which suspends idle HID devices —
+        // until the user happens to click. A physical mouse wakes the host
+        // on motion; so should we.
+        for (uint16_t i = 0; i < len; i++) {
+            if (buffer[i] != 0) {
+                return true;
+            }
         }
         return false;
     }

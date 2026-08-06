@@ -7,6 +7,7 @@
 #include "pico/time.h"
 
 #include "descriptor_parser.h"
+#include "diagnostics.h"
 #include "out_report.h"
 #include "remapper.h"
 #include "tick.h"
@@ -25,6 +26,9 @@ void extra_init() {
     pio_cfg.skip_alarm_pool = true;
     tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
     add_repeating_timer_us(-1000, manual_sof, NULL, &sof_timer);
+    // This build mounts downstream devices itself, so the mount counters
+    // below are meaningful — light up the "no device" LED pattern.
+    diag_downstream_tracking = true;
 }
 
 uint32_t get_gpio_valid_pins_mask() {
@@ -79,10 +83,15 @@ void tuh_hid_mount_cb(uint8_t dev_addr, uint8_t instance, uint8_t const* desc_re
     descriptor_received_callback(vid, pid, desc_report, desc_len, (uint16_t) (dev_addr << 8) | instance, hub_port, itf_num);
 
     tuh_hid_receive_report(dev_addr, instance);
+
+    diag_hid_itf_count++;
 }
 
 void umount_callback(uint8_t dev_addr, uint8_t instance) {
     device_disconnected_callback(dev_addr);
+    if (diag_hid_itf_count > 0) {
+        diag_hid_itf_count--;
+    }
 }
 
 void tuh_hid_umount_cb(uint8_t dev_addr, uint8_t instance) {
@@ -95,6 +104,7 @@ void report_received_callback(uint8_t dev_addr, uint8_t instance, uint8_t const*
         handle_received_report(report, len, (uint16_t) (dev_addr << 8) | instance);
 
         reports_received = true;
+        diag_reports_in++;
     }
 }
 

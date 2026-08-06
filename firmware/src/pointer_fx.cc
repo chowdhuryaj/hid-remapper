@@ -54,12 +54,20 @@ static uint16_t clamp_u16(uint16_t v, uint16_t lo, uint16_t hi) {
 
 void pfx_set_defaults() {
     pointer_fx_config = (pointer_fx_config_t){
-        .flags = PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED |
-            PFX_FLAG_WIGGLE_ENABLED | PFX_FLAG_CHORDS_ENABLED | PFX_FLAG_GESTURES_ENABLED,
+        // Everything off, master gate included. A device with blank or
+        // corrupt flash must come up as a plain, fast, working mouse — the
+        // features are opt-in from the configurator, not opt-out.
+        .flags = 0,
         .accel_takeoff_mil = 2000,
         .accel_growth_mil = 250,
         .accel_offset_mil = 2200,
-        .accel_limit_mil = 200,
+        // Low-speed gain FLOOR, not a ceiling: the sigmoid runs from this
+        // value at rest up to 1.0 at speed. Flask shipped 0.2, which is a
+        // 5x slowdown on slow, precise movement — fine once deliberately
+        // tuned, ruinous as a default. 1000 (= 1.0) makes the curve an
+        // identity, so switching accel on can never make the pointer feel
+        // broken; lower it to buy low-speed precision.
+        .accel_limit_mil = 1000,
         .device_cpi = 1000,
         .smooth_factor_mil = 400,
         .smooth_timeout_ms = 200,
@@ -75,6 +83,10 @@ void pfx_set_defaults() {
         .chord_hold_ms = 200,
         .cursor_gain_mil = 1000,
     };
+}
+
+bool pfx_enabled() {
+    return (pointer_fx_config.flags & PFX_FLAG_MASTER_ENABLE) != 0;
 }
 
 void pfx_clamp_config() {
@@ -317,6 +329,7 @@ void pfx_reset_runtime_state() {
     asc_deflection = 0;
     ema_x = 0.0f;
     ema_y = 0.0f;
+    last_motion_ms = 0;
     stage_x_mil = 0;
     stage_y_mil = 0;
     for (int s = 0; s < PFX_NUM_GESTURE_SETS; s++) {
@@ -574,6 +587,14 @@ static void autoscroll_stage(int32_t dy, bool jog_captured_input, uint64_t now_m
 // Per-tick hooks
 
 void pfx_input_stage(uint64_t now_ms) {
+    if (!pfx_enabled()) {
+        // Master gate clear: do nothing at all. Clear the activation bits the
+        // walk may still be writing so no stale state survives into a later
+        // enable, then leave the tick exactly as upstream would have run it.
+        memset(pfx_out_state, 0, sizeof(pfx_out_state));
+        return;
+    }
+
     // Sample last tick's activation bits (written by the reverse-mapping
     // walk into pfx_out_state, GPIO-out style) and clear for this tick.
     prev_act_flags = act_flags;
@@ -624,8 +645,9 @@ void pfx_input_stage(uint64_t now_ms) {
 }
 
 static bool pfx_output_active() {
-    return (pointer_fx_config.flags & (PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED)) ||
-        (pointer_fx_config.cursor_gain_mil != 1000);
+    return pfx_enabled() &&
+        ((pointer_fx_config.flags & (PFX_FLAG_SMOOTHING_ENABLED | PFX_FLAG_ACCEL_ENABLED)) ||
+            (pointer_fx_config.cursor_gain_mil != 1000));
 }
 
 bool pfx_divert_cursor(uint32_t target_usage, int32_t value_mil) {
@@ -658,17 +680,48 @@ void pfx_output_stage(uint64_t now_ms) {
     stage_y_mil = 0;
 
     if ((in_x == 0.0f) && (in_y == 0.0f)) {
-        // Idle: EMA resets after the timeout, exactly like Flask (which
-        // holds state and emits nothing on empty reports).
         if (now_ms - last_motion_ms > pointer_fx_config.smooth_timeout_ms) {
+            // Stroke over: reset the filter. (Flask discards the EMA tail
+            // outright; we decay it out below instead, so no distance is
+            // lost — by the time the timeout lands the tail has already
+            // been emitted and this is a no-op numerically.)
             ema_x = 0.0f;
             ema_y = 0.0f;
+            return;
+        }
+        // Idle tick inside a stroke's timeout window: keep running the
+        // filter on zero input so the EMA tail drains into the report
+        // instead of being dropped when the timeout hits. Without this,
+        // every short nudge loses (1-alpha) of its final samples — the
+        // "small test movement doesn't register" failure mode.
+        if ((pointer_fx_config.flags & PFX_FLAG_SMOOTHING_ENABLED) && ((ema_x != 0.0f) || (ema_y != 0.0f))) {
+            float f = (float) pointer_fx_config.smooth_factor_mil / 1000.0f;
+            ema_x *= 1.0f - f;
+            ema_y *= 1.0f - f;
+            int32_t tail_x = (int32_t) lroundf(ema_x * 1000.0f);
+            int32_t tail_y = (int32_t) lroundf(ema_y * 1000.0f);
+            if ((tail_x == 0) && (tail_y == 0)) {
+                // Below emission resolution — stop early, nothing to drain.
+                ema_x = 0.0f;
+                ema_y = 0.0f;
+                return;
+            }
+            float gain = 1.0f;
+            if (pointer_fx_config.cursor_gain_mil != 1000) {
+                gain = (float) pointer_fx_config.cursor_gain_mil / 1000.0f;
+            }
+            accumulated[CURSOR_X_USAGE] += (int32_t) lroundf(ema_x * 1000.0f * gain);
+            accumulated[CURSOR_Y_USAGE] += (int32_t) lroundf(ema_y * 1000.0f * gain);
         }
         return;
     }
 
     // dt = ms since the last non-empty tick (Flask's delta_time), so the
     // device's real report cadence (125 Hz vs 1 kHz) normalizes out.
+    // Stroke start = first motion after a real pause (fixed 100 ms, NOT
+    // smooth_timeout_ms, which may legitimately be 0). Deliberately longer
+    // than any sane report interval so mid-stroke gaps never trigger it.
+    bool stroke_start = (last_motion_ms == 0) || (now_ms - last_motion_ms > 100);
     uint32_t dt = (uint32_t) (now_ms - last_motion_ms);
     if (dt < 1) dt = 1;
     if (dt > 1000) dt = 1000;
@@ -683,6 +736,23 @@ void pfx_output_stage(uint64_t now_ms) {
         ema_y = f * in_y + (1.0f - f) * ema_y;
         out_x = ema_x;
         out_y = ema_y;
+    }
+
+    if (stroke_start) {
+        // First sample after an idle gap: dt is the length of the pause, so
+        // "velocity" would compute as ~0 and pin the accel curve to its
+        // low-speed floor for exactly the tick the user is watching for a
+        // response. There is no honest velocity estimate from one sample —
+        // pass it through at unity and let the curve engage from the second
+        // sample on.
+        if (pointer_fx_config.cursor_gain_mil != 1000) {
+            const float gain = (float) pointer_fx_config.cursor_gain_mil / 1000.0f;
+            out_x *= gain;
+            out_y *= gain;
+        }
+        accumulated[CURSOR_X_USAGE] += (int32_t) lroundf(out_x * 1000.0f);
+        accumulated[CURSOR_Y_USAGE] += (int32_t) lroundf(out_y * 1000.0f);
+        return;
     }
 
     if (pointer_fx_config.flags & PFX_FLAG_ACCEL_ENABLED) {

@@ -7,7 +7,7 @@
 
 import {
     UINT8, UINT16, UINT32, INT32,
-    CONFIG_SIZE, CONFIG_VERSION, CONFIG_VERSION_FORK, FORK_VERSIONS, CONFIG_USAGE_PAGE, CONFIG_USAGE,
+    CONFIG_SIZE, CONFIG_VERSION, FORK_VERSIONS, CONFIG_USAGE_PAGE, CONFIG_USAGE,
     REPORT_ID_MONITOR, NMACROS, NEXPRESSIONS, MACRO_ITEMS_IN_PACKET, HUB_PORT_NONE,
     STICKY_FLAG, TAP_FLAG, HOLD_FLAG,
     IGNORE_AUTH_DEV_INPUTS_FLAG, GPIO_OUTPUT_MODE_FLAG, NORMALIZE_GAMEPAD_INPUTS_FLAG,
@@ -16,13 +16,14 @@ import {
     PERSIST_CONFIG, GET_OUR_USAGES, GET_THEIR_USAGES, SUSPEND, RESUME,
     CLEAR_MACROS, APPEND_TO_MACRO, GET_MACRO, CLEAR_EXPRESSIONS, APPEND_TO_EXPRESSION,
     GET_EXPRESSION, SET_MONITOR_ENABLED, CLEAR_QUIRKS, ADD_QUIRK, GET_QUIRK,
-    PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG,
-    GET_POINTER_FX,
+    PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE,
+    GET_POINTER_FX, REBOOT,
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
-    setActiveConfigVersion, readPointerFx, writePointerFx,
-} from './protocol.js?v=3';
-import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=3';
-import { usageToHex } from './model.js?v=3';
+    setActiveConfigVersion, setForkGeneration, readPointerFx, writePointerFx,
+    readForkStatus, readDiagnostics,
+} from './protocol.js?v=4';
+import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=4';
+import { usageToHex } from './model.js?v=4';
 
 // Native (desktop) transport: speaks the same sendFeatureReport /
 // receiveFeatureReport surface as a WebHID HIDDevice, but routes through the
@@ -120,20 +121,42 @@ export class RemapperDevice {
     }
 
     async _checkDeviceVersion() {
-        // Probe fork versions first (newest first), then stock. All are
-        // supported; the fork additionally unlocks the Pointer FX features.
-        for (const version of [...FORK_VERSIONS, CONFIG_VERSION, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
+        // Current fork firmware deliberately speaks stock version 18 (so
+        // remapper.org always works as a fallback); fork capability is a
+        // separate probe below. Legacy fork firmware (100/101) still
+        // negotiates by version.
+        for (const version of [CONFIG_VERSION, ...FORK_VERSIONS, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2]) {
             await sendFeatureCommand(this.io, GET_CONFIG, [], version);
             const [received_version] = await readConfigFeature(this.io, [UINT8]);
             if (received_version == version) {
-                if (FORK_VERSIONS.includes(version) || version == CONFIG_VERSION) {
+                if (version == CONFIG_VERSION) {
                     this.configVersion = version;
                     setActiveConfigVersion(version);
+                    // Stock wire version: fork features present only if the
+                    // status page answers with the 'PFX' signature.
+                    let status = null;
+                    try {
+                        status = await readForkStatus(this.io);
+                    } catch (e) {
+                        status = null;  // stock firmware variants that reject the command outright
+                    }
+                    this.forkGeneration = status ? status.generation : 0;
+                    this.forkStatus = status;
+                    setForkGeneration(this.forkGeneration);
+                    return;
+                }
+                if (FORK_VERSIONS.includes(version)) {
+                    this.configVersion = version;
+                    setActiveConfigVersion(version);
+                    this.forkGeneration = 1;  // legacy fork: no status page
+                    this.forkStatus = null;
+                    setForkGeneration(1);
                     return;
                 }
                 throw new Error(
                     'Incompatible firmware version (' + version + '). This tool targets config ' +
-                    'version ' + CONFIG_VERSION + ' (stock) or ' + CONFIG_VERSION_FORK + ' (Flask-parity fork).');
+                    'version ' + CONFIG_VERSION + ' (stock or current fork) and the legacy fork versions ' +
+                    FORK_VERSIONS.join('/') + '.');
             }
         }
         throw new Error('Incompatible firmware version (could not negotiate).');
@@ -141,7 +164,28 @@ export class RemapperDevice {
 
     // Fork firmware only: Pointer FX live tuning parameters.
     get isFork() {
-        return FORK_VERSIONS.includes(this.configVersion);
+        return (this.forkGeneration || 0) > 0;
+    }
+
+    // Sidecar-era fork: live status {layerMask, generation, descriptorPending,
+    // safeMode}, or null on stock / legacy-fork firmware.
+    async readStatus() {
+        if ((this.forkGeneration || 0) < 2) return null;
+        const status = await readForkStatus(this.io);
+        this.forkStatus = status;
+        return status;
+    }
+
+    // Sidecar-era fork: diagnostics counters, or null.
+    async readDiag() {
+        if ((this.forkGeneration || 0) < 2) return null;
+        return await readDiagnostics(this.io);
+    }
+
+    // Fork: clean device reboot (applies a pending descriptor-number change
+    // without replugging). The device drops off USB and re-enumerates.
+    async reboot() {
+        await sendFeatureCommand(this.io, REBOOT);
     }
 
     async loadPointerFx() {
@@ -471,4 +515,4 @@ export class RemapperDevice {
     }
 }
 
-export { PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, HUB_PORT_NONE };
+export { PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE, HUB_PORT_NONE };

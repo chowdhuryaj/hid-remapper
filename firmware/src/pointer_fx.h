@@ -82,12 +82,44 @@ struct __attribute__((packed)) pointer_fx_config_t {
 // cursor_gain_mil); used to load legacy flash contents.
 #define PFX_V100_BLOCK_SIZE 34
 
+// Persisted sidecar. The main config blob is byte-identical to upstream's
+// version-18 serialization; Pointer FX parameters ride in this self-validating
+// block at a fixed offset from the END of the config flash sector, just
+// before the region-wide CRC32:
+//
+//   [v18 config ...][free ...][pfx_sidecar_t][region CRC32, 4 bytes]
+//
+// Consequences, all deliberate:
+//   - the region CRC (last 4 bytes) covers the sidecar, as upstream CRCs the
+//     whole region — upstream loaders still validate the sector;
+//   - stock upstream FIRMWARE flashed over this loads the v18 blob and keeps
+//     every mapping/macro/expression; it just ignores the sidecar;
+//   - a persist by stock firmware zeroes the sidecar (it memsets the whole
+//     region), so on return to the fork the magic check fails cleanly and
+//     Pointer FX reverts to defaults (= everything off);
+//   - the sidecar has its own CRC so garbage from an oversized v18 blob can
+//     never masquerade as parameters.
+#define PFX_SIDECAR_MAGIC 0x31584650u  // "PFX1", little-endian
+struct __attribute__((packed)) pfx_sidecar_t {
+    uint32_t magic;
+    pointer_fx_config_t params;
+    uint32_t crc32;  // over magic + params
+};
+
 #define PFX_FLAG_SMOOTHING_ENABLED (1 << 0)
 #define PFX_FLAG_ACCEL_ENABLED (1 << 1)
 #define PFX_FLAG_WIGGLE_ENABLED (1 << 2)
 #define PFX_FLAG_AUTOSCROLL_INVERTED (1 << 3)
 #define PFX_FLAG_CHORDS_ENABLED (1 << 4)
 #define PFX_FLAG_GESTURES_ENABLED (1 << 5)
+
+// Master gate. Clear by default, and clear on a blank or corrupt flash, so
+// a factory-fresh device is behaviourally identical to stock upstream
+// firmware: no cursor diversion, no float math, no added tick latency.
+// Every other flag above is inert while this is clear. Legacy v100/v101
+// configs load with ALL flags cleared (their flags encoded the old
+// force-enabled defaults, not a user decision); numeric tuning is kept.
+#define PFX_FLAG_MASTER_ENABLE (1 << 15)
 
 #define PFX_PAGE0_SIZE 16
 #define PFX_PAGE1_SIZE (sizeof(pointer_fx_config_t) - PFX_PAGE0_SIZE)
@@ -102,6 +134,7 @@ extern uint8_t pfx_out_state[2];
 
 void pfx_set_defaults();
 void pfx_clamp_config();          // enforce all ranges on pointer_fx_config
+bool pfx_enabled();               // master gate; false => upstream code path
 void pfx_reset_runtime_state();   // on config change / reset_state()
 void pfx_cache_ptrs();            // re-resolve state-slot pointers
 bool pfx_is_activation_target(uint32_t usage);

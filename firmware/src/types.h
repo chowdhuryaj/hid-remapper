@@ -37,6 +37,11 @@ enum class ConfigCommand : int8_t {
     // fork-local (Flask parity); numbered after the last upstream command
     GET_POINTER_FX = 26,
     SET_POINTER_FX = 27,
+    // fork-local: clean device reboot (watchdog reset). Lets the tool apply
+    // an our_descriptor_number change without asking the user to replug —
+    // the alternative is the silent-death state where the bound descriptor
+    // and the configured one diverge and all reports stop.
+    REBOOT = 28,
 };
 
 struct usage_def_t {
@@ -317,11 +322,13 @@ typedef persist_config_v12_t persist_config_v13_t;
 
 typedef persist_config_v13_t persist_config_v18_t;
 
-// Fork-local persisted layout: upstream v18 header + the Pointer FX
-// parameter block inline. Versions 100+ so upstream's future 19+ never
-// collides. Mappings/macros/expressions/quirks follow as in v18.
+// LEGACY, load-only: the fork's earlier persisted layout (versions 100/101),
+// upstream v18 header + the Pointer FX parameter block inline. Current
+// firmware persists a pure upstream-v18 blob (version byte 18) and carries
+// Pointer FX in the pfx_sidecar_t at the end of the config sector instead —
+// see pointer_fx.h. Kept solely so load_config() can migrate old flash.
 // v100 used a 34-byte block (PFX_V100_BLOCK_SIZE, before cursor_gain_mil);
-// v101 = the current pointer_fx_config_t.
+// v101 = the full pointer_fx_config_t.
 struct __attribute__((packed)) persist_config_v101_t {
     uint8_t version;
     uint8_t flags;
@@ -337,7 +344,7 @@ struct __attribute__((packed)) persist_config_v101_t {
     pointer_fx_config_t pointer_fx;
 };
 
-typedef persist_config_v101_t persist_config_t;
+typedef persist_config_v18_t persist_config_t;
 
 struct __attribute__((packed)) get_config_t {
     uint8_t version;
@@ -434,6 +441,9 @@ enum class PersistConfigReturnCode : int8_t {
     UNKNOWN = 0,
     SUCCESS = 1,
     CONFIG_TOO_BIG = 2,
+    // fork-local: persist refused because the device is in safe mode —
+    // recovery must not be able to overwrite the saved config.
+    SAFE_MODE = 3,
 };
 
 struct __attribute__((packed)) persist_config_response_t {

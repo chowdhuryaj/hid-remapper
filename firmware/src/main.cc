@@ -17,15 +17,24 @@
 #include <pico/stdio.h>
 #include <pico/unique_id.h>
 
+#include <hardware/watchdog.h>
+#ifdef REMAPPER_SINGLE_EXTRAS
+#include <hardware/structs/ioqspi.h>
+#include <hardware/structs/sio.h>
+#include <hardware/sync.h>
+#endif
+
 #include "activity_led.h"
 #include "config.h"
 #include "crc.h"
 #include "descriptor_parser.h"
+#include "diagnostics.h"
 #include "globals.h"
 #include "i2c.h"
 #include "mcp4651.h"
 #include "our_descriptor.h"
 #include "platform.h"
+#include "pointer_fx.h"
 #include "remapper.h"
 #include "tick.h"
 
@@ -203,6 +212,62 @@ void reset_to_bootloader() {
     reset_usb_boot(0, 0);
 }
 
+#ifdef REMAPPER_SINGLE_EXTRAS
+
+// Computer-free recovery (fork addition). Holding BOOTSEL at power-on is
+// taken by the bootrom (UF2 mode), so the safe-mode gesture is: plug in
+// normally, THEN hold BOOTSEL for ~2 seconds. The firmware reboots itself
+// with a magic in a watchdog scratch register (survives the reboot, not a
+// power cycle); on the way back up it skips the persisted config entirely
+// and enumerates as a factory-default plain mouse — descriptor 0, passthrough
+// on, every Pointer FX effect off. Nothing is written to flash: the next
+// normal power cycle restores the saved config.
+#define SAFE_MODE_MAGIC 0x53414645u  // "SAFE"
+
+// Reads the BOOTSEL button state. Standard RP2040 technique: briefly float
+// the flash CS line and sample it. Safe here because this build runs
+// entirely from RAM (copy_to_ram) so nothing touches flash concurrently;
+// interrupts are disabled for the few microseconds of the sample.
+static bool __no_inline_not_in_flash_func(get_bootsel_button)() {
+    const uint CS_PIN_INDEX = 1;
+    uint32_t flags = save_and_disable_interrupts();
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_LOW << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+    for (volatile int i = 0; i < 1000; ++i) {
+    }
+    bool button_state = !(sio_hw->gpio_hi_in & (1u << CS_PIN_INDEX));
+    hw_write_masked(&ioqspi_hw->io[CS_PIN_INDEX].ctrl,
+        GPIO_OVERRIDE_NORMAL << IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_LSB,
+        IO_QSPI_GPIO_QSPI_SS_CTRL_OEOVER_BITS);
+    restore_interrupts(flags);
+    return button_state;
+}
+
+// Polled from the main loop at ~4 Hz; two consecutive seconds of held
+// button trigger the safe-mode reboot.
+static void safe_mode_button_task() {
+    static uint64_t next_check = 0;
+    static uint64_t held_since = 0;
+    uint64_t now = time_us_64();
+    if (now < next_check) {
+        return;
+    }
+    next_check = now + 250000;
+    if (get_bootsel_button()) {
+        if (held_since == 0) {
+            held_since = now;
+        } else if (now - held_since > 2000000) {
+            watchdog_hw->scratch[0] = SAFE_MODE_MAGIC;
+            watchdog_reboot(0, 0, 10);
+        }
+    } else {
+        held_since = 0;
+    }
+}
+
+#endif
+
 void pair_new_device() {
 }
 
@@ -247,7 +312,22 @@ int main() {
     adc_pins_init();
 #endif
     tick_init();
-    load_config(FLASH_CONFIG_IN_MEMORY);
+#ifdef REMAPPER_SINGLE_EXTRAS
+    // Safe-mode handshake left by safe_mode_button_task() before its reboot.
+    // Scratch registers survive a watchdog reboot but not a power cycle, so
+    // unplugging always returns to the saved config.
+    if (watchdog_caused_reboot() && (watchdog_hw->scratch[0] == SAFE_MODE_MAGIC)) {
+        watchdog_hw->scratch[0] = 0;
+        diag_safe_mode = true;
+    }
+#endif
+    if (diag_safe_mode) {
+        // Factory-default boot, nothing loaded from flash: descriptor 0,
+        // unmapped passthrough on, Pointer FX off — a plain working mouse.
+        pfx_set_defaults();
+    } else {
+        load_config(FLASH_CONFIG_IN_MEMORY);
+    }
     our_descriptor = &our_descriptors[our_descriptor_number];
     parse_our_descriptor();
     set_mapping_from_config();
@@ -255,6 +335,12 @@ int main() {
     extra_init();
     tusb_init();
     stdio_init_all();
+#ifdef REMAPPER_SINGLE_EXTRAS
+    // Watchdog: a hang anywhere in the loop becomes a 2-second outage
+    // instead of a dead dongle. Enabled after USB init so a slow first
+    // enumeration can't trip it; fed once per loop iteration below.
+    watchdog_enable(2000, 1);
+#endif
 
     tud_sof_isr_set(sof_handler);
 
@@ -279,7 +365,13 @@ int main() {
 #ifdef ADC_ENABLED
             read_adc();
 #endif
+            uint64_t tick_t0 = time_us_64();
             process_mapping(true);
+            uint32_t tick_us = (uint32_t) (time_us_64() - tick_t0);
+            if (tick_us > diag_max_tick_us) {
+                diag_max_tick_us = tick_us;
+            }
+            diag_ticks++;
             write_gpio();
 #ifdef MCP4651_ENABLED
             mcp4651_write();
@@ -317,10 +409,20 @@ int main() {
             persist_config_return_code = persist_config();
             need_to_persist_config = false;
         }
+        if (need_to_reboot) {
+            // ConfigCommand::REBOOT: give the ack a moment to flush, then a
+            // clean watchdog reset — the host re-enumerates us fresh.
+            need_to_reboot = false;
+            watchdog_reboot(0, 0, 100);
+        }
+#ifdef REMAPPER_SINGLE_EXTRAS
+        safe_mode_button_task();
+        watchdog_update();
+#endif
 
         print_stats_maybe();
 
-        activity_led_off_maybe();
+        activity_led_task();
     }
 
     return 0;

@@ -10,7 +10,7 @@ import {
     CONFIG_VERSION, NMACROS, NEXPRESSIONS,
     DEFAULT_PARTIAL_SCROLL_TIMEOUT, DEFAULT_TAP_HOLD_THRESHOLD,
     DEFAULT_GPIO_DEBOUNCE_TIME, DEFAULT_MACRO_ENTRY_DURATION, DEFAULT_SCALING,
-} from './protocol.js?v=3';
+} from './protocol.js?v=4';
 
 export function emptyMacros() {
     return Array.from({ length: NMACROS }, () => []);

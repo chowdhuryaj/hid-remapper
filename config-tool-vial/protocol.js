@@ -5,14 +5,13 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js?v=3';
+import crc32 from './crc.js?v=4';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
 export const CONFIG_SIZE = 32;
-export const CONFIG_VERSION = 18;        // last stock/upstream version
-export const CONFIG_VERSION_FORK = 101;  // our Flask-parity firmware fork (current)
-export const FORK_VERSIONS = [101, 100]; // all fork versions we can talk to, newest first
+export const CONFIG_VERSION = 18;        // stock/upstream version — current fork firmware speaks this too
+export const FORK_VERSIONS = [101, 100]; // LEGACY fork wire versions (pre-sidecar firmware still in the field)
 
 // The device's negotiated config version. The firmware rejects SET frames
 // whose version byte doesn't match its own, so the device layer stores the
@@ -20,7 +19,16 @@ export const FORK_VERSIONS = [101, 100]; // all fork versions we can talk to, ne
 let activeConfigVersion = CONFIG_VERSION;
 export function setActiveConfigVersion(v) { activeConfigVersion = v; }
 export function getActiveConfigVersion() { return activeConfigVersion; }
-export function deviceIsFork() { return FORK_VERSIONS.includes(activeConfigVersion); }
+
+// Fork capability is no longer encoded in the wire version (current fork
+// firmware deliberately reports stock 18 so remapper.org keeps working as a
+// fallback). It is detected by probing GET_POINTER_FX page 2 for the 'PFX'
+// signature. Generations: 0 = stock, 1 = legacy fork (wire 100/101),
+// 2 = sidecar-era fork (wire 18 + signature).
+let forkGeneration = 0;
+export function setForkGeneration(g) { forkGeneration = g; }
+export function getForkGeneration() { return forkGeneration; }
+export function deviceIsFork() { return forkGeneration > 0; }
 
 // HID Remapper's config interface advertises this usage page / usage. We match
 // on it (not VID/PID) so the tool works on the Feather, the Pico variants and
@@ -92,12 +100,17 @@ export const SET_MONITOR_ENABLED = 22;
 export const CLEAR_QUIRKS = 23;
 export const ADD_QUIRK = 24;
 export const GET_QUIRK = 25;
-// Fork-only commands (Flask-parity firmware, config version 100).
+// Fork-only commands (Flask-parity firmware). Stock firmware answers these
+// with an all-0xFF payload (INVALID_COMMAND), which is how the fork probe
+// distinguishes the two.
 export const GET_POINTER_FX = 26;
 export const SET_POINTER_FX = 27;
+export const REBOOT = 28;
 
 export const PERSIST_CONFIG_SUCCESS = 1;
 export const PERSIST_CONFIG_CONFIG_TOO_BIG = 2;
+// Fork: persist refused because the device is in safe mode (recovery boot).
+export const PERSIST_CONFIG_SAFE_MODE = 3;
 
 // Field type tags for (de)serializing the 32-byte config packets.
 export const UINT8 = Symbol('uint8');
@@ -181,14 +194,26 @@ export const PFX_FLAG_WIGGLE = 1 << 2;
 export const PFX_FLAG_ASC_INVERTED = 1 << 3;
 export const PFX_FLAG_CHORDS = 1 << 4;
 export const PFX_FLAG_GESTURES = 1 << 5;
+// Master gate (sidecar-era firmware): with this clear the firmware runs the
+// exact upstream code path — no divert, no float math. The tool derives it
+// automatically (see vial.js) so users never manage it by hand.
+export const PFX_FLAG_MASTER = 1 << 15;
+// Effect bits that imply the module is in use.
+export const PFX_EFFECT_FLAGS =
+    PFX_FLAG_SMOOTHING | PFX_FLAG_ACCEL | PFX_FLAG_WIGGLE | PFX_FLAG_CHORDS | PFX_FLAG_GESTURES;
 
 const PFX_PAGE0_FIELDS = [UINT16, UINT16, UINT16, INT16, UINT16, UINT16, UINT16, UINT16];
 const PFX_PAGE1_FIELDS = [UINT16, UINT16, UINT16, UINT8, UINT8, UINT16, UINT16, UINT16, UINT16, UINT16];
 // v101 appended cursor_gain to page 1; on a v100 device the field is absent.
 const PFX_PAGE1_FIELDS_V101 = [...PFX_PAGE1_FIELDS, UINT16];
 
+// cursor_gain exists on legacy v101 and on every sidecar-era firmware.
+function pfxHasCursorGain() {
+    return getForkGeneration() >= 2 || getActiveConfigVersion() >= 101;
+}
+
 export async function readPointerFx(device) {
-    const v101 = getActiveConfigVersion() >= 101;
+    const v101 = pfxHasCursorGain();
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 0]]);
     const [flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
         device_cpi, smooth_factor, smooth_timeout] =
@@ -207,7 +232,7 @@ export async function readPointerFx(device) {
 }
 
 export async function writePointerFx(device, p) {
-    const v101 = getActiveConfigVersion() >= 101;
+    const v101 = pfxHasCursorGain();
     await sendFeatureCommand(device, SET_POINTER_FX, [
         [UINT8, 0],
         [UINT16, p.flags], [UINT16, p.accel_takeoff], [UINT16, p.accel_growth],
@@ -226,14 +251,41 @@ export async function writePointerFx(device, p) {
 }
 
 export function defaultPointerFx() {
+    // Mirrors the firmware's pfx_set_defaults(): everything OFF, and the
+    // accel low-speed floor at 1.00 so switching accel on is an identity
+    // until deliberately tuned. (The old force-enabled defaults with a 0.20
+    // floor slowed the cursor ~5x out of the box — the prime suspect for
+    // the dead-cursor-on-Windows failure.)
     return {
-        flags: PFX_FLAG_SMOOTHING | PFX_FLAG_ACCEL | PFX_FLAG_WIGGLE | PFX_FLAG_CHORDS | PFX_FLAG_GESTURES,
-        accel_takeoff: 2000, accel_growth: 250, accel_offset: 2200, accel_limit: 200,
+        flags: 0,
+        accel_takeoff: 2000, accel_growth: 250, accel_offset: 2200, accel_limit: 1000,
         device_cpi: 1000, smooth_factor: 400, smooth_timeout: 200,
         gesture_ratchet: 200, wiggle_switch: 150, wiggle_cooldown: 250, wiggle_threshold: 3,
         asc_speed: 100, asc_deadzone: 15, asc_range: 300, chord_step: 200, chord_hold: 200,
         cursor_gain: 1000,
     };
+}
+
+// Reads the fork status page (GET_POINTER_FX page 2). On sidecar-era fork
+// firmware this carries a 'PFX' signature; on stock firmware the response is
+// INVALID_COMMAND's all-0xFF payload, so the signature check cleanly returns
+// null. Also used as the capability probe right after version negotiation.
+export async function readForkStatus(device) {
+    await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 2]]);
+    const [layerMask, s0, s1, s2, generation, descriptorPending, safeMode] =
+        await readConfigFeature(device, [UINT8, UINT8, UINT8, UINT8, UINT8, UINT8, UINT8]);
+    if (s0 != 0x50 || s1 != 0x46 || s2 != 0x58) {  // 'P','F','X'
+        return null;
+    }
+    return { layerMask, generation, descriptorPending: !!descriptorPending, safeMode: !!safeMode };
+}
+
+// Diagnostics counters (GET_POINTER_FX page 3, sidecar-era firmware).
+export async function readDiagnostics(device) {
+    await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 3]]);
+    const [hidItfCount, tracking, reportsIn, ticks, maxTickUs] =
+        await readConfigFeature(device, [UINT8, UINT8, UINT32, UINT32, UINT32]);
+    return { hidItfCount, tracking: !!tracking, reportsIn, ticks, maxTickUs };
 }
 
 // Pointer FX usage helpers (hex-string usages, GUI convention).
