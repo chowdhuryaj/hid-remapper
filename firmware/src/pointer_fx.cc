@@ -82,6 +82,7 @@ void pfx_set_defaults() {
         .chord_step = 200,
         .chord_hold_ms = 200,
         .cursor_gain_mil = 1000,
+        .tilt_debounce_ms = 0,
     };
 }
 
@@ -109,6 +110,7 @@ void pfx_clamp_config() {
     c->chord_step = clamp_u16(c->chord_step, 50, 2000);
     c->chord_hold_ms = clamp_u16(c->chord_hold_ms, 0, 2000);
     c->cursor_gain_mil = clamp_u16(c->cursor_gain_mil, 100, 4000);
+    c->tilt_debounce_ms = clamp_u16(c->tilt_debounce_ms, 0, 500);
 }
 
 bool pfx_is_activation_target(uint32_t usage) {
@@ -315,6 +317,40 @@ static bool asc_jogging = false;
 static int32_t asc_deflection = 0;
 static uint64_t asc_last_tick_ms = 0;
 
+// Tilt debounce (see pointer_fx.h): one pass-through detent per gesture.
+static uint64_t tilt_last_ms = 0;
+static bool tilt_last_positive = false;
+
+// Any-button cancel: previous button levels for edge detection, plus the
+// exemption list (buttons that trigger autoscroll must not cancel it).
+static int32_t prev_button_state[PFX_NUM_CHORD_BUTTONS] = { 0 };
+#define PFX_ASC_EXEMPT_MAX 16
+static uint32_t asc_exempt_sources[PFX_ASC_EXEMPT_MAX];
+static int asc_exempt_count = 0;
+
+bool pfx_is_asc_activation_target(uint32_t usage) {
+    return (usage >= PFX_ACT_AUTOSCROLL_JOG) && (usage <= PFX_ACT_AUTOSCROLL_STOP);
+}
+
+void pfx_clear_asc_exempt_sources() {
+    asc_exempt_count = 0;
+}
+
+void pfx_note_asc_exempt_source(uint32_t usage) {
+    if (asc_exempt_count < PFX_ASC_EXEMPT_MAX) {
+        asc_exempt_sources[asc_exempt_count++] = usage;
+    }
+}
+
+static bool asc_source_exempt(uint32_t usage) {
+    for (int i = 0; i < asc_exempt_count; i++) {
+        if (asc_exempt_sources[i] == usage) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // smoothing + accel
 static float ema_x = 0.0f;
 static float ema_y = 0.0f;
@@ -337,6 +373,9 @@ void pfx_reset_runtime_state() {
     asc_level = 0;
     asc_jogging = false;
     asc_deflection = 0;
+    memset(prev_button_state, 0, sizeof(prev_button_state));
+    tilt_last_ms = 0;
+    tilt_last_positive = false;
     ema_x = 0.0f;
     ema_y = 0.0f;
     last_motion_ms = 0;
@@ -545,8 +584,25 @@ static void autoscroll_stage(int32_t dy, bool jog_captured_input, uint64_t now_m
     uint16_t act_bit_down = 1 << ((PFX_ACT_AUTOSCROLL_DOWN & 0xFFFF) - 1);
     uint16_t act_bit_stop = 1 << ((PFX_ACT_AUTOSCROLL_STOP & 0xFFFF) - 1);
 
+    // Any non-exempt button press cancels whatever autoscroll is doing —
+    // scrolling must never fight a click. Buttons mapped to the autoscroll
+    // activation usages are exempt (their taps CONTROL the mode).
+    bool cancel_press = false;
+    for (int b = 0; b < PFX_NUM_CHORD_BUTTONS; b++) {
+        if (button_slots[b] == NULL) continue;
+        int32_t cur = *button_slots[b];
+        if ((cur != 0) && (prev_button_state[b] == 0) &&
+            !asc_source_exempt(BUTTON_USAGE_PAGE | (b + 1))) {
+            cancel_press = true;
+        }
+        prev_button_state[b] = cur;
+    }
+    if (cancel_press && (asc_jogging || asc_level != 0)) {
+        asc_stop();
+    }
+
     bool jog_active = act_flags & act_bit_jog;
-    if (jog_active && !asc_jogging) {
+    if (jog_active && !asc_jogging && !cancel_press) {
         asc_stop();  // clears any stepped level
         asc_jogging = true;
         asc_last_tick_ms = now_ms;
@@ -561,6 +617,22 @@ static void autoscroll_stage(int32_t dy, bool jog_captured_input, uint64_t now_m
     }
     if ((act_flags & act_bit_stop) && !(prev_act_flags & act_bit_stop)) {
         asc_stop();
+    }
+
+    // While stepped autoscroll is running, the wheel becomes its speed
+    // control: each detent steps the level (through zero = direction flip,
+    // landing on zero = stop). The motion is swallowed so it doesn't also
+    // scroll the page. One step per tick regardless of hi-res delta size.
+    if ((asc_level != 0) && !asc_jogging) {
+        int32_t wd = read_cursor_delta(wheel_slots);
+        if (wd != 0) {
+            asc_step(wd > 0 ? 1 : -1, now_ms);
+            for (int raw = 0; raw < 2; raw++) {
+                if (wheel_slots[raw] != NULL) {
+                    *wheel_slots[raw] = 0;
+                }
+            }
+        }
     }
 
     int8_t scroll_dir = 0;
@@ -649,6 +721,26 @@ void pfx_input_stage(uint64_t now_ms) {
         }
     }
     pulse_drain(&wiggle_pulse);
+
+    // Tilt debounce: pass the first detent of a tilt gesture (clamped to
+    // one unit), swallow the auto-repeats until the tilt goes quiet for the
+    // configured time or reverses direction. Runs before chord capture so
+    // debounced tilt is what chords see too.
+    if (pointer_fx_config.tilt_debounce_ms > 0) {
+        int32_t td = read_cursor_delta(tilt_slots);
+        if (td != 0) {
+            bool positive = td > 0;
+            bool repeat = (positive == tilt_last_positive) &&
+                (now_ms - tilt_last_ms <= pointer_fx_config.tilt_debounce_ms);
+            for (int raw = 0; raw < 2; raw++) {
+                if (tilt_slots[raw] != NULL) {
+                    *tilt_slots[raw] = repeat ? 0 : (positive ? 1 : -1);
+                }
+            }
+            tilt_last_positive = positive;
+            tilt_last_ms = now_ms;
+        }
+    }
 
     int32_t dx = read_cursor_delta(cursor_x_slots);
     int32_t dy = read_cursor_delta(cursor_y_slots);

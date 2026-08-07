@@ -2,22 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=9';
-import { migrateConfig } from './model.js?v=9';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=10';
+import { migrateConfig } from './model.js?v=10';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-} from './protocol.js?v=9';
+    pfxGestureSetActiveUsage,
+} from './protocol.js?v=10';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=9';
-import { usagePage } from './model.js?v=9';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=9';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE } from './keycodes.js?v=9';
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=9';
-import { OS_SHORTCUT_CHOICES } from './behaviors.js?v=9';
+} from './profiles.js?v=10';
+import { usagePage } from './model.js?v=10';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=10';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=10';
+setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=10';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=10';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -688,6 +690,19 @@ function getButtonPlan(source) {
     const plain = acts.find((a) => !a.tap && !a.hold && !a.sticky);
     const tapA = acts.find((a) => a.tap);
     const holdA = acts.find((a) => a.hold);
+    // A mode behavior toggled by this button occupies the Tap row; a plain
+    // mapping to a mode usage is a momentary hold (level = instant engage).
+    const toggled = project.behaviors.find((b) => b.mode === 'toggle' && b.trigger === source &&
+        (b.type === 'drag_scroll' || b.type === 'gesture_set'));
+    const toggledUsage = toggled ? (toggled.type === 'drag_scroll' ? layerUsage(toggled.layerPin) : pfxGestureSetActiveUsage(toggled.set)) : null;
+    if (plain && modeEntryFor(plain.target_usage)) {
+        return { tap: toggledUsage || (tapA ? tapA.target_usage : null), hold: plain.target_usage,
+            eager: true, double: null, tapHold: null, window: 200, dance: false };
+    }
+    if (toggledUsage) {
+        return { tap: toggledUsage, hold: holdA ? holdA.target_usage : null, eager: false,
+            double: null, tapHold: null, window: 200, dance: false };
+    }
     if (dance) {
         return { tap: dance.tap1 || null, hold: plain ? plain.target_usage : (dance.hold || null),
             eager: !!plain, double: dance.tap2 || null, tapHold: dance.tapHold || null,
@@ -704,6 +719,21 @@ function getButtonPlan(source) {
 
 function setButtonPlan(source, plan) {
     clearActions(base(), source, currentLayer);
+    // Mode targets: Tap = the behavior's cancellable toggle (any other
+    // button press cancels); Hold = plain level mapping (momentary).
+    const tapMode = plan.tap ? modeEntryFor(plan.tap) : null;
+    // Release any toggle this button previously owned but no longer does.
+    for (const b of project.behaviors) {
+        if (b.mode === 'toggle' && b.trigger === source &&
+            (!tapMode || b !== tapMode.behavior)) {
+            b.trigger = null;
+        }
+    }
+    if (tapMode) {
+        tapMode.behavior.trigger = source;
+        tapMode.behavior.mode = 'toggle';
+        plan = { ...plan, tap: null };  // no raw mapping for the tap row
+    }
     let dance = autoDanceFor(source);
     const needsDance = !!(plan.double || plan.tapHold);
     if (needsDance) {
@@ -882,7 +912,11 @@ function sourceButton(usage, label, onPick) {
 // The picker shows target keycodes by default, or source inputs when a behavior
 // trigger is being chosen (pickerTarget.source).
 function currentCats() {
-    return (pickerTarget && pickerTarget.source) ? sourceCategories(profile, dev.extraUsages.source) : categories;
+    if (pickerTarget && pickerTarget.source) return sourceCategories(profile, dev.extraUsages.source);
+    // Project behaviors that can be driven from the key editor surface as a
+    // leading "Modes" category (drag scroll, gesture sets).
+    const modes = modeEntries();
+    return modes.length ? [{ name: 'Modes', items: modes }, ...categories] : categories;
 }
 
 function renderPicker() {
@@ -1003,8 +1037,8 @@ function defaultBehavior(type) {
         };
     }
     if (type === 'tap_dance') return { id, type, button: btnAt(2), tap1: '0x00070004', tap2: null, tap3: null, hold: '0xfff10001', window: 200 };
-    if (type === 'drag_scroll') return { id, type, trigger: btnAt(5), mode: 'sticky', divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
-    if (type === 'gesture_set') return { id, type, set: 0, trigger: btnAt(6), mode: 'sticky', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
+    if (type === 'drag_scroll') return { id, type, trigger: btnAt(5), mode: 'toggle', layerPin: nextFreeLayerPin(), divisorV: 32, divisorH: 40, horizontal: true, invert: false, wiggleToggle: false };
+    if (type === 'gesture_set') return { id, type, set: 0, trigger: btnAt(6), mode: 'toggle', slots: { ...emptySlots(), E: '0x0007004f', W: '0x00070050', N: '0x00070052', S: '0x00070051' } };
     if (type === 'wheel_chords') return { id, type, button: 0, slots: emptySlots() };
     if (type === 'shake_action') return { id, type, action: '0xfff10001', sticky: true };
     if (type === 'os_shortcut') return { id, type, trigger: btnAt(3), action: 'copy', os: 'inherit' };
@@ -1080,7 +1114,47 @@ function normalizeBehaviors() {
         if (b.type === 'chord_set') {
             b.members = profile.buttons.map((x) => x.source).filter((src) => b.chords.some((c) => c.members.includes(src)));
         }
+        // Cancellable toggles cancel on ANY current-profile button, so the
+        // list follows the active profile rather than being frozen at
+        // creation time.
+        if ((b.type === 'drag_scroll' || b.type === 'gesture_set') && b.mode === 'toggle') {
+            b.cancelSources = profile.buttons.map((x) => x.source);
+        }
+        if (b.type === 'drag_scroll' && !b.layerPin) {
+            b.layerPin = nextFreeLayerPin();
+        }
     }
+}
+
+// Stable layer for behaviors whose activation is assignable in the key
+// editor (the usage must not move between compiles).
+function nextFreeLayerPin() {
+    const used = new Set(project.behaviors.map((b) => b.layerPin).filter(Boolean));
+    for (let L = 7; L >= 1; L--) {
+        if (!used.has(L)) return L;
+    }
+    return null;  // out of layers; compile will surface the error
+}
+
+// The picker's "Modes" category: activation targets for behaviors that can
+// be driven from the key editor. Assigning one to a Tap row wires the
+// behavior's cancellable toggle; to a Hold row it's a plain level mapping
+// (momentary, instant engage).
+function modeEntries() {
+    const out = [];
+    for (const b of project.behaviors) {
+        if (b.enabled === false) continue;
+        if (b.type === 'drag_scroll' && b.layerPin) {
+            out.push({ usage: layerUsage(b.layerPin), label: 'Drag scroll', behavior: b });
+        } else if (b.type === 'gesture_set') {
+            out.push({ usage: pfxGestureSetActiveUsage(b.set), label: 'Gestures ' + (b.set + 1), behavior: b });
+        }
+    }
+    return out;
+}
+
+function modeEntryFor(usage) {
+    return modeEntries().find((m) => m.usage === usage) || null;
 }
 
 function renderBehaviors() {
@@ -1167,14 +1241,14 @@ function directionSlotFields(b, labelPrefix) {
 function dragScrollBody(b) {
     const rows = [
         field('Trigger', sourceButton(b.trigger, 'Drag scroll trigger', (u) => { b.trigger = u; renderBehaviors(); })),
-        field('Mode', selectFrom([['sticky', 'Toggle (sticky tap)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
+        field('Mode', selectFrom([['toggle', 'Toggle — any click cancels'], ['sticky', 'Toggle (sticky, no cancel)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
         field('Vertical divisor', ...slider(1, 64, 1, b.divisorV, (v) => String(v), (v) => { b.divisorV = v; })),
         field('Horizontal', flagBox('Scroll sideways too', b.horizontal, (v) => { b.horizontal = v; renderBehaviors(); })),
     ];
     if (b.horizontal) rows.push(field('Horizontal divisor', ...slider(1, 64, 1, b.divisorH, (v) => String(v), (v) => { b.divisorH = v; })));
     rows.push(field('Invert', flagBox('Reverse scroll direction', b.invert, (v) => { b.invert = v; })));
     rows.push(field('Shake toggle', flagBox('Shake the pointer to toggle (fork firmware)', b.wiggleToggle, (v) => { b.wiggleToggle = v; })));
-    rows.push(el('div', { class: 'bcaption', text: 'Pointer motion becomes the scroll wheel while active. Runs on stock firmware (1 spare layer + 3 mappings); the shake toggle needs the Flask-parity fork.' }));
+    rows.push(el('div', { class: 'bcaption', text: 'Pointer motion becomes the scroll wheel while active. In Toggle mode any other button press cancels it. Also assignable per-button: pick “Drag scroll” from the Modes category in the key editor (Tap = toggle, Hold = momentary). Stock firmware; the shake toggle needs the fork.' }));
     return rows;
 }
 
@@ -1182,7 +1256,7 @@ function gestureSetBody(b) {
     return [
         field('Set', selectFrom([0, 1, 2, 3, 4, 5, 6, 7].map((i) => [String(i), 'Set ' + (i + 1)]), String(b.set), (v) => { b.set = parseInt(v, 10); })),
         field('Trigger', sourceButton(b.trigger, 'Gesture set trigger', (u) => { b.trigger = u; renderBehaviors(); })),
-        field('Mode', selectFrom([['sticky', 'Toggle (sticky tap)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
+        field('Mode', selectFrom([['toggle', 'Toggle — any click cancels'], ['sticky', 'Toggle (sticky, no cancel)'], ['hold', 'Hold (momentary)']], b.mode, (v) => { b.mode = v; })),
         ...directionSlotFields(b, 'Gesture'),
         el('div', { class: 'bcaption', text: 'While the set is active pointer motion stops moving the cursor; each ratchet step of travel fires the key for its direction (empty diagonals fall back to the nearest cardinal). Ratchet distance is tuned in the Pointer tab. Needs the Flask-parity fork firmware.' }),
     ];
@@ -1739,7 +1813,8 @@ async function hudTick() {
 function applyPfxMaster() {
     if (!pointerFx) return;
     let needs = (pointerFx.flags & PFX_EFFECT_FLAGS) != 0 ||
-        (pointerFx.cursor_gain != null && pointerFx.cursor_gain != 1000);
+        (pointerFx.cursor_gain != null && pointerFx.cursor_gain != 1000) ||
+        (pointerFx.tilt_debounce != null && pointerFx.tilt_debounce > 0);
     if (!needs) {
         try {
             needs = compileProject(project).mappings.some((m) =>
@@ -1804,6 +1879,7 @@ function renderPointer() {
 
     f.append(h('Pointer speed'));
     f.append(pfxSlider('Pointer speed', 'Software “DPI”: scales all cursor movement. The device’s real sensor CPI is set on the device itself (hardware switch or its own software).', 'cursor_gain', 100, 4000, 50, (v) => (v / 10).toFixed(0) + '%'));
+    f.append(pfxSlider('Tilt debounce', 'Tilt wheels auto-repeat while held, firing tilt mappings 2-3 times per flick. Nonzero: only the first detent passes until the tilt rests this long (or reverses). 0 = off.', 'tilt_debounce', 0, 500, 10, (v) => v ? v + ' ms' : 'off'));
 
     f.append(h('Acceleration'));
     f.append(pfxToggle('Acceleration', 'Sigmoid gain curve on cursor speed (ported from Flask/pd_accel).', PFX_FLAG_ACCEL));
@@ -1838,7 +1914,7 @@ function renderPointer() {
     f.append(pfxSlider('Speed scale', 'Global autoscroll speed (%).', 'asc_speed', 25, 400, 5, (v) => v + '%'));
     f.append(pfxSlider('Jog deadzone', 'Ball deflection (counts) before jog scrolling starts.', 'asc_deadzone', 0, 200, 5, String));
     f.append(pfxSlider('Jog range', 'Deflection (counts) for maximum jog speed.', 'asc_range', 50, 2000, 25, String));
-    f.append(el('div', { class: 'desc', text: 'Map buttons to “Autoscroll jog / speed + / speed − / stop” in the Keymap tab (Pointer FX category) to drive autoscroll.' }));
+    f.append(el('div', { class: 'desc', text: 'Map buttons to “Autoscroll jog / speed + / speed − / stop” in the Keymap tab (Pointer FX category). While stepped autoscroll runs, the scroll wheel steps its speed (through zero = direction flip, landing on zero = stop), and any other button press cancels it. Needs the 2026-08-06+ firmware.' }));
 
     f.append(el('div', { style: 'display:flex;gap:8px;margin-top:18px' },
         el('button', { class: 'btn', text: 'Re-read from device', onclick: async () => { try { pointerFx = await dev.loadPointerFx(); renderPointer(); } catch (e) { showNotice(errMsg(e)); } } }),

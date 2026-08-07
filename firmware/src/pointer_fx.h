@@ -76,6 +76,12 @@ struct __attribute__((packed)) pointer_fx_config_t {
     // v101: software pointer speed ("DPI"), pure output gain applied after
     // accel — the attached device's real sensor CPI can't be commanded.
     uint16_t cursor_gain_mil;  // x1000, 100..4000, 1000 = unchanged
+    // Tilt wheels auto-repeat deltas while held (relative HID has no release
+    // event), so a single finger tilt fires mapped outputs 2-3 times. With
+    // this nonzero, only the first detent per gesture passes (clamped to
+    // +/-1); repeats are swallowed until the tilt goes quiet for this many
+    // ms or reverses direction. 0 = off (stock behaviour).
+    uint16_t tilt_debounce_ms;  // 0..500
 };
 
 // Size of the parameter block as persisted by config version 100 (before
@@ -99,7 +105,7 @@ struct __attribute__((packed)) pointer_fx_config_t {
 //     Pointer FX reverts to defaults (= everything off);
 //   - the sidecar has its own CRC so garbage from an oversized v18 blob can
 //     never masquerade as parameters.
-#define PFX_SIDECAR_MAGIC 0x31584650u  // "PFX1", little-endian
+#define PFX_SIDECAR_MAGIC 0x32584650u  // "PFX2", little-endian (bumped: tilt_debounce_ms grew the params struct)
 struct __attribute__((packed)) pfx_sidecar_t {
     uint32_t magic;
     pointer_fx_config_t params;
@@ -138,6 +144,14 @@ bool pfx_enabled();               // master gate; false => upstream code path
 void pfx_reset_runtime_state();   // on config change / reset_state()
 void pfx_cache_ptrs();            // re-resolve state-slot pointers
 bool pfx_is_activation_target(uint32_t usage);
+
+// Autoscroll cancel exemptions: buttons mapped to the autoscroll activation
+// usages must not cancel the very mode they control (a "speed +" tap would
+// otherwise reset the level every press). set_mapping_from_config() rebuilds
+// the list on every config change.
+void pfx_clear_asc_exempt_sources();
+void pfx_note_asc_exempt_source(uint32_t usage);
+bool pfx_is_asc_activation_target(uint32_t usage);
 
 // Per-tick hooks, in call order within process_mapping().
 void pfx_input_stage(uint64_t now_ms);

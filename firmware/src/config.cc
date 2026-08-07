@@ -26,7 +26,9 @@ static_assert(PFX_PAGE1_SIZE <= sizeof(((get_feature_t*) 0)->data),
     "GET_POINTER_FX page 1 overruns get_feature_t::data");
 // The sidecar loader memcpy()s this struct out of flash by layout; drift
 // must be deliberate (bump PFX_SIDECAR_MAGIC when it is).
-static_assert(sizeof(pointer_fx_config_t) == 36,
+// 36 -> 38 on 2026-08-06: tilt_debounce_ms added, magic bumped PFX1 -> PFX2
+// (old sidecars miss cleanly; params re-seed to defaults, one-time re-tune).
+static_assert(sizeof(pointer_fx_config_t) == 38,
     "pointer_fx_config_t layout changed - migrate the sidecar (new magic) before shipping");
 
 // Back on upstream's version: the persisted blob and the wire protocol are

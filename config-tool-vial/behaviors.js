@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=9';
+import { newMapping } from './model.js?v=10';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=9';
+} from './protocol.js?v=10';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -54,6 +54,13 @@ function makeAllocator(config) {
             }
             throw new Error('No free layer available for this behavior.');
         },
+        // Behaviors with a persistent layerPin (so their layer usage is
+        // stable across compiles and can be assigned in the key editor)
+        // claim it here instead of taking a dynamic slot.
+        reserve(L) {
+            usedLayers.add(L);
+            return L;
+        },
         channel() {
             if (nextChannel >= 8) throw new Error('Out of expression channels (max 8).');
             return nextChannel++;
@@ -88,6 +95,11 @@ export function compile(baseConfig, behaviors, projectOs = 'mac') {
     while (config.expressions.length < 8) config.expressions.push('');
     const alloc = makeAllocator(config);
     const ctx = { os: projectOs === 'pc' ? 'pc' : 'mac' };
+
+    // Pinned layers first, so no dynamic allocation can steal one.
+    for (const b of behaviors || []) {
+        if (b.enabled !== false && b.layerPin) alloc.reserve(b.layerPin);
+    }
 
     for (const b of behaviors || []) {
         if (b.enabled === false) continue;  // per-behavior kill switch
@@ -398,9 +410,37 @@ function compileScrollText(b, config, alloc) {
 // plays the role of Flask's divisor remainders); the trigger activates the
 // layer momentarily (hold) or sticky (toggle). Optionally the fork firmware's
 // wiggle pulse also toggles the layer — Flask's shake-to-toggle.
+// --- Cancellable toggle: the shared "mode latch" primitive ------------------
+// A press of `trigger` toggles `target` on/off (level); a press of any of
+// `cancelSources` while on forces it off — every capture mode (drag scroll,
+// gesture sets) cancels the moment you click something. One register, one
+// expression channel, one level mapping.
+export function compileCancellableToggle(config, alloc, trigger, target, cancelSources, layers) {
+    const L = alloc.reg();
+    const ch = alloc.channel();
+    const pe = (m) => `${m} input_state_binary ${m} prev_input_state_binary not mul`;
+    const cancels = cancelSources.filter((s) => s && s !== trigger);
+    const cancelPE = cancels.length
+        ? cancels.map((m, i) => pe(m) + (i > 0 ? ' bitwise_or' : '')).join(' ')
+        : '0';
+    config.expressions[ch] =
+        `${regRef(L)} recall ${pe(trigger)} add 2 mod ${cancelPE} not mul ${regRef(L)} store`;
+    config.mappings.push(newMapping(registerUsage(L), target, layers));
+    return L;
+}
+
 function compileDragScroll(b, config, alloc) {
-    const L = alloc.layer();
-    config.mappings.push({ ...newMapping(b.trigger, layerUsage(L), layersOf(b)), sticky: b.mode === 'sticky' });
+    const L = b.layerPin ? alloc.reserve(b.layerPin) : alloc.layer();
+    if (b.mode === 'toggle') {
+        // Tap to toggle; any other button press cancels (the drag-scroll
+        // answer to "I clicked something, stop scrolling my clicks away").
+        compileCancellableToggle(config, alloc, b.trigger, layerUsage(L),
+            (b.cancelSources || []), layersOf(b));
+    } else {
+        // 'sticky' (legacy latch, no cancel) or 'hold' (momentary — level
+        // mapping engages the instant the button goes down).
+        config.mappings.push({ ...newMapping(b.trigger, layerUsage(L), layersOf(b)), sticky: b.mode === 'sticky' });
+    }
     if (b.wiggleToggle) {
         config.mappings.push({ ...newMapping(PFX_WIGGLE_FIRED_USAGE, layerUsage(L), layersOf(b)), sticky: true });
     }
@@ -420,7 +460,13 @@ function compileDragScroll(b, config, alloc) {
 // pointer_fx module; this compiles to one activation mapping (sticky = toggle,
 // like Flask's GR#_TOG) plus one mapping per configured direction pulse.
 function compileGestureSet(b, config, alloc) {
-    config.mappings.push({ ...newMapping(b.trigger, pfxGestureSetActiveUsage(b.set), layersOf(b)), sticky: b.mode === 'sticky' });
+    if (b.mode === 'toggle') {
+        // Tap to latch the set; any other button press cancels the latch.
+        compileCancellableToggle(config, alloc, b.trigger, pfxGestureSetActiveUsage(b.set),
+            (b.cancelSources || []), layersOf(b));
+    } else {
+        config.mappings.push({ ...newMapping(b.trigger, pfxGestureSetActiveUsage(b.set), layersOf(b)), sticky: b.mode === 'sticky' });
+    }
     PFX_DIRECTIONS.forEach((dir, d) => {
         const out = b.slots && b.slots[dir];
         if (out) config.mappings.push(newMapping(pfxGestureFiredUsage(b.set, d), out, layersOf(b)));

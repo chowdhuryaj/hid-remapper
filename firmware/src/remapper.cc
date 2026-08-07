@@ -393,6 +393,7 @@ void set_mapping_from_config() {
 
     validate_expressions();
     invalidate_expr_state_ptr_cache();
+    pfx_clear_asc_exempt_sources();
 
     reverse_mapping.clear();
     reverse_mapping_macros.clear();
@@ -674,6 +675,13 @@ void set_mapping_from_config() {
                 .size = 1,
                 .bitpos = (uint16_t) ((target & 0xFFFF) - 1),
             });
+            if (pfx_is_asc_activation_target(target)) {
+                // These buttons control autoscroll; their presses must not
+                // trip the any-button cancel.
+                for (auto const& src : sources) {
+                    pfx_note_asc_exempt_source(src.usage);
+                }
+            }
         } else {
             bool handled = false;
             for (auto const& array_usage : our_array_range_usages) {

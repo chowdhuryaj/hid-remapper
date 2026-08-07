@@ -5,7 +5,7 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js?v=9';
+import crc32 from './crc.js?v=10';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
@@ -220,7 +220,7 @@ export async function readPointerFx(device) {
         await readConfigFeature(device, PFX_PAGE0_FIELDS);
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 1]]);
     const [gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold, ,
-        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold, cursor_gain] =
+        asc_speed, asc_deadzone, asc_range, chord_step, chord_hold, cursor_gain, tilt_debounce] =
         await readConfigFeature(device, v101 ? PFX_PAGE1_FIELDS_V101 : PFX_PAGE1_FIELDS);
     return {
         flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
@@ -228,6 +228,8 @@ export async function readPointerFx(device) {
         gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold,
         asc_speed, asc_deadzone, asc_range, chord_step, chord_hold,
         cursor_gain: cursor_gain == null ? 1000 : cursor_gain,
+        // gen-2 firmware only; older fork firmware leaves it undefined -> 0
+        tilt_debounce: tilt_debounce == null ? 0 : tilt_debounce,
     };
 }
 
@@ -247,6 +249,7 @@ export async function writePointerFx(device, p) {
         [UINT16, p.chord_step], [UINT16, p.chord_hold],
     ];
     if (v101) page1.push([UINT16, p.cursor_gain == null ? 1000 : p.cursor_gain]);
+    if (v101) page1.push([UINT16, p.tilt_debounce == null ? 0 : p.tilt_debounce]);
     await sendFeatureCommand(device, SET_POINTER_FX, page1);
 }
 
@@ -263,6 +266,7 @@ export function defaultPointerFx() {
         gesture_ratchet: 200, wiggle_switch: 150, wiggle_cooldown: 250, wiggle_threshold: 3,
         asc_speed: 100, asc_deadzone: 15, asc_range: 300, chord_step: 200, chord_hold: 200,
         cursor_gain: 1000,
+        tilt_debounce: 0,
     };
 }
 

@@ -6,7 +6,7 @@
 // engine-level outputs live (Nothing, Registers, Expressions) — these are how
 // the advanced behaviors feed their results back into the keymap.
 
-import usages from './usages.js?v=9';
+import usages from './usages.js?v=10';
 import {
     LAYERS_USAGE_PAGE, MACRO_USAGE_PAGE, REGISTER_USAGE_PAGE, EXPR_USAGE_PAGE,
     BUTTON_USAGE_PAGE, MIDI_USAGE_PAGE, POINTER_FX_USAGE_PAGE, NLAYERS,
@@ -14,7 +14,7 @@ import {
     pfxChordWheelFiredUsage,
     PFX_AUTOSCROLL_JOG_USAGE, PFX_AUTOSCROLL_UP_USAGE, PFX_AUTOSCROLL_DOWN_USAGE,
     PFX_AUTOSCROLL_STOP_USAGE, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS, PFX_WHEEL_DIRS,
-} from './protocol.js?v=9';
+} from './protocol.js?v=10';
 
 export const NMACROS_ASSIGNABLE = 32;
 const hexUsage = (base, n) => '0x' + ((base + n) >>> 0).toString(16).padStart(8, '0');
@@ -129,7 +129,13 @@ function pageOf(usage) {
 }
 
 // Human-readable name for a target usage (what a key is mapped to).
+// The key editor registers a resolver that names project-level mode targets
+// (e.g. a drag-scroll behavior's pinned layer) better than "Layer N".
+let modeNameResolver = null;
+export function setModeNameResolver(fn) { modeNameResolver = fn; }
+
 export function readableTargetName(usage, descriptorNumber = 0) {
+    if (modeNameResolver) { const n = modeNameResolver(usage); if (n) return n; }
     const table = usages[descriptorNumber] || usages[0];
     if (usage in table) {
         return table[usage].name;
