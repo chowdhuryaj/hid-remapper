@@ -2,24 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=11';
-import { migrateConfig } from './model.js?v=11';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=12';
+import { migrateConfig } from './model.js?v=12';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
     pfxGestureSetActiveUsage,
-} from './protocol.js?v=11';
+} from './protocol.js?v=12';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=11';
-import { usagePage } from './model.js?v=11';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=11';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=11';
+} from './profiles.js?v=12';
+import { usagePage } from './model.js?v=12';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=12';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=12';
 setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=11';
-import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=11';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=12';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=12';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -540,12 +540,72 @@ function truncate(s, n) {
     return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
+// Vial/QMK-style layout: uniform key caps in a spatial grid, no device
+// silhouette. Buttons and wheel/tilt direction keys are all first-class,
+// clickable, and show their current assignment. Coordinates in key units.
+function renderKeyGrid(lay) {
+    const U = 60, KEY = 52, PAD = 10;
+    const maxX = Math.max(...lay.keys.map((k) => k.x + (k.w || 1)));
+    const maxY = Math.max(...lay.keys.map((k) => k.y + (k.h || 1)));
+    const svg = svgEl('svg', { viewBox: `0 0 ${maxX * U + PAD * 2 - (U - KEY)} ${maxY * U + PAD * 2 - (U - KEY)}` });
+
+    const dirById = {};
+    for (const a of profile.axes || []) {
+        for (const d of a.dirs || []) if (d.dir) dirById[d.id] = { a, d };
+    }
+
+    for (const k of lay.keys) {
+        const x = PAD + k.x * U, y = PAD + k.y * U;
+        const w = (k.w || 1) * U - (U - KEY), h = (k.h || 1) * U - (U - KEY);
+        let label = '', cls = 'btnshape', title = '', onclick = null, isSel = false, assigned = false;
+        if (k.id) {
+            const btn = profile.buttons.find((b) => b.id === k.id);
+            if (!btn) continue;
+            const view = assignmentView(btn.source);
+            // A mode toggle owned by this button isn't a raw mapping — name
+            // it on the cap so the assignment is visible at a glance.
+            const toggled = project.behaviors.find((bb) => bb.mode === 'toggle' && bb.trigger === btn.source &&
+                (bb.type === 'drag_scroll' || bb.type === 'gesture_set'));
+            assigned = view.cls === 'advanced' || !!toggled;
+            isSel = !!(selected && selected.source === btn.source);
+            label = toggled ? (toggled.type === 'drag_scroll' ? 'Drag scroll' : 'Gestures ' + (toggled.set + 1))
+                : (view.cls === 'transparent' && btn.short) ? btn.short
+                : view.text.replace(/\s*\([^)]*\)\s*$/, '');
+            title = btn.label + ' — ' + (toggled ? label + ' (toggle)' : view.text);
+            onclick = () => { if (currentTab !== 'keymap') switchTab('keymap'); selectSlot(btn.source, btn.label); };
+        } else if (k.dir && dirById[k.dir]) {
+            const { a, d } = dirById[k.dir];
+            const axb = axisKeysFor(d.axis);
+            const cur = axb ? axb.outputs[d.dir > 0 ? 'pos' : 'neg'] : null;
+            assigned = !!cur;
+            isSel = !!(pickerTarget && pickerTarget.kind === 'axisdir' &&
+                pickerTarget.axis === d.axis && pickerTarget.sign === d.dir);
+            label = cur ? readableTargetName(cur, base().our_descriptor_number) : 'scroll';
+            title = d.label + ' — ' + (cur ? label : 'passthrough');
+            onclick = () => { if (currentTab !== 'keymap') switchTab('keymap'); selectAxisDir(a, d); };
+        } else {
+            continue;
+        }
+        const cx = x + w / 2;
+        svg.append(svgEl('rect', {
+            class: cls + (isSel ? ' sel' : '') + (assigned ? ' assigned' : ''),
+            x, y, width: w, height: h, rx: 9, onclick,
+        }, svgEl('title', { text: title })));
+        svg.append(svgEl('text', { class: 'tag', x: cx, y: y + h / 2 - 3, 'text-anchor': 'middle', text: k.tag }));
+        const budget = Math.max(4, Math.floor(w / 5.5));
+        if (label.length > budget && label.includes(' / ')) label = label.split(' / ')[0];
+        svg.append(svgEl('text', { class: 'lbl', x: cx, y: y + h / 2 + 11, 'text-anchor': 'middle', text: truncate(label, budget) }));
+    }
+    return svg;
+}
+
 function renderDiagram() {
     const host = $('diagram');
     if (!host) return;
     host.replaceChildren();
     const lay = profile.layout;
     if (!lay) return;
+    if (lay.keys) { host.append(renderKeyGrid(lay)); return; }
 
     const svg = svgEl('svg', { viewBox: lay.viewBox });
     const o = lay.outline;
@@ -705,6 +765,7 @@ function selectAxisDir(a, d) {
     $('keyoptions').replaceChildren();
     renderAxes();
     renderPicker();
+    renderDiagram();
 }
 
 function selectSlot(source, label) {
@@ -1006,6 +1067,12 @@ function renderCodes() {
 }
 
 function assign(usage) {
+    if (typeof usage === 'string' && usage.startsWith('new:')) {
+        const real = createModeBehavior(usage);
+        if (!real) return;
+        usage = real;
+        renderBehaviors();
+    }
     if (pickerTarget && pickerTarget.kind === 'callback') {
         pickerTarget.fn(usage === TRANSPARENT ? null : usage);
         return;
@@ -1014,6 +1081,7 @@ function assign(usage) {
         setAxisDir(pickerTarget.axis, pickerTarget.sign, usage === TRANSPARENT ? null : usage);
         renderAxes();
         renderBehaviors();
+        renderDiagram();
         return;
     }
     if (!selected) return;
@@ -1206,7 +1274,23 @@ function modeEntries() {
             out.push({ usage: pfxGestureSetActiveUsage(b.set), label: 'Gestures ' + (b.set + 1), behavior: b });
         }
     }
+    // Always offer drag scroll: assigning it creates the behavior on the
+    // spot (defaults; tune divisors on its Behaviors card afterwards).
+    if (!out.some((m) => m.label === 'Drag scroll')) {
+        out.push({ usage: 'new:drag_scroll', label: 'Drag scroll', create: true });
+    }
     return out;
+}
+
+// Materialize a picker-created mode: returns the real activation usage.
+function createModeBehavior(sentinel) {
+    if (sentinel !== 'new:drag_scroll') return null;
+    const b = { id: newBehaviorId(), type: 'drag_scroll', enabled: true,
+        layers: [0, 1, 2, 3, 4, 5, 6, 7], trigger: null, mode: 'toggle',
+        layerPin: nextFreeLayerPin(), divisorV: 32, divisorH: 40,
+        horizontal: true, invert: false, wiggleToggle: false, cancelSources: [] };
+    project.behaviors.push(b);
+    return layerUsage(b.layerPin);
 }
 
 function modeEntryFor(usage) {

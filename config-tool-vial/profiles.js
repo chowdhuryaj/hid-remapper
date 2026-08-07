@@ -98,9 +98,9 @@ export const CORSAIR_NIGHTSWORD = {
     name: 'Corsair Nightsword',
 
     buttons: [
-        { id: 'b1', label: 'Button 1', native: 'Left click', source: '0x00090001', hint: 'Main · left plate' },
-        { id: 'b2', label: 'Button 2', native: 'Right click', source: '0x00090002', hint: 'Main · right plate' },
-        { id: 'b3', label: 'Button 3', native: 'Middle / wheel click', source: '0x00090003', hint: 'Scroll-wheel click' },
+        { id: 'b1', label: 'Button 1', native: 'Left click', short: 'Left', source: '0x00090001', hint: 'Main · left plate' },
+        { id: 'b2', label: 'Button 2', native: 'Right click', short: 'Right', source: '0x00090002', hint: 'Main · right plate' },
+        { id: 'b3', label: 'Button 3', native: 'Middle / wheel click', short: 'Middle', source: '0x00090003', hint: 'Scroll-wheel click' },
         { id: 'b4', label: 'Button 4', native: 'Back', source: '0x00090004', hint: 'Thumb · rear side button' },
         { id: 'b5', label: 'Button 5', native: 'Forward', source: '0x00090005', hint: 'Thumb · front side button' },
         { id: 'sniper', label: 'Sniper', native: 'Grave ` (onboard mapping)', source: '0x00070035', hint: 'Left side · in front of the thumb pair' },
@@ -109,25 +109,27 @@ export const CORSAIR_NIGHTSWORD = {
         { id: 'ft2', label: 'Fingertip rear', native: 'End (onboard mapping)', source: '0x0007004d', hint: 'Index fingertip · behind front' },
     ],
 
-    // Top view, front (buttons/wheel) at top. Proportions follow the real
-    // body (~85 mm wide x 129 mm long => ~1:1.5): button plates cover the
-    // front ~40%, wheel between them, the fingertip pair on the LMB's left
-    // flank, and the thumb cluster mid-body. Physical order on the flank,
-    // front to rear: sniper, then Forward (B5), then Back (B4).
+    // Vial/QMK-style key grid: uniform key caps in a loose spatial echo of
+    // the hardware, no device silhouette. Coordinates are in key units
+    // (x, y, optional w/h). `id` = a profile button; `dir` = a wheel/tilt
+    // direction (assignable rows on the Keymap tab). Column story: fingertips
+    // and thumb cluster left, left plate, wheel column, right plate; tilt
+    // flanks the wheel-down key it sits beside physically.
     layout: {
-        viewBox: '0 0 400 500',
-        outline: { x: 50, y: 14, w: 300, h: 470, rx: 110 },
-        wheel: { x: 196, y: 46, w: 34, h: 68, rx: 12, label: 'Wheel' },
-        buttons: [
-            { id: 'ft1', x: 60, y: 42, w: 44, h: 36, tag: 'F1' },
-            { id: 'ft2', x: 60, y: 84, w: 44, h: 36, tag: 'F2' },
-            { id: 'b1', x: 112, y: 30, w: 78, h: 114, tag: 'B1' },
-            { id: 'b3', x: 196, y: 46, w: 34, h: 68, tag: 'B3', isWheelClick: true },
-            { id: 'bw', x: 196, y: 120, w: 34, h: 34, tag: 'BW' },
-            { id: 'b2', x: 236, y: 30, w: 82, h: 114, tag: 'B2' },
-            { id: 'sniper', x: 52, y: 176, w: 56, h: 38, tag: 'SNP' },
-            { id: 'b5', x: 52, y: 220, w: 56, h: 38, tag: 'B5' },
-            { id: 'b4', x: 52, y: 264, w: 56, h: 38, tag: 'B4' },
+        keys: [
+            { id: 'ft1', x: 0, y: 0, tag: 'F1' },
+            { id: 'ft2', x: 0, y: 1, tag: 'F2' },
+            { id: 'b1', x: 1, y: 0, h: 2, tag: 'B1' },
+            { dir: 'wh_up', x: 2, y: 0, tag: 'W↑' },
+            { id: 'b3', x: 2, y: 1, tag: 'B3' },
+            { id: 'b2', x: 3, y: 0, h: 2, tag: 'B2' },
+            { dir: 'tilt_l', x: 1, y: 2, tag: 'T←' },
+            { dir: 'wh_dn', x: 2, y: 2, tag: 'W↓' },
+            { dir: 'tilt_r', x: 3, y: 2, tag: 'T→' },
+            { id: 'bw', x: 2, y: 3, tag: 'BW' },
+            { id: 'sniper', x: 0, y: 2.35, tag: 'SNP' },
+            { id: 'b5', x: 0, y: 3.35, tag: 'B5' },
+            { id: 'b4', x: 0, y: 4.35, tag: 'B4' },
         ],
     },
 

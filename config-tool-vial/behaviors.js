@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=11';
+import { newMapping } from './model.js?v=12';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=11';
+} from './protocol.js?v=12';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -457,7 +457,10 @@ export function compileCancellableToggle(config, alloc, trigger, target, cancelS
 
 function compileDragScroll(b, config, alloc) {
     const L = b.layerPin ? alloc.reserve(b.layerPin) : alloc.layer();
-    if (b.mode === 'toggle') {
+    if (!b.trigger) {
+        // Created from the key editor: activation comes only from mappings
+        // that target the pinned layer (Tap = toggle, Hold = momentary).
+    } else if (b.mode === 'toggle') {
         // Tap to toggle; any other button press cancels (the drag-scroll
         // answer to "I clicked something, stop scrolling my clicks away").
         compileCancellableToggle(config, alloc, b.trigger, layerUsage(L),
