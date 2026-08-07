@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=10';
+import { newMapping } from './model.js?v=11';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=10';
+} from './protocol.js?v=11';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];
@@ -115,6 +115,7 @@ export function compile(baseConfig, behaviors, projectOs = 'mac') {
             case 'shake_action': compileShakeAction(b, config, alloc); break;
             case 'os_shortcut': compileOsShortcut(b, config, alloc, ctx); break;
             case 'leader_seq': compileLeader(b, config, alloc); break;
+            case 'axis_keys': compileAxisKeys(b, config, alloc); break;
             default: throw new Error('Unknown behavior type: ' + b.type);
         }
     }
@@ -272,6 +273,31 @@ function compileChordDance(b, c, config, alloc) {
     config.mappings.push(newMapping(registerUsage(F1), c.output, layersOf(b)));
     if (c.double) config.mappings.push(newMapping(registerUsage(F2), c.double, layersOf(b)));
     if (c.hold) config.mappings.push(newMapping(registerUsage(HOLD), c.hold, layersOf(b)));
+}
+
+// --- Wheel / tilt directions as plain buttons -------------------------------
+// One auto-managed behavior per axis: {axis, outputs: {pos, neg}}. The delta
+// splits by sign into per-tick detent counts held in registers; an assigned
+// direction's register drives its key (a one-tick level = one press per
+// detent), the unassigned direction re-emits its motion so normal scrolling
+// keeps working there. The raw axis is swallowed once anything is assigned.
+// Tilt gets one event per physical flick when the firmware tilt debounce is
+// on — that's the upstream half of "tilt as a button".
+function compileAxisKeys(b, config, alloc) {
+    const pos = b.outputs && b.outputs.pos;
+    const neg = b.outputs && b.outputs.neg;
+    if (!pos && !neg) return;
+    const ch = alloc.channel();
+    const rPos = alloc.reg(), rNeg = alloc.reg();
+    config.expressions[ch] = [
+        `${b.axis} input_state relu ${regRef(rPos)} store`,
+        `0 ${b.axis} input_state sub relu ${regRef(rNeg)} store`,
+    ].join(' eol ');
+    config.mappings.push(newMapping(b.axis, NOTHING, layersOf(b)));  // swallow the raw axis
+    if (pos) config.mappings.push(newMapping(registerUsage(rPos), pos, layersOf(b)));
+    else config.mappings.push({ ...newMapping(registerUsage(rPos), b.axis, layersOf(b)), scaling: 1000 });
+    if (neg) config.mappings.push(newMapping(registerUsage(rNeg), neg, layersOf(b)));
+    else config.mappings.push({ ...newMapping(registerUsage(rNeg), b.axis, layersOf(b)), scaling: -1000 });
 }
 
 // --- Leader key sequences ---------------------------------------------------

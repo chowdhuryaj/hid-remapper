@@ -2,24 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=10';
-import { migrateConfig } from './model.js?v=10';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=11';
+import { migrateConfig } from './model.js?v=11';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
     pfxGestureSetActiveUsage,
-} from './protocol.js?v=10';
+} from './protocol.js?v=11';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=10';
-import { usagePage } from './model.js?v=10';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=10';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=10';
+} from './profiles.js?v=11';
+import { usagePage } from './model.js?v=11';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=11';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=11';
 setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=10';
-import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=10';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=11';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=11';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -646,15 +646,65 @@ function renderButtons() {
     renderDiagram();
 }
 
+// The auto-managed per-axis splitter behavior (wheel/tilt directions as
+// buttons). Created on first assignment, removed when both directions clear.
+function axisKeysFor(axis) {
+    return project.behaviors.find((b) => b.type === 'axis_keys' && b.axis === axis);
+}
+
+function setAxisDir(axis, sign, usage) {
+    let b = axisKeysFor(axis);
+    if (!b && usage) {
+        b = { id: newBehaviorId(), type: 'axis_keys', auto: true, enabled: true,
+            layers: [0, 1, 2, 3, 4, 5, 6, 7], axis, outputs: {} };
+        project.behaviors.push(b);
+    }
+    if (!b) return;
+    b.outputs[sign > 0 ? 'pos' : 'neg'] = usage || null;
+    if (!b.outputs.pos && !b.outputs.neg) {
+        project.behaviors = project.behaviors.filter((x) => x !== b);
+    }
+    scheduleApply();
+    scheduleSnapshot();
+}
+
 function renderAxes() {
     const list = $('axes');
     list.replaceChildren();
     for (const a of profile.axes) {
-        list.append(el('div', { class: 'row static', onclick: () => switchTab('behaviors') },
-            el('div', { class: 'id' }, el('div', { class: 'name', text: a.label }), el('div', { class: 'hint', text: a.hint })),
-            el('div', { class: 'native', text: 'Default: ' + a.native }),
-            el('span', { class: 'badge', text: 'Behaviors tab' })));
+        // Cursor motion is programmed via behaviors (drag scroll, gestures);
+        // wheel/tilt directions assign directly, like buttons.
+        if (a.kind === 'cursor' || !a.dirs || !a.dirs.some((d) => d.dir)) {
+            list.append(el('div', { class: 'row static', onclick: () => switchTab('behaviors') },
+                el('div', { class: 'id' }, el('div', { class: 'name', text: a.label }), el('div', { class: 'hint', text: a.hint })),
+                el('div', { class: 'native', text: 'Default: ' + a.native }),
+                el('span', { class: 'badge', text: 'Behaviors tab' })));
+            continue;
+        }
+        for (const d of a.dirs) {
+            const b = axisKeysFor(d.axis);
+            const cur = b ? b.outputs[d.dir > 0 ? 'pos' : 'neg'] : null;
+            const isSel = pickerTarget && pickerTarget.kind === 'axisdir' &&
+                pickerTarget.axis === d.axis && pickerTarget.sign === d.dir;
+            list.append(el('div', { class: 'row' + (isSel ? ' sel' : '') , onclick: () => selectAxisDir(a, d) },
+                el('div', { class: 'id' }, el('div', { class: 'name', text: d.label }), el('div', { class: 'hint', text: a.hint })),
+                el('div', { class: 'native', text: 'Default: ' + (d.native || d.label) }),
+                el('div', { class: 'assign' + (cur ? ' advanced' : ' transparent'),
+                    text: cur ? readableTargetName(cur, base().our_descriptor_number) : 'passthrough' })));
+        }
     }
+}
+
+function selectAxisDir(a, d) {
+    selected = null;
+    focusedAction = null;
+    pickerTarget = { kind: 'axisdir', axis: d.axis, sign: d.dir, label: d.label };
+    $('picker').classList.remove('disabled');
+    $('pickfor').textContent = '— ' + d.label;
+    $('keyoptions').classList.add('hidden');
+    $('keyoptions').replaceChildren();
+    renderAxes();
+    renderPicker();
 }
 
 function selectSlot(source, label) {
@@ -960,6 +1010,12 @@ function assign(usage) {
         pickerTarget.fn(usage === TRANSPARENT ? null : usage);
         return;
     }
+    if (pickerTarget && pickerTarget.kind === 'axisdir') {
+        setAxisDir(pickerTarget.axis, pickerTarget.sign, usage === TRANSPARENT ? null : usage);
+        renderAxes();
+        renderBehaviors();
+        return;
+    }
     if (!selected) return;
     if (pickerTarget && pickerTarget.kind === 'plan') {
         const p = getButtonPlan(selected.source);
@@ -1194,7 +1250,7 @@ function behaviorCard(b) {
         dpi_shift: 'DPI shift', cursor_keys: 'Cursor → keys', chord_set: 'Chord',
         scroll_text: 'Scroll-wheel text', tap_dance: 'Tap dance',
         drag_scroll: 'Drag scroll', gesture_set: 'Gestures', wheel_chords: 'Mouse chords', shake_action: 'Shake action',
-        os_shortcut: 'OS shortcut', leader_seq: 'Leader key',
+        os_shortcut: 'OS shortcut', leader_seq: 'Leader key', axis_keys: 'Wheel / tilt keys',
     };
     const enabled = b.enabled !== false;
     const en = el('input', { type: 'checkbox' });
@@ -1227,6 +1283,7 @@ function behaviorCard(b) {
     else if (b.type === 'shake_action') body.append(...shakeActionBody(b));
     else if (b.type === 'os_shortcut') body.append(...osShortcutBody(b));
     else if (b.type === 'leader_seq') body.append(...leaderBody(b));
+    else if (b.type === 'axis_keys') body.append(...axisKeysBody(b));
     body.insertBefore(layerField(b), body.firstChild);
     return el('div', { class: 'bcard' + (enabled ? '' : ' offb'), 'data-bid': b.id }, head, body);
 }
@@ -1344,6 +1401,15 @@ function chordBody(b) {
     rows.push(field('Window', ...slider(100, 500, 10, b.window || 200, (v) => v + ' ms', (v) => { b.window = v; })));
     rows.push(el('div', { class: 'bcaption', text: 'Press 2–4 buttons together. Plain rows fire on release (1 expression + 1 mapping each). Rows with Hold / Double-tap stages judge all-held-together and cost ~6 registers each — the tap output then waits out the window, like tap dance.' }));
     return rows;
+}
+
+function axisKeysBody(b) {
+    const axisName = b.axis === '0x00010038' ? 'Scroll wheel' : 'Tilt';
+    return [
+        field(axisName + ' +', keyButton(b.outputs.pos, 'Positive direction key', (u) => { b.outputs.pos = u; renderBehaviors(); renderAxes(); })),
+        field(axisName + ' −', keyButton(b.outputs.neg, 'Negative direction key', (u) => { b.outputs.neg = u; renderBehaviors(); renderAxes(); })),
+        el('div', { class: 'bcaption', text: 'Managed from the Keymap tab (wheel/tilt rows). One key press per detent; an unassigned direction still scrolls normally. For tilt, turn on the Pointer tab’s tilt debounce so one flick = one press.' }),
+    ];
 }
 
 function leaderBody(b) {

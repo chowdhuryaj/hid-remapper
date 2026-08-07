@@ -143,9 +143,11 @@ export const CORSAIR_NIGHTSWORD = {
         {
             id: 'wheel', label: 'Scroll wheel', native: 'Wheel up / down', kind: 'scroll',
             axis: '0x00010038', hint: 'Main scroll wheel',
+            // Standard mouse polarity: wheel up = positive (the Elecom thumb
+            // wheel profile is inverted; don't copy dirs between them).
             dirs: [
-                { id: 'wh_ccw', label: 'Wheel up', axis: '0x00010038', dir: -1, native: 'Wheel up' },
-                { id: 'wh_cw', label: 'Wheel down', axis: '0x00010038', dir: +1, native: 'Wheel down' },
+                { id: 'wh_up', label: 'Wheel up', axis: '0x00010038', dir: +1, native: 'Wheel up' },
+                { id: 'wh_dn', label: 'Wheel down', axis: '0x00010038', dir: -1, native: 'Wheel down' },
             ],
         },
         {
