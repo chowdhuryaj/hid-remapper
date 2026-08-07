@@ -5,7 +5,7 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js?v=14';
+import crc32 from './crc.js?v=15';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
@@ -287,11 +287,45 @@ export async function readForkStatus(device) {
 }
 
 // Diagnostics counters (GET_POINTER_FX page 3, sidecar-era firmware).
+// The crash record is sticky in the firmware: it survives our own reboots and
+// clears only on a power cycle, so it can actually be read after the fact.
+// Older firmware sends zeros in the tail fields, which read as "no crash".
 export async function readDiagnostics(device) {
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 3]]);
-    const [hidItfCount, tracking, reportsIn, ticks, maxTickUs, umounts, crashCode] =
-        await readConfigFeature(device, [UINT8, UINT8, UINT32, UINT32, UINT32, UINT32, UINT32]);
-    return { hidItfCount, tracking: !!tracking, reportsIn, ticks, maxTickUs, umounts, crashCode };
+    const [hidItfCount, tracking, reportsIn, ticks, maxTickUs, umounts, crashCode,
+        faultPc, crashFlags, crashCount] =
+        await readConfigFeature(device,
+            [UINT8, UINT8, UINT32, UINT32, UINT32, UINT32, UINT32, UINT32, UINT8, UINT8]);
+    return { hidItfCount, tracking: !!tracking, reportsIn, ticks, maxTickUs, umounts, crashCode,
+        faultPc, crashCount,
+        hardFault: !!(crashFlags & 0x01),     // faultPc is meaningful
+        stackOverflow: !!(crashFlags & 0x02), // faulted at/below the stack bottom
+        stickyCrash: !!(crashFlags & 0x04) }; // from an earlier boot this power session
+}
+
+// Human-readable crash point. Mirrors the DIAG_BC codes in diagnostics.h.
+const CONFIG_COMMAND_NAMES = {
+    1: 'RESET_INTO_BOOTSEL', 2: 'SET_CONFIG', 3: 'GET_CONFIG', 4: 'CLEAR_MAPPING',
+    5: 'ADD_MAPPING', 6: 'GET_MAPPING', 7: 'PERSIST_CONFIG', 8: 'GET_OUR_USAGES',
+    9: 'GET_THEIR_USAGES', 10: 'SUSPEND', 11: 'RESUME', 12: 'PAIR_NEW_DEVICE',
+    13: 'CLEAR_BONDS', 14: 'FLASH_B_SIDE', 15: 'CLEAR_MACROS', 16: 'APPEND_TO_MACRO',
+    17: 'GET_MACRO', 19: 'CLEAR_EXPRESSIONS', 20: 'APPEND_TO_EXPRESSION',
+    21: 'GET_EXPRESSION', 22: 'SET_MONITOR_ENABLED', 23: 'CLEAR_QUIRKS', 24: 'ADD_QUIRK',
+    25: 'GET_QUIRK', 26: 'GET_POINTER_FX', 27: 'SET_POINTER_FX', 28: 'REBOOT',
+};
+const CRASH_PHASES = {
+    0x0301: 'building the mapping table', 0x0302: 'just after building the mapping table',
+    0x0311: 'erasing/writing flash (save)', 0x0312: 'just after writing flash (save)',
+    0x0321: 'parsing our descriptor', 0x0322: 'just after parsing our descriptor',
+    0x0331: 'processing the device descriptor', 0x0332: 'just after the device descriptor',
+};
+export function crashPointLabel(code) {
+    if (!code) return 'unknown (no breadcrumb)';
+    if (CRASH_PHASES[code]) return CRASH_PHASES[code];
+    const cmd = CONFIG_COMMAND_NAMES[code & 0xff] || ('command ' + (code & 0xff));
+    if ((code & 0xff00) === 0x0100) return 'handling ' + cmd;
+    if ((code & 0xff00) === 0x0200) return 'after ' + cmd + ' (idle main loop)';
+    return 'unrecognized phase';
 }
 
 // Pointer FX usage helpers (hex-string usages, GUI convention).

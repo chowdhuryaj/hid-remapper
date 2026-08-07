@@ -4,9 +4,9 @@
 // reverse-engineered from a compiled device config. Saving to the device
 // compiles base + behaviors together (see behaviors.compile).
 
-import { defaultConfig, migrateConfig } from './model.js?v=14';
-import { compile } from './behaviors.js?v=14';
-import { defaultProfile } from './profiles.js?v=14';
+import { defaultConfig, migrateConfig } from './model.js?v=15';
+import { compile } from './behaviors.js?v=15';
+import { defaultProfile } from './profiles.js?v=15';
 
 export const PROJECT_FORMAT = 1;
 

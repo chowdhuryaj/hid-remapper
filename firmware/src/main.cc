@@ -226,6 +226,123 @@ void reset_to_bootloader() {
 // normal power cycle restores the saved config.
 #define SAFE_MODE_MAGIC 0x53414645u  // "SAFE"
 
+// --- crash forensics ------------------------------------------------------
+//
+// Watchdog scratch registers survive a watchdog reset (but not a power
+// cycle), so they carry the evidence across the reboot. scratch[4] belongs to
+// the SDK — watchdog_enable() stamps its own magic there on every call, which
+// is why breadcrumbs must NOT live in it — and scratch[6]/[7] belong to the
+// bootrom. What this fork uses:
+//
+//   scratch[0]  intentional-reboot marker (safe mode / REBOOT command)
+//   scratch[1]  live breadcrumb: the phase code currently executing
+//   scratch[2]  crash record, sticky until the next power cycle:
+//                 bits 31..16  phase code at the time of the crash
+//                 bit  15      consumed (already read by a later boot)
+//                 bits 14..9   crash count since power-on (saturates at 63)
+//                 bit  8       a hard fault produced this record
+//                 bits  7..0   DIAG_REC_MAGIC8
+//   scratch[3]  faulting PC (hard faults only)
+//   scratch[5]  MSP at the fault (hard faults only). The bootrom reads
+//               scratch[5] only when scratch[4] holds ITS magic (0xb007c0d3),
+//               which nothing here ever writes.
+#define CLEAN_REBOOT_MAGIC 0x434c4e52u  // "CLNR" — we asked for this reset
+#define DIAG_REC_MAGIC8 0xa7u
+
+// scratch[0] as we found it, before the safe-mode check clears it.
+static uint32_t boot_marker = 0;
+
+// M0+ has no fault status registers: the exception frame is all the
+// information there is. Record the stacked PC and reset immediately —
+// spinning here until the watchdog fires works too, but loses the PC.
+// Both halves of the handler live in RAM: remapper_single.ld keeps this
+// project's own code in flash, and a fault raised while flash is being
+// erased (XIP off) could not fetch a flash-resident handler at all.
+extern "C" void __no_inline_not_in_flash_func(hardfault_record)(uint32_t pc, uint32_t sp) {
+    uint32_t rec = watchdog_hw->scratch[2];
+    uint32_t count =
+        (watchdog_hw->reason && ((rec & 0xff) == DIAG_REC_MAGIC8)) ? ((rec >> 9) & 0x3f) : 0;
+    if (count < 63) {
+        count++;
+    }
+    watchdog_hw->scratch[3] = pc;
+    watchdog_hw->scratch[5] = sp;
+    watchdog_hw->scratch[2] =
+        ((watchdog_hw->scratch[1] & 0xffff) << 16) | (count << 9) | (1u << 8) | DIAG_REC_MAGIC8;
+    watchdog_hw->scratch[0] = 0;  // a fault is never an intentional reboot
+    watchdog_reboot(0, 0, 1);
+    while (true) {
+    }
+}
+
+// Naked so the exception frame is still exactly where the hardware left it.
+// This build has no RTOS and no core1, so the frame is always at MSP.
+extern "C" void __attribute__((naked)) __no_inline_not_in_flash_func(isr_hardfault)(void) {
+    __asm volatile(
+        "mrs r0, msp         \n"
+        "ldr r1, [r0, #24]   \n"  // stacked PC
+        "mov r2, r0          \n"
+        "mov r0, r1          \n"  // arg 0 = pc
+        "mov r1, r2          \n"  // arg 1 = frame base (MSP at fault)
+        "bl  hardfault_record\n");
+}
+
+// Runs once at boot, BEFORE the watchdog is re-armed.
+static void diag_boot_forensics() {
+    extern char __StackBottom;
+    const bool intentional =
+        (boot_marker == SAFE_MODE_MAGIC) || (boot_marker == CLEAN_REBOOT_MAGIC);
+    const bool wd = watchdog_caused_reboot();
+    uint32_t rec = watchdog_hw->scratch[2];
+    // watchdog_hw->reason is cleared only by a real power-on/RUN reset, so it
+    // also gates the record against garbage scratch on a cold boot.
+    bool rec_valid = wd && ((rec & 0xff) == DIAG_REC_MAGIC8);
+    const bool fault_fresh = rec_valid && (rec & (1u << 8)) && !(rec & (1u << 15));
+    const bool crashed_now = wd && !intentional;
+
+    if (crashed_now && !fault_fresh) {
+        // A hang rather than a fault: no handler ran, so the record has to be
+        // built here out of the last breadcrumb.
+        uint32_t count = rec_valid ? ((rec >> 9) & 0x3f) : 0;
+        if (count < 63) {
+            count++;
+        }
+        rec = ((watchdog_hw->scratch[1] & 0xffff) << 16) | (count << 9) | DIAG_REC_MAGIC8;
+        watchdog_hw->scratch[2] = rec;
+        watchdog_hw->scratch[3] = 0;
+        watchdog_hw->scratch[5] = 0;
+        rec_valid = true;
+    }
+
+    if (rec_valid) {
+        diag_watchdog_boot = true;
+        diag_crash_code = (rec >> 16) & 0xffff;
+        diag_crash_count = (rec >> 9) & 0x3f;
+        diag_crash_flags = crashed_now ? 0 : DIAG_CRASH_FLAG_STICKY;
+        if (rec & (1u << 8)) {
+            diag_fault_pc = watchdog_hw->scratch[3];
+            diag_crash_flags |= DIAG_CRASH_FLAG_FAULT;
+            // Stack overflow (with PICO_USE_STACK_GUARDS, the guard region
+            // faults on the way down): the frame sits at or below the bottom
+            // of the core-0 stack instead of inside it.
+            if (watchdog_hw->scratch[5] <= (uint32_t) &__StackBottom) {
+                diag_crash_flags |= DIAG_CRASH_FLAG_STACK;
+            }
+        }
+        // Mark consumed so a later boot can tell a fresh fault from this one.
+        watchdog_hw->scratch[2] = rec | (1u << 15);
+    } else {
+        // No crash to report: leave nothing behind that a later boot could
+        // mistake for one (scratch survives resets, not just ours).
+        watchdog_hw->scratch[2] = 0;
+        watchdog_hw->scratch[3] = 0;
+        watchdog_hw->scratch[5] = 0;
+    }
+
+    watchdog_hw->scratch[1] = 0;
+    diag_breadcrumb = [](uint32_t code) { watchdog_hw->scratch[1] = code; };
+}
+
 // Reads the BOOTSEL button state. Standard RP2040 technique: briefly float
 // the flash CS line and sample it. Safe here because this build runs
 // entirely from RAM (copy_to_ram) so nothing touches flash concurrently.
@@ -325,8 +442,9 @@ int main() {
     // Safe-mode handshake left by safe_mode_button_task() before its reboot.
     // Scratch registers survive a watchdog reboot but not a power cycle, so
     // unplugging always returns to the saved config.
-    if (watchdog_caused_reboot() && (watchdog_hw->scratch[0] == SAFE_MODE_MAGIC)) {
-        watchdog_hw->scratch[0] = 0;
+    boot_marker = watchdog_hw->scratch[0];
+    watchdog_hw->scratch[0] = 0;
+    if (watchdog_caused_reboot() && (boot_marker == SAFE_MODE_MAGIC)) {
         diag_safe_mode = true;
     }
 #endif
@@ -345,16 +463,12 @@ int main() {
     tusb_init();
     stdio_init_all();
 #ifdef REMAPPER_SINGLE_EXTRAS
-    // Boot forensics BEFORE re-arming: did the watchdog cause this boot?
-    // Surfaced on the fork status page so "it keeps disconnecting" reports
-    // can distinguish firmware crashes/stalls from host-side USB resets.
-    diag_watchdog_boot = watchdog_caused_reboot();
-    if (diag_watchdog_boot) {
-        // The last breadcrumb before the reset — where it died.
-        diag_crash_code = watchdog_hw->scratch[4];
-    }
-    watchdog_hw->scratch[4] = 0;
-    diag_breadcrumb = [](uint32_t code) { watchdog_hw->scratch[4] = code; };
+    // Boot forensics BEFORE re-arming (watchdog_enable() overwrites scratch[4]
+    // with its own magic): did the watchdog cause this boot, where did it die,
+    // and was it a fault or a hang? Surfaced on the fork status page so "it
+    // keeps disconnecting" reports can distinguish firmware crashes from
+    // host-side USB resets.
+    diag_boot_forensics();
     // Watchdog: a hang anywhere in the loop becomes a 2-second outage
     // instead of a dead dongle. Enabled after USB init so a slow first
     // enumeration can't trip it; fed once per loop iteration below.
@@ -445,6 +559,11 @@ int main() {
             // ConfigCommand::REBOOT: give the ack a moment to flush, then a
             // clean watchdog reset — the host re-enumerates us fresh.
             need_to_reboot = false;
+#ifdef REMAPPER_SINGLE_EXTRAS
+            // Mark it ours, or the next boot reports this as a crash (the
+            // watchdog cannot tell who asked) and buries the real record.
+            watchdog_hw->scratch[0] = CLEAN_REBOOT_MAGIC;
+#endif
             watchdog_reboot(0, 0, 100);
         }
 #ifdef REMAPPER_SINGLE_EXTRAS

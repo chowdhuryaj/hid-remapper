@@ -2,24 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=14';
-import { migrateConfig } from './model.js?v=14';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=15';
+import { migrateConfig } from './model.js?v=15';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-    pfxGestureSetActiveUsage,
-} from './protocol.js?v=14';
+    pfxGestureSetActiveUsage, crashPointLabel,
+} from './protocol.js?v=15';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=14';
-import { usagePage } from './model.js?v=14';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=14';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=14';
+} from './profiles.js?v=15';
+import { usagePage } from './model.js?v=15';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=15';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=15';
 setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=14';
-import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=14';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=15';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=15';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -40,6 +40,59 @@ let pointerFx = null;         // live Pointer FX params (fork firmware only)
 let pfxSendTimer = null;
 let diagTimer = null;
 let sessionDisconnects = 0;
+// Last crash the device reported, kept in the TOOL as well as the firmware.
+// A crash report is only useful if it is still on screen when you come back to
+// look for it: the device loses it on a power cycle, the page loses it on a
+// reload, and the poll that reads it only runs while the Settings tab is open.
+// So it is mirrored here and in localStorage, and cleared only on request.
+let lastCrash = null;
+try {
+    lastCrash = JSON.parse(localStorage.getItem('aloomapper.lastCrash') || 'null');
+} catch (e) { /* corrupt or unavailable storage — no crash history, keep going */ }
+
+function noteCrash(d) {
+    if (!d || !d.crashCount) {
+        return;
+    }
+    // Same crash we already have? Leave the original timestamp alone.
+    if (lastCrash && lastCrash.count === d.crashCount && lastCrash.code === d.crashCode &&
+        lastCrash.pc === d.faultPc) {
+        return;
+    }
+    lastCrash = {
+        code: d.crashCode, count: d.crashCount, pc: d.faultPc,
+        fault: d.hardFault, stack: d.stackOverflow,
+        seen: new Date().toLocaleString(),
+    };
+    try { localStorage.setItem('aloomapper.lastCrash', JSON.stringify(lastCrash)); } catch (e) { /* private mode */ }
+    renderStatusBar();
+}
+
+function clearCrash() {
+    lastCrash = null;
+    try { localStorage.removeItem('aloomapper.lastCrash'); } catch (e) { /* private mode */ }
+    renderStatusBar();
+    if (currentTab === 'settings') renderSettings();
+}
+
+// One line, safe to paste into a bug report — every number needed to locate
+// the crash in the firmware, decoded so it doesn't need a lookup table.
+function crashReportText() {
+    if (!lastCrash) return '';
+    const hex = (n, w) => '0x' + ((n || 0) >>> 0).toString(16).padStart(w, '0');
+    const parts = [
+        'crash point ' + hex(lastCrash.code, 4) + ' (' + crashPointLabel(lastCrash.code) + ')',
+        lastCrash.count + (lastCrash.count === 1 ? ' crash' : ' crashes') + ' since power-on',
+    ];
+    if (lastCrash.fault) {
+        parts.push('hard fault at PC ' + hex(lastCrash.pc, 8));
+        if (lastCrash.stack) parts.push('STACK OVERFLOW (faulted at the stack guard)');
+    } else {
+        parts.push('hang (watchdog timeout, no fault)');
+    }
+    parts.push('seen ' + lastCrash.seen);
+    return parts.join(' · ');
+}
 let hudOpen = false;          // desktop-only HUD overlay window
 let hudPoll = null;
 let hudRecent = [];           // last few pressed inputs for the HUD
@@ -167,6 +220,9 @@ function init() {
     $('mt-pointer').addEventListener('click', () => switchTab('pointer'));
     $('mt-macros').addEventListener('click', () => switchTab('macros'));
     $('mt-settings').addEventListener('click', () => switchTab('settings'));
+    if ($('sb-crash')) {
+        $('sb-crash').addEventListener('click', () => switchTab('settings'));
+    }
     for (const b of document.querySelectorAll('[data-add]')) {
         b.addEventListener('click', () => addBehavior(b.getAttribute('data-add')));
     }
@@ -374,6 +430,13 @@ function renderStatusBar() {
         : 'Not connected';
     $('sb-profile').textContent = profile ? profile.name : '';
     $('sb-hud').textContent = hudOpen ? 'HUD on' : '';
+    // The crash line lives in the status bar, not just on the Settings tab:
+    // it used to disappear the moment the device dropped or the tab changed,
+    // which is exactly when you want to read it.
+    if ($('sb-crash')) {
+        $('sb-crash').textContent = lastCrash ? ('⚠ firmware crash — ' + crashReportText()) : '';
+        $('sb-crash').classList.toggle('hidden', !lastCrash);
+    }
 }
 
 async function saveToDevice() {
@@ -424,6 +487,11 @@ function onConnected() {
     if (dev.isFork) {
         dev.loadPointerFx().then((p) => { pointerFx = p; if (currentTab === 'pointer') renderPointer(); })
             .catch((e) => showNotice('Could not read Pointer FX parameters: ' + errMsg(e)));
+        // Reconnecting re-reads the device, so the Settings tab has to be
+        // rebuilt — otherwise the diagnostics row stays missing (it is only
+        // emitted while a device is open) until the user switches tabs, which
+        // is how crash readings kept getting lost after a crash-reconnect.
+        if (currentTab === 'settings') renderSettings();
         if (dev.forkStatus && dev.forkStatus.safeMode) {
             showNotice('Device is in SAFE MODE: booted with factory defaults, your saved config untouched (and protected — persisting is disabled). Power-cycle the device to return to the saved config.', 'info');
         }
@@ -1750,10 +1818,35 @@ function renderSettings() {
 
     // --- device actions ---
     f.append(el('h2', { text: 'Device', style: 'margin-top:26px' }));
-    if (dev.isOpen && dev.forkGeneration >= 2) {
-        const diagOut = el('div', { class: 'desc', text: 'Reading…' });
+    const live = dev.isOpen && dev.forkGeneration >= 2;
+    let diagOut = null;
+    let crashRow = null;
+    if (live) {
+        diagOut = el('div', { class: 'desc', text: 'Reading…' });
         f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Diagnostics' }), diagOut,
             el('div', { class: 'desc', text: 'Live from the device. “Drops” counts downstream disconnects since power-on — if it climbs while you use the mouse, the mouse↔dongle link is unstable (power or USB timing), not the computer side.' })));
+    }
+    // Outside the connected branch on purpose: a crash disconnects the device,
+    // so this row has to still be here afterwards — that is when it is read.
+    if (live || lastCrash) {
+        const crashOut = el('div', { class: 'desc', text: lastCrash ? ('⚠ ' + crashReportText()) : 'Reading…' });
+        f.append(el('div', { class: 'settingrow' }, el('label', { text: 'Crash record' }), crashOut,
+            el('div', { style: 'display:flex; gap:8px; flex-wrap:wrap' },
+                el('button', {
+                    class: 'btn', text: 'Copy crash report',
+                    onclick: async () => {
+                        if (!lastCrash) { showNotice('No crash recorded.', 'info'); return; }
+                        try {
+                            await navigator.clipboard.writeText(crashReportText());
+                            showNotice('Crash report copied.', 'info');
+                        } catch (e) { showNotice('Could not copy: ' + errMsg(e)); }
+                    },
+                }),
+                el('button', { class: 'btn', text: 'Clear', onclick: clearCrash })),
+            el('div', { class: 'desc', text: 'The firmware keeps this across its own reboots and clears it on a power cycle; the tool keeps a copy across page reloads. A hard fault reports the exact PC, a hang reports the last phase the firmware entered.' })));
+        crashRow = crashOut;
+    }
+    if (live) {
         if (diagTimer) clearInterval(diagTimer);
         let prev = null;
         diagTimer = setInterval(async () => {
@@ -1765,12 +1858,14 @@ function renderSettings() {
                 prev = d;
                 const up = Math.floor(d.ticks / 1000);
                 const uptime = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm ' + (up % 60) + 's';
-                const wd = dev.forkStatus && dev.forkStatus.watchdogBoot;
+                noteCrash(d);
                 diagOut.textContent =
                     `Downstream interfaces: ${d.hidItfCount} · reports: ${rate}/s · ` +
                     `drops since power-on: ${d.umounts} · worst tick: ${d.maxTickUs} µs · ` +
-                    `uptime: ${uptime} · tool reconnects this session: ${sessionDisconnects}` +
-                    (wd ? ` · ⚠ LAST BOOT WAS A WATCHDOG RESET — crash point 0x${(d.crashCode || 0).toString(16).padStart(4, '0')} (report this code)` : '');
+                    `uptime: ${uptime} · tool reconnects this session: ${sessionDisconnects}`;
+                if (crashRow) {
+                    crashRow.textContent = lastCrash ? ('⚠ ' + crashReportText()) : 'No crash recorded.';
+                }
             } catch (e) { /* transient read failure — keep polling */ }
         }, 1000);
     }

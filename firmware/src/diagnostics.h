@@ -26,12 +26,25 @@ extern uint32_t diag_max_tick_us;    // slowest process_mapping() tick, us (high
 // build sets this in extra_init). Gates the "no device" LED pattern so the
 // dual/serial variants keep their upstream LED behavior untouched.
 extern bool diag_downstream_tracking;
-extern bool diag_watchdog_boot;      // this boot was a watchdog reset (crash or stall last session)
-extern uint32_t diag_crash_code;     // breadcrumb captured from before that reset (0 = none)
+// A crash (watchdog reset that we did not ask for) happened at some point
+// since the last POWER-ON — not necessarily this boot. The record is sticky
+// across our own clean reboots on purpose: a crash report that vanishes the
+// moment you press Reboot is a crash report nobody ever gets to read.
+extern bool diag_watchdog_boot;
+extern uint32_t diag_crash_code;     // breadcrumb phase captured before that reset (0 = none)
+extern uint32_t diag_fault_pc;       // faulting PC, hard faults only (0 = hang, not a fault)
+extern uint8_t diag_crash_count;     // crashes since power-on, saturates at 63
+extern uint8_t diag_crash_flags;     // DIAG_CRASH_FLAG_*
+
+#define DIAG_CRASH_FLAG_FAULT 0x01   // a hard fault, and diag_fault_pc says where
+#define DIAG_CRASH_FLAG_STACK 0x02   // the fault frame was at/below the stack bottom: overflow
+#define DIAG_CRASH_FLAG_STICKY 0x04  // carried over from an earlier boot in this power session
 
 // Crash breadcrumbs: shared code stamps a phase code via this hook; the
 // single-chip build points it at a watchdog scratch register (survives
-// watchdog resets), other builds leave it null. Codes:
+// watchdog resets), other builds leave it null. A hard fault records the
+// faulting PC directly (see main.cc), so the phase code only has to localize
+// hangs. Codes:
 //   0x0100|cmd  entering the config SET handler for command `cmd`
 //   0x0200|cmd  finished that command
 //   0x0301/2    set_mapping_from_config begin/end

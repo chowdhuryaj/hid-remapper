@@ -21,9 +21,9 @@ import {
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
     setActiveConfigVersion, setForkGeneration, readPointerFx, writePointerFx,
     readForkStatus, readDiagnostics,
-} from './protocol.js?v=14';
-import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=14';
-import { usageToHex } from './model.js?v=14';
+} from './protocol.js?v=15';
+import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=15';
+import { usageToHex } from './model.js?v=15';
 
 // Native (desktop) transport: speaks the same sendFeatureReport /
 // receiveFeatureReport surface as a WebHID HIDDevice, but routes through the

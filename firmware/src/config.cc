@@ -1064,6 +1064,10 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     memcpy(config_buffer->data + 10, &diag_max_tick_us, 4);
                     memcpy(config_buffer->data + 14, &diag_umounts, 4);
                     memcpy(config_buffer->data + 18, &diag_crash_code, 4);
+                    // Fills data[] exactly to 28 bytes; nothing else fits here.
+                    memcpy(config_buffer->data + 22, &diag_fault_pc, 4);
+                    config_buffer->data[26] = diag_crash_flags;
+                    config_buffer->data[27] = diag_crash_count;
                 }
                 break;
             }
@@ -1174,6 +1178,12 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     break;
                 case ConfigCommand::APPEND_TO_MACRO: {
                     append_to_macro_t* append_to_macro = (append_to_macro_t*) config_buffer->data;
+                    // Unlike APPEND_TO_EXPRESSION below, upstream never range
+                    // checked this index — an out-of-range one indexes past
+                    // macros[] and push_back()s through whatever is there.
+                    if (append_to_macro->macro >= NMACROS) {
+                        break;
+                    }
                     my_mutex_enter(MutexId::MACROS);
                     if (macros[append_to_macro->macro].empty()) {
                         macros[append_to_macro->macro].push_back({});

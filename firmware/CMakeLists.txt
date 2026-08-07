@@ -67,6 +67,13 @@ target_include_directories(remapper PRIVATE
 # exactly upstream.
 target_compile_definitions(remapper PRIVATE REMAPPER_SINGLE_EXTRAS)
 
+# MPU guard at the bottom of the 2 KB core-0 stack. Without it a stack
+# overflow silently walks into SCRATCH_X and then the heap and crashes later
+# somewhere innocent; with it, the overflow itself hard-faults and the fault
+# handler in main.cc records the PC. Costs one MPU region (nothing else uses
+# the MPU here) and a couple of instructions at boot.
+target_compile_definitions(remapper PRIVATE PICO_USE_STACK_GUARDS=1)
+
 target_link_libraries(remapper
     pico_stdlib
     pico_unique_id
