@@ -5,7 +5,7 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js?v=13';
+import crc32 from './crc.js?v=14';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
@@ -289,9 +289,9 @@ export async function readForkStatus(device) {
 // Diagnostics counters (GET_POINTER_FX page 3, sidecar-era firmware).
 export async function readDiagnostics(device) {
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 3]]);
-    const [hidItfCount, tracking, reportsIn, ticks, maxTickUs, umounts] =
-        await readConfigFeature(device, [UINT8, UINT8, UINT32, UINT32, UINT32, UINT32]);
-    return { hidItfCount, tracking: !!tracking, reportsIn, ticks, maxTickUs, umounts };
+    const [hidItfCount, tracking, reportsIn, ticks, maxTickUs, umounts, crashCode] =
+        await readConfigFeature(device, [UINT8, UINT8, UINT32, UINT32, UINT32, UINT32, UINT32]);
+    return { hidItfCount, tracking: !!tracking, reportsIn, ticks, maxTickUs, umounts, crashCode };
 }
 
 // Pointer FX usage helpers (hex-string usages, GUI convention).

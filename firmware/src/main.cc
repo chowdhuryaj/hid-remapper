@@ -201,8 +201,10 @@ void do_persist_config(uint8_t* buffer) {
 #if !PICO_COPY_TO_RAM
     uint32_t ints = save_and_disable_interrupts();
 #endif
+    DIAG_BC(0x0311);
     flash_range_erase(CONFIG_OFFSET_IN_FLASH, PERSISTED_CONFIG_SIZE);
     flash_range_program(CONFIG_OFFSET_IN_FLASH, buffer, PERSISTED_CONFIG_SIZE);
+    DIAG_BC(0x0312);
 #if !PICO_COPY_TO_RAM
     restore_interrupts(ints);
 #endif
@@ -347,6 +349,12 @@ int main() {
     // Surfaced on the fork status page so "it keeps disconnecting" reports
     // can distinguish firmware crashes/stalls from host-side USB resets.
     diag_watchdog_boot = watchdog_caused_reboot();
+    if (diag_watchdog_boot) {
+        // The last breadcrumb before the reset — where it died.
+        diag_crash_code = watchdog_hw->scratch[4];
+    }
+    watchdog_hw->scratch[4] = 0;
+    diag_breadcrumb = [](uint32_t code) { watchdog_hw->scratch[4] = code; };
     // Watchdog: a hang anywhere in the loop becomes a 2-second outage
     // instead of a dead dongle. Enabled after USB init so a slow first
     // enumeration can't trip it; fed once per loop iteration below.
@@ -365,7 +373,9 @@ int main() {
             activity_led_on();
         }
         if (their_descriptor_updated) {
+            DIAG_BC(0x0331);
             update_their_descriptor_derivates();
+            DIAG_BC(0x0332);
             their_descriptor_updated = false;
         }
         if (tick) {
@@ -397,7 +407,9 @@ int main() {
         }
         tud_task();
         if (boot_protocol_updated) {
+            DIAG_BC(0x0321);
             parse_our_descriptor();
+            DIAG_BC(0x0322);
             boot_protocol_updated = false;
             config_updated = true;
         }
@@ -406,7 +418,9 @@ int main() {
             suspended = false;
         }
         if (config_updated) {
+            DIAG_BC(0x0301);
             set_mapping_from_config();
+            DIAG_BC(0x0302);
             config_updated = false;
         }
         if (set_gpio_dir_pending && !suspended) {

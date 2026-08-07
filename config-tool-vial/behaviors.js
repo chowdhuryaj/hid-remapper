@@ -13,11 +13,11 @@
 // a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
 // bitmask) are written as-is. regRef() / val() keep this straight.
 
-import { newMapping } from './model.js?v=13';
+import { newMapping } from './model.js?v=14';
 import {
     pfxGestureSetActiveUsage, pfxGestureFiredUsage, pfxChordFiredUsage,
     pfxChordWheelFiredUsage, PFX_WIGGLE_FIRED_USAGE, PFX_DIRECTIONS,
-} from './protocol.js?v=13';
+} from './protocol.js?v=14';
 
 // Slot keys for the wheel/tilt chord directions (index = firmware w).
 export const PFX_WHEEL_KEYS = ['WU', 'WD', 'TL', 'TR'];

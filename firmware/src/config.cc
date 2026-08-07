@@ -1063,6 +1063,7 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     memcpy(config_buffer->data + 6, &diag_ticks, 4);
                     memcpy(config_buffer->data + 10, &diag_max_tick_us, 4);
                     memcpy(config_buffer->data + 14, &diag_umounts, 4);
+                    memcpy(config_buffer->data + 18, &diag_crash_code, 4);
                 }
                 break;
             }
@@ -1091,6 +1092,7 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
         if (checksum_ok(buffer, CONFIG_SIZE) && command_version_ok(buffer)) {
             set_feature_t* config_buffer = (set_feature_t*) buffer;
             last_config_command = config_buffer->command;
+            DIAG_BC(0x0100 | (uint8_t) config_buffer->command);
             switch (config_buffer->command) {
                 case ConfigCommand::NO_COMMAND:
                     break;
@@ -1268,6 +1270,7 @@ void handle_set_report1(uint8_t report_id, uint8_t const* buffer, uint16_t bufsi
                     last_config_command = ConfigCommand::INVALID_COMMAND;
                     break;
             }
+            DIAG_BC(0x0200 | (uint8_t) config_buffer->command);
         } else {
             last_config_command = ConfigCommand::INVALID_COMMAND;
         }

@@ -8,5 +8,7 @@ uint32_t diag_max_tick_us = 0;
 
 bool diag_downstream_tracking = false;
 bool diag_watchdog_boot = false;
+uint32_t diag_crash_code = 0;
+void (*diag_breadcrumb)(uint32_t) = nullptr;
 bool diag_safe_mode = false;
 bool need_to_reboot = false;

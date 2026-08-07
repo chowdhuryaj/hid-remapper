@@ -27,6 +27,19 @@ extern uint32_t diag_max_tick_us;    // slowest process_mapping() tick, us (high
 // dual/serial variants keep their upstream LED behavior untouched.
 extern bool diag_downstream_tracking;
 extern bool diag_watchdog_boot;      // this boot was a watchdog reset (crash or stall last session)
+extern uint32_t diag_crash_code;     // breadcrumb captured from before that reset (0 = none)
+
+// Crash breadcrumbs: shared code stamps a phase code via this hook; the
+// single-chip build points it at a watchdog scratch register (survives
+// watchdog resets), other builds leave it null. Codes:
+//   0x0100|cmd  entering the config SET handler for command `cmd`
+//   0x0200|cmd  finished that command
+//   0x0301/2    set_mapping_from_config begin/end
+//   0x0311/2    flash persist begin/end
+//   0x0321/2    parse_our_descriptor begin/end
+//   0x0331/2    update_their_descriptor_derivates begin/end
+extern void (*diag_breadcrumb)(uint32_t code);
+#define DIAG_BC(code) do { if (diag_breadcrumb) diag_breadcrumb(code); } while (0)
 
 // Safe mode: booted via the BOOTSEL escape hatch, persisted config skipped.
 extern bool diag_safe_mode;

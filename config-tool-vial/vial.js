@@ -2,24 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=13';
-import { migrateConfig } from './model.js?v=13';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=14';
+import { migrateConfig } from './model.js?v=14';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
     pfxGestureSetActiveUsage,
-} from './protocol.js?v=13';
+} from './protocol.js?v=14';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=13';
-import { usagePage } from './model.js?v=13';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=13';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=13';
+} from './profiles.js?v=14';
+import { usagePage } from './model.js?v=14';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=14';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=14';
 setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=13';
-import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=13';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=14';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=14';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -808,18 +808,25 @@ function getButtonPlan(source) {
     const toggled = project.behaviors.find((b) => b.mode === 'toggle' && b.trigger === source &&
         (b.type === 'drag_scroll' || b.type === 'gesture_set'));
     const toggledUsage = toggled ? (toggled.type === 'drag_scroll' ? layerUsage(toggled.layerPin) : pfxGestureSetActiveUsage(toggled.set)) : null;
+    // Dance rows live in the auto behavior regardless of what occupies the
+    // Tap/Hold rows (a mode toggle, an eager hold, plain flags) — every
+    // branch below must carry them, or assigning Double tap / Tap→hold
+    // renders as empty and the next rewrite clobbers the other rows.
+    const danceFields = dance
+        ? { double: dance.tap2 || null, tapHold: dance.tapHold || null, window: dance.window || 200, dance: true }
+        : { double: null, tapHold: null, window: 200, dance: false };
     if (plain && modeEntryFor(plain.target_usage)) {
-        return { tap: toggledUsage || (tapA ? tapA.target_usage : null), hold: plain.target_usage,
-            eager: true, double: null, tapHold: null, window: 200, dance: false };
+        return { tap: toggledUsage || (dance ? dance.tap1 : (tapA ? tapA.target_usage : null)),
+            hold: plain.target_usage, eager: true, ...danceFields };
     }
     if (toggledUsage) {
-        return { tap: toggledUsage, hold: holdA ? holdA.target_usage : null, eager: false,
-            double: null, tapHold: null, window: 200, dance: false };
+        return { tap: toggledUsage,
+            hold: holdA ? holdA.target_usage : (dance ? dance.hold : null),
+            eager: false, ...danceFields };
     }
     if (dance) {
         return { tap: dance.tap1 || null, hold: plain ? plain.target_usage : (dance.hold || null),
-            eager: !!plain, double: dance.tap2 || null, tapHold: dance.tapHold || null,
-            window: dance.window || 200, dance: true };
+            eager: !!plain, ...danceFields };
     }
     if (tapA || holdA) {
         return { tap: tapA ? tapA.target_usage : null,
@@ -1763,7 +1770,7 @@ function renderSettings() {
                     `Downstream interfaces: ${d.hidItfCount} · reports: ${rate}/s · ` +
                     `drops since power-on: ${d.umounts} · worst tick: ${d.maxTickUs} µs · ` +
                     `uptime: ${uptime} · tool reconnects this session: ${sessionDisconnects}` +
-                    (wd ? ' · ⚠ LAST BOOT WAS A WATCHDOG RESET (firmware crash/stall — report this)' : '');
+                    (wd ? ` · ⚠ LAST BOOT WAS A WATCHDOG RESET — crash point 0x${(d.crashCode || 0).toString(16).padStart(4, '0')} (report this code)` : '');
             } catch (e) { /* transient read failure — keep polling */ }
         }, 1000);
     }
