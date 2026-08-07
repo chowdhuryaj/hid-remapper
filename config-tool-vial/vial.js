@@ -2,24 +2,24 @@
 // high-level behaviors), two tabs (Keymap, Behaviors), and a shared keycode
 // picker. Saving compiles base + behaviors into one device config.
 
-import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=12';
-import { migrateConfig } from './model.js?v=12';
+import { RemapperDevice, PERSIST_CONFIG_SUCCESS, PERSIST_CONFIG_CONFIG_TOO_BIG, PERSIST_CONFIG_SAFE_MODE } from './device.js?v=13';
+import { migrateConfig } from './model.js?v=13';
 import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
     pfxGestureSetActiveUsage,
-} from './protocol.js?v=12';
+} from './protocol.js?v=13';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
     buildCustomProfile,
-} from './profiles.js?v=12';
-import { usagePage } from './model.js?v=12';
-import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=12';
-import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=12';
+} from './profiles.js?v=13';
+import { usagePage } from './model.js?v=13';
+import { getActions, addAction, removeAction, clearActions, explodeLayers } from './keymap.js?v=13';
+import { targetCategories, sourceCategories, readableTargetName, readableSourceName, NOTHING_USAGE, setModeNameResolver } from './keycodes.js?v=13';
 setModeNameResolver((usage) => { const m = modeEntryFor(usage); return m ? m.label : null; });
-import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=12';
-import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=12';
+import { defaultProject, compileProject, projectFromJson, newBehaviorId } from './project.js?v=13';
+import { OS_SHORTCUT_CHOICES , layerUsage } from './behaviors.js?v=13';
 
 const TRANSPARENT = '__transparent__';
 const ARROWS = { up: '0x00070052', down: '0x00070051', left: '0x00070050', right: '0x0007004f' };
@@ -39,6 +39,7 @@ let currentCat = categories[0].name;
 let pointerFx = null;         // live Pointer FX params (fork firmware only)
 let pfxSendTimer = null;
 let diagTimer = null;
+let sessionDisconnects = 0;
 let hudOpen = false;          // desktop-only HUD overlay window
 let hudPoll = null;
 let hudRecent = [];           // last few pressed inputs for the HUD
@@ -432,6 +433,7 @@ function onConnected() {
     }
 }
 function onDisconnected() {
+    sessionDisconnects++;
     $('status').textContent = 'Not connected';
     $('status').className = 'status off';
     $('load').disabled = true;
@@ -1754,9 +1756,14 @@ function renderSettings() {
                 if (!d) return;
                 const rate = prev ? Math.max(0, d.reportsIn - prev.reportsIn) : 0;
                 prev = d;
+                const up = Math.floor(d.ticks / 1000);
+                const uptime = Math.floor(up / 3600) + 'h ' + Math.floor((up % 3600) / 60) + 'm ' + (up % 60) + 's';
+                const wd = dev.forkStatus && dev.forkStatus.watchdogBoot;
                 diagOut.textContent =
                     `Downstream interfaces: ${d.hidItfCount} · reports: ${rate}/s · ` +
-                    `drops since power-on: ${d.umounts} · worst tick: ${d.maxTickUs} µs`;
+                    `drops since power-on: ${d.umounts} · worst tick: ${d.maxTickUs} µs · ` +
+                    `uptime: ${uptime} · tool reconnects this session: ${sessionDisconnects}` +
+                    (wd ? ' · ⚠ LAST BOOT WAS A WATCHDOG RESET (firmware crash/stall — report this)' : '');
             } catch (e) { /* transient read failure — keep polling */ }
         }, 1000);
     }

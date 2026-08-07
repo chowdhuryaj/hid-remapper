@@ -26,6 +26,7 @@ extern uint32_t diag_max_tick_us;    // slowest process_mapping() tick, us (high
 // build sets this in extra_init). Gates the "no device" LED pattern so the
 // dual/serial variants keep their upstream LED behavior untouched.
 extern bool diag_downstream_tracking;
+extern bool diag_watchdog_boot;      // this boot was a watchdog reset (crash or stall last session)
 
 // Safe mode: booted via the BOOTSEL escape hatch, persisted config skipped.
 extern bool diag_safe_mode;

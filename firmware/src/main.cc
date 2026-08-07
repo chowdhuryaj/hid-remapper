@@ -343,6 +343,10 @@ int main() {
     tusb_init();
     stdio_init_all();
 #ifdef REMAPPER_SINGLE_EXTRAS
+    // Boot forensics BEFORE re-arming: did the watchdog cause this boot?
+    // Surfaced on the fork status page so "it keeps disconnecting" reports
+    // can distinguish firmware crashes/stalls from host-side USB resets.
+    diag_watchdog_boot = watchdog_caused_reboot();
     // Watchdog: a hang anywhere in the loop becomes a 2-second outage
     // instead of a dead dongle. Enabled after USB init so a slow first
     // enumeration can't trip it; fed once per loop iteration below.

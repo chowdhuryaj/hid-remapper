@@ -21,9 +21,9 @@ import {
     sendFeatureCommand, readConfigFeature, maskToLayerList, layerListToMask,
     setActiveConfigVersion, setForkGeneration, readPointerFx, writePointerFx,
     readForkStatus, readDiagnostics,
-} from './protocol.js?v=12';
-import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=12';
-import { usageToHex } from './model.js?v=12';
+} from './protocol.js?v=13';
+import { exprToElems, elemToToken, ops, OP_PUSH, OP_PUSH_USAGE } from './expr.js?v=13';
+import { usageToHex } from './model.js?v=13';
 
 // Native (desktop) transport: speaks the same sendFeatureReport /
 // receiveFeatureReport surface as a WebHID HIDDevice, but routes through the
@@ -399,7 +399,10 @@ export class RemapperDevice {
     // every edit would wear it out and add latency). Changes take effect
     // immediately but are lost on power-cycle until save() persists them.
     async apply(config) {
-        await this._push(config, false);
+        // Same wire discipline as save(): a live apply is dozens of feature
+        // reports and must not interleave with the diagnostics poll, HUD
+        // tick, or a Pointer-FX write (single command slot on the device).
+        await this._serial(() => this._push(config, false));
     }
 
     async _push(config, persist) {

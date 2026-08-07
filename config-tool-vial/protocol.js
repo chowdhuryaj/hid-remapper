@@ -5,7 +5,7 @@
 // command constants). It is intentionally UI-agnostic: it knows how to talk to
 // a HID Remapper over WebHID feature reports, nothing about the DOM.
 
-import crc32 from './crc.js?v=12';
+import crc32 from './crc.js?v=13';
 
 export const REPORT_ID_CONFIG = 100;
 export const REPORT_ID_MONITOR = 101;
@@ -276,12 +276,14 @@ export function defaultPointerFx() {
 // null. Also used as the capability probe right after version negotiation.
 export async function readForkStatus(device) {
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 2]]);
-    const [layerMask, s0, s1, s2, generation, descriptorPending, safeMode] =
-        await readConfigFeature(device, [UINT8, UINT8, UINT8, UINT8, UINT8, UINT8, UINT8]);
+    const [layerMask, s0, s1, s2, generation, descriptorPending, safeMode, watchdogBoot] =
+        await readConfigFeature(device, [UINT8, UINT8, UINT8, UINT8, UINT8, UINT8, UINT8, UINT8]);
     if (s0 != 0x50 || s1 != 0x46 || s2 != 0x58) {  // 'P','F','X'
         return null;
     }
-    return { layerMask, generation, descriptorPending: !!descriptorPending, safeMode: !!safeMode };
+    return { layerMask, generation, descriptorPending: !!descriptorPending, safeMode: !!safeMode,
+        // pre-forensics firmware sends 0 here anyway
+        watchdogBoot: !!watchdogBoot };
 }
 
 // Diagnostics counters (GET_POINTER_FX page 3, sidecar-era firmware).

@@ -1050,6 +1050,11 @@ uint16_t handle_get_report1(uint8_t report_id, uint8_t* buffer, uint16_t reqlen)
                     // nothing. Tools should watch this and offer REBOOT.
                     config_buffer->data[5] = (our_descriptor != &our_descriptors[our_descriptor_number]) ? 1 : 0;
                     config_buffer->data[6] = diag_safe_mode ? 1 : 0;
+                    // Boot forensics: nonzero = last reset was the watchdog
+                    // (firmware crash or a stalled main loop, NOT a normal
+                    // replug) — the discriminator for "it keeps
+                    // disconnecting" reports.
+                    config_buffer->data[7] = diag_watchdog_boot ? 1 : 0;
                 } else if (requested_index == 3) {
                     // Diagnostics counters (see diagnostics.h). Little-endian.
                     config_buffer->data[0] = diag_hid_itf_count;
