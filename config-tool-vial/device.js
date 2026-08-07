@@ -85,8 +85,12 @@ export class RemapperDevice {
             return false;
         }
         this.io = this.device;
-        this._open = true;
+        // isOpen is what every poller gates on, so it must not go true until
+        // negotiation is done: a tick landing mid-negotiation steals the
+        // device's single command slot and fails the connect (see _serial).
         await this._checkDeviceVersion();
+        this._open = true;
+        await this._resumeOnAttach();
         this.device.addEventListener('inputreport', this._inputHandler);
         await this.setMonitorEnabled(this.monitorEnabled);
         await this.getUsages();
@@ -105,7 +109,6 @@ export class RemapperDevice {
         this.io = new PyHidDevice(api);
         this.device = null;
         this._nativeName = res.product || 'HID Remapper';
-        this._open = true;
         // The Python side pushes input reports (first byte = report id) via
         // this global; route them through the same monitor parsing WebHID
         // events use, so press-to-identify and the HUD work natively too.
@@ -120,7 +123,11 @@ export class RemapperDevice {
         // Fired by the Python reader thread when its read loop dies (real
         // unplug); intentional close() never triggers it.
         window.__nativeDisconnected = () => this.handleNativeDisconnect();
+        // As in requestAndOpen(): publish the handle only once negotiation has
+        // finished, so no isOpen-gated poller can interleave with it.
         await this._checkDeviceVersion();
+        this._open = true;
+        await this._resumeOnAttach();
         await this.setMonitorEnabled(this.monitorEnabled);
         await this.getUsages();
         return true;
@@ -135,7 +142,10 @@ export class RemapperDevice {
     // Native (pywebview) path: the Python reader thread calls
     // window.__nativeDisconnected() when its read loop dies.
     handleNativeDisconnect() {
-        if (this._open && this.device == null) {
+        // Keyed on io, not _open: _open only goes true after version
+        // negotiation, and an unplug during negotiation must still drop the
+        // handle. (device == null distinguishes the native transport.)
+        if (this.io != null && this.device == null) {
             this._markClosed();
         }
     }
@@ -147,12 +157,24 @@ export class RemapperDevice {
         this._open = false;
         this.device = null;
         this.io = null;
+        // Capability state belongs to the departed device. Left stale, a
+        // poller that outlives the disconnect still sees isFork/generation 2
+        // and fires fork-only transactions at whatever reconnects next —
+        // including into the middle of the next version negotiation.
+        this.forkGeneration = 0;
+        this.forkStatus = null;
+        this.configVersion = undefined;
         if (this.onDisconnect) {
             this.onDisconnect();
         }
     }
 
-    async _checkDeviceVersion() {
+    // Negotiation is a SET/GET pair per candidate version and must own the
+    // device's single command slot for its whole run, so it queues like every
+    // other transaction. (Nothing inside may call _serial() again — the chain
+    // is not reentrant.)
+    async _checkDeviceVersion() { return this._serial(() => this._checkDeviceVersionInner()); }
+    async _checkDeviceVersionInner() {
         // Current fork firmware deliberately speaks stock version 18 (so
         // remapper.org always works as a fallback); fork capability is a
         // separate probe below. Legacy fork firmware (100/101) still
@@ -209,6 +231,26 @@ export class RemapperDevice {
         const run = (this._txq || Promise.resolve()).then(fn, fn);
         this._txq = run.catch(() => {});
         return run;
+    }
+
+    // SUSPEND mutes every HID report on the device and the firmware clears it
+    // only on an explicit RESUME or a reboot — there is no timeout. A _push()
+    // killed mid-sequence (page reload, window close, navigation) therefore
+    // leaves a live, enumerated device emitting nothing: the mouse is dead
+    // and replugging is the user's only obvious cure. Nothing else in the
+    // tool un-suspends on attach, so do it here, unconditionally. It is
+    // harmless on a device that was never suspended — RESUME rebuilds the
+    // mapping table and resets state, exactly the work the RESUME at the end
+    // of every live apply already does — and it is a stock command, so it
+    // works on non-fork firmware too. Must run after negotiation: the frame
+    // carries the negotiated version byte.
+    async _resumeOnAttach() {
+        try {
+            await this._serial(() => sendFeatureCommand(this.io, RESUME));
+        } catch (e) {
+            // Never fail a connect over this — a device that would not take
+            // the RESUME is not one we can un-mute anyway.
+        }
     }
 
     // Sidecar-era fork: live status {layerMask, generation, descriptorPending,
@@ -505,7 +547,19 @@ export class RemapperDevice {
             }
             return undefined;
         } finally {
-            await sendFeatureCommand(this.io, RESUME);
+            // This RESUME is the only thing that un-mutes the device after the
+            // SUSPEND above, so it must never be skipped and must never throw:
+            // an unguarded send on a handle that _markClosed() nulled mid-push
+            // raises a TypeError that replaces the real failure, and a
+            // transient write error would do the same. (A device that actually
+            // went away comes back unsuspended — the flag lives in RAM.)
+            if (this.io != null) {
+                try {
+                    await sendFeatureCommand(this.io, RESUME);
+                } catch (e) {
+                    // Device gone or wire error; keep the original exception.
+                }
+            }
         }
     }
 

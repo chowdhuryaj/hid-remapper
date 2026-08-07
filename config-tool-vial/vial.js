@@ -8,7 +8,7 @@ import {
     NLAYERS, NMACROS, defaultPointerFx, PFX_DIRECTIONS,
     PFX_FLAG_SMOOTHING, PFX_FLAG_ACCEL, PFX_FLAG_WIGGLE, PFX_FLAG_ASC_INVERTED,
     PFX_FLAG_CHORDS, PFX_FLAG_GESTURES, PFX_FLAG_MASTER, PFX_EFFECT_FLAGS,
-    pfxGestureSetActiveUsage, crashPointLabel,
+    pfxGestureSetActiveUsage, crashPointLabel, crashIsBootPhase,
 } from './protocol.js?v=15';
 import {
     defaultProfile, profileById, allProfiles, saveCustomProfile, deleteCustomProfile,
@@ -34,6 +34,7 @@ let currentTab = 'keymap';
 let selected = null;          // keymap slot {source,label}
 let focusedAction = null;     // the action (mapping) the picker currently edits
 let pickerTarget = null;      // {kind:'slot'} or {kind:'callback', fn, label}
+let advOpen = false;          // Advanced <details> is rebuilt every render; remember its state
 let categories = targetCategories(0);
 let currentCat = categories[0].name;
 let pointerFx = null;         // live Pointer FX params (fork firmware only)
@@ -51,7 +52,16 @@ try {
 } catch (e) { /* corrupt or unavailable storage — no crash history, keep going */ }
 
 function noteCrash(d) {
-    if (!d || !d.crashCount) {
+    if (!d) {
+        return;
+    }
+    if (!d.crashCount) {
+        // A connected device reporting zero crashes is authoritative: it has
+        // been power-cycled (or reflashed) since whatever we stored. Keeping
+        // the old entry means a crash that has already been fixed follows the
+        // user around forever — and, after the firmware fix for fabricated
+        // records, the stored entry may itself be one of those phantoms.
+        if (lastCrash) clearCrash();
         return;
     }
     // Same crash we already have? Leave the original timestamp alone.
@@ -86,9 +96,19 @@ function crashReportText() {
     ];
     if (lastCrash.fault) {
         parts.push('hard fault at PC ' + hex(lastCrash.pc, 8));
-        if (lastCrash.stack) parts.push('STACK OVERFLOW (faulted at the stack guard)');
     } else {
         parts.push('hang (watchdog timeout, no fault)');
+    }
+    // Outside the fault branch on purpose: the common stack-overflow shape is a
+    // push that faults into the guard, which locks the core up before any
+    // handler runs. There is no PC for that case — the firmware reports it from
+    // the stack canary instead, with no fault recorded.
+    if (lastCrash.stack) {
+        parts.push('STACK OVERFLOW' + (lastCrash.fault ? ' (faulted at the stack guard)' : ' (canary destroyed, no fault frame)'));
+    }
+    if (crashIsBootPhase(lastCrash.code)) {
+        parts.push('THE SAVED CONFIG IS WHAT CRASHED — it will crash again on every power-on. ' +
+            'Recover with the BOOTSEL safe-mode gesture: plug in, then hold BOOTSEL ~2 s');
     }
     parts.push('seen ' + lastCrash.seen);
     return parts.join(' · ');
@@ -509,6 +529,10 @@ function onDisconnected() {
     pointerFx = null;
     if (pfxSendTimer) { clearTimeout(pfxSendTimer); pfxSendTimer = null; }
     if (diagTimer) { clearInterval(diagTimer); diagTimer = null; }
+    // hudPoll deliberately keeps running: hudTick already gates its device
+    // reads on dev.isOpen and repaints the panel with connected:false, so
+    // stopping it here would freeze the HUD on stale state instead of showing
+    // the disconnect.
     renderStatusBar();
     if (currentTab === 'pointer') renderPointer();
     if (currentTab === 'settings') renderSettings();
@@ -634,7 +658,9 @@ function renderKeyGrid(lay) {
             const view = assignmentView(btn.source);
             // A mode toggle owned by this button isn't a raw mapping — name
             // it on the cap so the assignment is visible at a glance.
-            const toggled = project.behaviors.find((bb) => bb.mode === 'toggle' && bb.trigger === btn.source &&
+            // Same enabled test as getButtonPlan/modeEntries — a disabled mode
+            // compiles to nothing, so naming it on the cap would be a lie.
+            const toggled = project.behaviors.find((bb) => bb.enabled !== false && bb.mode === 'toggle' && bb.trigger === btn.source &&
                 (bb.type === 'drag_scroll' || bb.type === 'gesture_set'));
             assigned = view.cls === 'advanced' || !!toggled;
             isSel = !!(selected && selected.source === btn.source);
@@ -739,7 +765,19 @@ function renderTabs() {
         tabs.append(el('button', {
             class: 'tab' + (i === currentLayer ? ' on' : ''), text: 'Layer ' + i,
             role: 'tab', 'aria-selected': String(i === currentLayer),
-            onclick: () => { currentLayer = i; renderTabs(); renderButtons(); },
+            onclick: () => {
+                currentLayer = i;
+                // The per-button pane was rendered for the layer we just left:
+                // its rows read getButtonPlan(previous layer) and the Advanced
+                // rows hold direct references to that layer's mapping objects,
+                // while every write below now targets the new layer. Re-render
+                // the whole keymap surface (and re-seat focusedAction) so the
+                // pane can never read one layer and write another.
+                focusedAction = selected ? (getActions(base(), selected.source, currentLayer)[0] || null) : null;
+                if (selected) $('pickfor').textContent = '— ' + selected.label + ' on layer ' + currentLayer;
+                renderTabs();
+                renderAllKeymap();
+            },
         }));
     }
 }
@@ -861,19 +899,36 @@ function selectSlot(source, label) {
 // for hold-to-autoscroll and layer shifts, where instant engagement matters
 // and a brief accidental activation is harmless.
 
-function autoDanceFor(source) {
-    return project.behaviors.find((b) => b.type === 'tap_dance' && b.auto && b.button === source);
+// Keyed on the layer as well as the button: compileTapDance emits the dance's
+// outputs *and* the native-button suppression on layersOf(b), i.e. the single
+// layer the dance was created for, while this pane is per-layer throughout.
+// Matching on the button alone made an edit on layer N adopt the dance that
+// belongs to layer M and then move it (dance.layers was rewritten to the layer
+// being edited), so layer M silently lost its double tap and its button
+// suppression. A dance is per (button, layer) — it costs an expression channel
+// each, and compile() surfaces "no free channel" if a project runs out.
+// The layer test mirrors behaviors.js layersOf(): an empty/absent layers list
+// compiles on every layer, so the editor must show such a dance on every
+// layer too, or it would be invisible here while still firing on the device.
+function autoDanceFor(source, layer) {
+    return project.behaviors.find((b) => b.type === 'tap_dance' && b.auto && b.button === source &&
+        ((b.layers && b.layers.length) ? b.layers.includes(layer) : true));
 }
 
 function getButtonPlan(source) {
-    const dance = autoDanceFor(source);
+    const dance = autoDanceFor(source, currentLayer);
     const acts = getActions(base(), source, currentLayer);
     const plain = acts.find((a) => !a.tap && !a.hold && !a.sticky);
     const tapA = acts.find((a) => a.tap);
     const holdA = acts.find((a) => a.hold);
     // A mode behavior toggled by this button occupies the Tap row; a plain
     // mapping to a mode usage is a momentary hold (level = instant engage).
-    const toggled = project.behaviors.find((b) => b.mode === 'toggle' && b.trigger === source &&
+    // The enabled test must match modeEntries() (which skips disabled
+    // behaviors): if it doesn't, a disabled mode still fills the Tap row,
+    // modeEntryFor() then returns null for it in setButtonPlan, and the pinned
+    // layer usage gets written out as an ordinary raw mapping — pulsing a
+    // layer whose reservation compile() dropped along with the behavior.
+    const toggled = project.behaviors.find((b) => b.enabled !== false && b.mode === 'toggle' && b.trigger === source &&
         (b.type === 'drag_scroll' || b.type === 'gesture_set'));
     const toggledUsage = toggled ? (toggled.type === 'drag_scroll' ? layerUsage(toggled.layerPin) : pfxGestureSetActiveUsage(toggled.set)) : null;
     // Dance rows live in the auto behavior regardless of what occupies the
@@ -888,9 +943,21 @@ function getButtonPlan(source) {
             hold: plain.target_usage, eager: true, ...danceFields };
     }
     if (toggledUsage) {
-        return { tap: toggledUsage,
-            hold: holdA ? holdA.target_usage : (dance ? dance.hold : null),
-            eager: false, ...danceFields };
+        // An eager hold compiles to a PLAIN (unflagged) mapping, so it has to
+        // be read back from `plain` here too — the branch above already
+        // returned for the case where `plain` is itself a mode usage, so at
+        // this point `plain` can only be an ordinary eager hold. Reading only
+        // holdA/dance blanked the Hold row and unticked Eager one frame after
+        // the user set them, and the next edit then deleted the mapping.
+        // tapA wins over the mode chip when it exists: assigning a mode on this
+        // layer always clears plan.tap (below), so a tap-flagged mapping can
+        // only be here because the toggle was wired from a DIFFERENT layer —
+        // in which case this layer's Tap row is the user's own key, and showing
+        // the mode instead round-trips it to nothing and deletes it on the
+        // next edit.
+        return { tap: tapA ? tapA.target_usage : toggledUsage,
+            hold: plain ? plain.target_usage : (holdA ? holdA.target_usage : (dance ? dance.hold : null)),
+            eager: !!plain, ...danceFields };
     }
     if (dance) {
         return { tap: dance.tap1 || null, hold: plain ? plain.target_usage : (dance.hold || null),
@@ -910,19 +977,50 @@ function setButtonPlan(source, plan) {
     // Mode targets: Tap = the behavior's cancellable toggle (any other
     // button press cancels); Hold = plain level mapping (momentary).
     const tapMode = plan.tap ? modeEntryFor(plan.tap) : null;
-    // Release any toggle this button previously owned but no longer does.
+    // Release any toggle this button previously owned but no longer does —
+    // but only if it was wired from this layer's pane. The behavior itself is
+    // global (its activation mapping has to live on every layer: scoped to
+    // one, the pinned layer would deactivate its own trigger and oscillate),
+    // so without assignedLayer, editing the same button on layer 1 stripped
+    // the mode the user set up on layer 0. Projects saved before this field
+    // existed have no assignedLayer and keep the old unconditional release.
     for (const b of project.behaviors) {
-        if (b.mode === 'toggle' && b.trigger === source &&
-            (!tapMode || b !== tapMode.behavior)) {
+        if (b.mode !== 'toggle' || b.trigger !== source) continue;
+        if (tapMode && b === tapMode.behavior) continue;
+        if (tapMode) {
+            // The user is explicitly putting a mode on this button, and a
+            // button can own at most one: everything else holding it lets go,
+            // whichever layer wired it and whether or not it is disabled.
+            // Otherwise two modes share the trigger — one press latches both,
+            // and getButtonPlan (first match wins) shows the wrong one, so the
+            // assignment looks like it silently failed.
+            b.trigger = null;
+            continue;
+        }
+        // Not a mode assignment, just an edit elsewhere on this button. A
+        // disabled behavior is skipped for the same reason it is skipped when
+        // reading the plan: as far as the editor is concerned it is not on
+        // this button, so an incidental edit must not cut its trigger and lose
+        // the wiring when it is switched back on.
+        if (b.enabled === false) continue;
+        if (b.assignedLayer === undefined || b.assignedLayer === currentLayer) {
             b.trigger = null;
         }
     }
     if (tapMode) {
+        // Only claim the layer when this edit is what wires the button. The
+        // mode is active on every layer, so getButtonPlan reports it on the Tap
+        // row everywhere — restamping on each incidental edit (Hold row, a
+        // slider, the Eager box) would keep moving ownership to whichever layer
+        // was last opened, which is exactly what assignedLayer exists to stop.
+        if (tapMode.behavior.trigger !== source) {
+            tapMode.behavior.assignedLayer = currentLayer;
+        }
         tapMode.behavior.trigger = source;
         tapMode.behavior.mode = 'toggle';
         plan = { ...plan, tap: null };  // no raw mapping for the tap row
     }
-    let dance = autoDanceFor(source);
+    let dance = autoDanceFor(source, currentLayer);
     const needsDance = !!(plan.double || plan.tapHold);
     if (needsDance) {
         if (!dance) {
@@ -930,7 +1028,10 @@ function setButtonPlan(source, plan) {
             project.behaviors.push(dance);
         }
         dance.button = source;
-        dance.layers = [currentLayer];
+        // Deliberately not rewriting dance.layers here: creation above already
+        // pins it, and autoDanceFor only ever returns a dance that already
+        // covers currentLayer. Rewriting it is what let a dance migrate off
+        // the layer it was created on.
         dance.window = plan.window || 200;
         dance.tap1 = plan.tap || null;
         dance.tap2 = plan.double || null;
@@ -1025,6 +1126,11 @@ function renderKeyOptions() {
     }
 
     const adv = el('details', {});
+    // Every interaction inside the Advanced pane re-runs renderKeyOptions(),
+    // which builds a fresh <details>. Without carrying the open state over,
+    // clicking a raw action collapses the pane out from under the click.
+    adv.open = advOpen;
+    adv.addEventListener('toggle', () => { advOpen = adv.open; });
     adv.append(el('summary', { style: 'cursor:pointer;font-size:12px;color:var(--muted);margin:10px 0 6px', text: 'Advanced (sticky, hub ports, raw actions)' }));
     renderRawActions(adv);
     box.append(adv);
@@ -1042,20 +1148,29 @@ function renderRawActions(box) {
         // Settings.
         const portSel = selectFrom(
             [['0', 'Any device'], ...[1, 2, 3, 4].map((p) => [String(p), portName(p)])],
-            String(a.source_port || 0), (v) => { a.source_port = parseInt(v, 10); renderButtons(); });
+            String(a.source_port || 0), (v) => { a.source_port = parseInt(v, 10); renderButtons(); scheduleApply(); scheduleSnapshot(); });
         portSel.title = 'Which hub port this input must come from';
+        // Focusing a raw action has to claim the picker as well. Everything
+        // else that can be selected leaves pickerTarget on {kind:'plan'}, and
+        // assign() then runs setButtonPlan — whose first act is clearActions()
+        // — so picking a keycode here used to erase the sticky flags, hub
+        // ports and any third-or-later action on this (button, layer).
         box.append(el('div', { class: 'actionrow' + (a === focusedAction ? ' focus' : '') },
-            el('button', { class: 'keybtn', text: readableTargetName(a.target_usage, base().our_descriptor_number), onclick: () => { focusedAction = a; renderKeyOptions(); } }),
-            flagBox('Sticky', a.sticky, (v) => { a.sticky = v; renderButtons(); },
+            el('button', { class: 'keybtn', text: readableTargetName(a.target_usage, base().our_descriptor_number), onclick: () => { focusedAction = a; pickerTarget = { kind: 'slot' }; renderKeyOptions(); renderPicker(); } }),
+            flagBox('Sticky', a.sticky, (v) => { a.sticky = v; renderButtons(); scheduleApply(); scheduleSnapshot(); },
                 'Toggle: press once to hold the output, press again to release — like caps lock.'),
-            flagBox('Tap', a.tap, (v) => { a.tap = v; renderButtons(); },
+            flagBox('Tap', a.tap, (v) => { a.tap = v; renderButtons(); scheduleApply(); scheduleSnapshot(); },
                 'Fires only on a quick press-and-release (shorter than the tap-hold threshold in Settings).'),
-            flagBox('Hold', a.hold, (v) => { a.hold = v; renderButtons(); },
+            flagBox('Hold', a.hold, (v) => { a.hold = v; renderButtons(); scheduleApply(); scheduleSnapshot(); },
                 'Fires only when the button is held past the tap-hold threshold in Settings.'),
             portSel,
-            el('button', { class: 'iconbtn', text: '✕', title: 'Remove action', onclick: () => { removeAction(base(), a); if (focusedAction === a) focusedAction = null; renderButtons(); renderKeyOptions(); } })));
+            el('button', { class: 'iconbtn', text: '✕', title: 'Remove action', onclick: () => { removeAction(base(), a); if (focusedAction === a) focusedAction = null; renderButtons(); renderKeyOptions(); scheduleApply(); scheduleSnapshot(); } })));
     }
-    box.append(el('button', { class: 'iconbtn', text: '+ Add action', onclick: () => { focusedAction = addAction(base(), selected.source, currentLayer); renderButtons(); renderKeyOptions(); } }));
+    // addAction() puts a real (NOTHING-targeted) mapping into the project, so
+    // it has to be applied and snapshotted like every other edit here —
+    // otherwise the device and the undo history disagree with what is on
+    // screen until some later edit happens to push.
+    box.append(el('button', { class: 'iconbtn', text: '+ Add action', onclick: () => { focusedAction = addAction(base(), selected.source, currentLayer); pickerTarget = { kind: 'slot' }; renderButtons(); renderKeyOptions(); renderPicker(); scheduleApply(); scheduleSnapshot(); } }));
 }
 
 function flagBox(label, checked, onChange, title) {
@@ -1180,6 +1295,10 @@ function assign(usage) {
     }
     renderButtons();
     renderKeyOptions();
+    // This branch only became reachable once the raw-actions editor started
+    // claiming the picker; it has to push and record like every other editor.
+    scheduleApply();
+    scheduleSnapshot();
 }
 
 // --- behaviors tab ---
@@ -1281,6 +1400,11 @@ function flashBehavior(b) {
 function duplicateBehavior(b) {
     const copy = JSON.parse(JSON.stringify(b));
     copy.id = newBehaviorId();
+    // A pinned layer belongs to exactly one behavior. Carrying it into the copy
+    // makes two behaviors claim the same layer, which the allocator now refuses
+    // — Duplicate would break the whole project on the next apply. Dropping it
+    // lets normalizeBehaviors hand the copy its own pin.
+    delete copy.layerPin;
     project.behaviors.splice(project.behaviors.indexOf(b) + 1, 0, copy);
     renderBehaviors();
     flashBehavior(copy);
@@ -1325,12 +1449,47 @@ function normalizeBehaviors() {
             b.layerPin = nextFreeLayerPin();
         }
     }
+    repinCollidedBehaviors();
+}
+
+// A pin is chosen once, when the behavior is created, but the keymap keeps
+// growing afterwards — assign one key on the Layer 7 tab and the layer the
+// drag scroll pinned is suddenly "used by the keymap", which the allocator
+// refuses. That state used to be unrecoverable: every apply and every save
+// failed, and nothing in the UI can edit a pin. So move the pin instead, and
+// carry the mappings that name it along, which keeps whatever the user wired
+// in the key editor working.
+function repinCollidedBehaviors() {
+    const keymapLayers = new Set();
+    for (const m of base().mappings) {
+        for (const l of (m.layers || [])) keymapLayers.add(l);
+    }
+    for (const b of project.behaviors) {
+        if (!b.layerPin || !keymapLayers.has(b.layerPin)) continue;
+        const to = nextFreeLayerPin();
+        if (to === null) continue;  // genuinely out of layers; compile says so
+        const from = b.layerPin;
+        b.layerPin = to;
+        // Anything that activated the old pin (the key editor's Hold row, for
+        // one) has to follow, or the behavior silently stops responding.
+        for (const m of base().mappings) {
+            if (m.target_usage === layerUsage(from)) m.target_usage = layerUsage(to);
+        }
+    }
 }
 
 // Stable layer for behaviors whose activation is assignable in the key
 // editor (the usage must not move between compiles).
 function nextFreeLayerPin() {
     const used = new Set(project.behaviors.map((b) => b.layerPin).filter(Boolean));
+    // Layers the base keymap already uses count as taken. "Load from device"
+    // adopts a previously compiled config verbatim, so the old behaviors' layers
+    // arrive as ordinary base mappings with no behavior left to declare them —
+    // pinning on top of one silently merges two behaviors onto one layer (and,
+    // now that the allocator refuses collisions, throws on the next apply).
+    for (const m of base().mappings) {
+        for (const l of (m.layers || [])) used.add(l);
+    }
     for (let L = 7; L >= 1; L--) {
         if (!used.has(L)) return L;
     }
@@ -1362,9 +1521,19 @@ function modeEntries() {
 // Materialize a picker-created mode: returns the real activation usage.
 function createModeBehavior(sentinel) {
     if (sentinel !== 'new:drag_scroll') return null;
+    const pin = nextFreeLayerPin();
+    if (pin === null) {
+        // Every layer is spoken for. Returning here (rather than pushing a
+        // behavior with a null pin) matters: layerUsage(null) is a valid-looking
+        // usage that activates LAYER 0, so the "mode" would have silently
+        // compiled into a button that switches the whole keymap to its own
+        // base layer.
+        showNotice('No free layer left to give this mode — free one up in the Keymap tab, or remove a behavior that pins one.');
+        return null;
+    }
     const b = { id: newBehaviorId(), type: 'drag_scroll', enabled: true,
         layers: [0, 1, 2, 3, 4, 5, 6, 7], trigger: null, mode: 'toggle',
-        layerPin: nextFreeLayerPin(), divisorV: 32, divisorH: 40,
+        layerPin: pin, divisorV: 32, divisorH: 40,
         horizontal: true, invert: false, wiggleToggle: false, cancelSources: [] };
     project.behaviors.push(b);
     return layerUsage(b.layerPin);

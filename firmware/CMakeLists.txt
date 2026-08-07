@@ -69,9 +69,22 @@ target_compile_definitions(remapper PRIVATE REMAPPER_SINGLE_EXTRAS)
 
 # MPU guard at the bottom of the 2 KB core-0 stack. Without it a stack
 # overflow silently walks into SCRATCH_X and then the heap and crashes later
-# somewhere innocent; with it, the overflow itself hard-faults and the fault
-# handler in main.cc records the PC. Costs one MPU region (nothing else uses
-# the MPU here) and a couple of instructions at boot.
+# somewhere innocent; with it, execution stops at the overflow itself.
+#
+# What it can and cannot report, so nobody reads more into the flag than is
+# there. An overflow that steps over the 32-byte guard with a large
+# `sub sp, #N` and then stores into it hard-faults normally: SP is already
+# below the guard, the exception frame stacks in plain SCRATCH_Y, and main.cc
+# records the PC plus DIAG_CRASH_FLAG_STACK. The far more common shape — a
+# `push` that faults INTO the guard — cannot be handled at all on ARMv6-M: the
+# HardFault frame is stacked on the same overflowed stack, lands in the guard
+# too, and a fault during exception entry escalates to LOCKUP, so no handler
+# runs and no PC exists. Moving or resizing the guard does not help; the frame
+# always lands on the stack that just overflowed. That case is recovered by
+# the watchdog and reported as a hang at the correct phase, with
+# DIAG_CRASH_FLAG_STACK supplied instead by the stack canary main.cc paints
+# above the guard (SRAM survives a watchdog reset). Costs one MPU region
+# (nothing else uses the MPU here) and a couple of instructions at boot.
 target_compile_definitions(remapper PRIVATE PICO_USE_STACK_GUARDS=1)
 
 target_link_libraries(remapper

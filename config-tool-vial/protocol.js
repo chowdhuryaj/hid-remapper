@@ -181,12 +181,18 @@ export async function readConfigFeature(device, fields = []) {
 }
 
 // --- Pointer FX (fork firmware only) ----------------------------------------
-// Two SET/GET pages mirroring firmware/src/pointer_fx.h's packed struct.
-// Page 0: flags u16, accel takeoff/growth u16, offset i16, limit u16,
-//         device_cpi u16, smooth factor/timeout u16  (16 bytes)
-// Page 1: gesture_ratchet u16, wiggle switch/cooldown u16, threshold u8,
+// Two SET/GET pages mirroring firmware/src/pointer_fx.h's packed struct
+// (38 bytes total, static_asserted in firmware/src/config.cc).
+// Page 0 (PFX_PAGE0_SIZE = 16): flags u16, accel takeoff/growth u16,
+//         offset i16, limit u16, device_cpi u16, smooth factor/timeout u16
+// Page 1 (PFX_PAGE1_SIZE = struct - 16, so it GREW as fields were appended):
+//         gesture_ratchet u16, wiggle switch/cooldown u16, threshold u8,
 //         reserved u8, asc speed/deadzone/range u16, chord step/hold u16
-//         (18 bytes)
+//         (18 bytes, v100), + cursor_gain u16 (20 bytes, v101),
+//         + tilt_debounce u16 (22 bytes, sidecar era / fork generation 2).
+// Read and write must use the SAME field list for a given firmware: decoding
+// one field short silently returns undefined, which the tool then writes back
+// as 0 and destroys the device's setting.
 
 export const PFX_FLAG_SMOOTHING = 1 << 0;
 export const PFX_FLAG_ACCEL = 1 << 1;
@@ -206,14 +212,28 @@ const PFX_PAGE0_FIELDS = [UINT16, UINT16, UINT16, INT16, UINT16, UINT16, UINT16,
 const PFX_PAGE1_FIELDS = [UINT16, UINT16, UINT16, UINT8, UINT8, UINT16, UINT16, UINT16, UINT16, UINT16];
 // v101 appended cursor_gain to page 1; on a v100 device the field is absent.
 const PFX_PAGE1_FIELDS_V101 = [...PFX_PAGE1_FIELDS, UINT16];
+// Sidecar-era firmware appended tilt_debounce after cursor_gain. Keyed on the
+// fork generation, not on the wire version: current fork firmware reports
+// stock version 18, and legacy wire-101 firmware has no tilt field at all.
+const PFX_PAGE1_FIELDS_GEN2 = [...PFX_PAGE1_FIELDS_V101, UINT16];
 
 // cursor_gain exists on legacy v101 and on every sidecar-era firmware.
 function pfxHasCursorGain() {
     return getForkGeneration() >= 2 || getActiveConfigVersion() >= 101;
 }
 
+// tilt_debounce only exists on sidecar-era firmware (page 1 = 22 bytes there,
+// 20 on legacy v101, 18 on v100).
+function pfxHasTiltDebounce() {
+    return getForkGeneration() >= 2;
+}
+
+function pfxPage1Fields() {
+    if (pfxHasTiltDebounce()) return PFX_PAGE1_FIELDS_GEN2;
+    return pfxHasCursorGain() ? PFX_PAGE1_FIELDS_V101 : PFX_PAGE1_FIELDS;
+}
+
 export async function readPointerFx(device) {
-    const v101 = pfxHasCursorGain();
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 0]]);
     const [flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
         device_cpi, smooth_factor, smooth_timeout] =
@@ -221,7 +241,7 @@ export async function readPointerFx(device) {
     await sendFeatureCommand(device, GET_POINTER_FX, [[UINT32, 1]]);
     const [gesture_ratchet, wiggle_switch, wiggle_cooldown, wiggle_threshold, ,
         asc_speed, asc_deadzone, asc_range, chord_step, chord_hold, cursor_gain, tilt_debounce] =
-        await readConfigFeature(device, v101 ? PFX_PAGE1_FIELDS_V101 : PFX_PAGE1_FIELDS);
+        await readConfigFeature(device, pfxPage1Fields());
     return {
         flags, accel_takeoff, accel_growth, accel_offset, accel_limit,
         device_cpi, smooth_factor, smooth_timeout,
@@ -234,7 +254,6 @@ export async function readPointerFx(device) {
 }
 
 export async function writePointerFx(device, p) {
-    const v101 = pfxHasCursorGain();
     await sendFeatureCommand(device, SET_POINTER_FX, [
         [UINT8, 0],
         [UINT16, p.flags], [UINT16, p.accel_takeoff], [UINT16, p.accel_growth],
@@ -248,8 +267,10 @@ export async function writePointerFx(device, p) {
         [UINT16, p.asc_speed], [UINT16, p.asc_deadzone], [UINT16, p.asc_range],
         [UINT16, p.chord_step], [UINT16, p.chord_hold],
     ];
-    if (v101) page1.push([UINT16, p.cursor_gain == null ? 1000 : p.cursor_gain]);
-    if (v101) page1.push([UINT16, p.tilt_debounce == null ? 0 : p.tilt_debounce]);
+    // Mirrors pfxPage1Fields() exactly — the read/write asymmetry is what hid
+    // the missing tilt_debounce decoder.
+    if (pfxHasCursorGain()) page1.push([UINT16, p.cursor_gain == null ? 1000 : p.cursor_gain]);
+    if (pfxHasTiltDebounce()) page1.push([UINT16, p.tilt_debounce == null ? 0 : p.tilt_debounce]);
     await sendFeatureCommand(device, SET_POINTER_FX, page1);
 }
 
@@ -318,7 +339,18 @@ const CRASH_PHASES = {
     0x0311: 'erasing/writing flash (save)', 0x0312: 'just after writing flash (save)',
     0x0321: 'parsing our descriptor', 0x0322: 'just after parsing our descriptor',
     0x0331: 'processing the device descriptor', 0x0332: 'just after the device descriptor',
+    // Boot path. These mean the SAVED config is what crashed, so it will crash
+    // again on the next power-on — the recovery is the BOOTSEL safe-mode
+    // gesture (hold BOOTSEL ~2 s after plugging in), not another save.
+    0x0341: 'loading the saved config at boot', 0x0342: 'just after loading the saved config',
+    0x0351: 'building the mapping table at boot (saved config)',
+    0x0352: 'just after building the mapping table at boot',
+    0x0361: 'parsing our descriptor at boot (saved config)',
+    0x0362: 'just after parsing our descriptor at boot',
 };
+// True for the boot-path phases above: the persisted config is implicated, so
+// the tool can say so instead of suggesting a retry that cannot help.
+export const crashIsBootPhase = (code) => code >= 0x0341 && code <= 0x0362;
 export function crashPointLabel(code) {
     if (!code) return 'unknown (no breadcrumb)';
     if (CRASH_PHASES[code]) return CRASH_PHASES[code];

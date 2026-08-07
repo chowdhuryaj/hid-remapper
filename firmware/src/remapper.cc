@@ -456,14 +456,29 @@ void set_mapping_from_config() {
             });
 
             if ((mapping.source_usage & 0xFFFF0000) == REGISTER_USAGE_PAGE) {
-                register_ptrs.push_back((register_ptrs_t){
-                    .register_ptr = &registers[(mapping.source_usage & 0xFFFF) - 1],
-                    .state_ptr = get_state_ptr(mapping.source_usage, source_port),
-                });
+                // Register and expression numbers are 1-based and come straight
+                // off the wire (ADD_MAPPING) or out of the persisted blob, neither
+                // of which validates them the way APPEND_TO_EXPRESSION does. A
+                // hand-edited or foreign config with register 0 or > NREGISTERS
+                // would otherwise hand process_mapping() a pointer outside
+                // registers[] to dereference every tick. Drop the offending part
+                // of the mapping silently, as the rest of the firmware does with
+                // bad wire data.
+                uint32_t reg = mapping.source_usage & 0xFFFF;
+                if ((reg >= 1) && (reg <= NREGISTERS)) {
+                    register_ptrs.push_back((register_ptrs_t){
+                        .register_ptr = &registers[reg - 1],
+                        .state_ptr = get_state_ptr(mapping.source_usage, source_port),
+                    });
+                }
             }
         }
         // if a usage appears in an expression, consider it mapped
-        if ((mapping.source_usage & 0xFFFF0000) == EXPR_USAGE_PAGE) {
+        // (same range check as above: an out-of-range expression number would
+        // range-for over a fabricated std::vector past the end of expressions[])
+        if (((mapping.source_usage & 0xFFFF0000) == EXPR_USAGE_PAGE) &&
+            ((mapping.source_usage & 0xFFFF) >= 1) &&
+            ((mapping.source_usage & 0xFFFF) <= NEXPRESSIONS)) {
             uint8_t expr = (mapping.source_usage & 0xFFFF) - 1;
             for (auto const& elem : expressions[expr]) {
                 if (elem.op == Op::PUSH_USAGE) {
@@ -564,6 +579,14 @@ void set_mapping_from_config() {
     }
 
     if (unmapped_passthrough_layer_mask) {
+        // unmapped_layers is computed once, here, but layers are ORed together at
+        // runtime with no priority, so "not mapped on layer X" is not the same as
+        // "not mapped on any active layer". Carrying mapped_on_layers along as
+        // suppress_layer_mask lets the runtime test both: a usage that is mapped
+        // on any currently active layer must not also pass through, otherwise the
+        // same input is routed twice (e.g. drag scroll's Cursor Y -> V_SCROLL on
+        // its own layer, plus cursor passthrough from a second active layer, which
+        // scrolls and moves the pointer at the same time).
         for (auto const& [usage, usage_def] : our_usages_flat) {
             uint8_t unmapped_layers = unmapped_passthrough_layer_mask & ~mapped_on_layers[usage];
             if (unmapped_layers) {
@@ -571,6 +594,7 @@ void set_mapping_from_config() {
                     reverse_mapping_map[usage].push_back((map_source_t){
                         .usage = usage,
                         .layer_mask = unmapped_layers,
+                        .suppress_layer_mask = mapped_on_layers[usage],
                         .input_state = get_state_ptr(usage, 0),
                     });
                 }
@@ -585,6 +609,7 @@ void set_mapping_from_config() {
                         reverse_mapping_map[usage].push_back((map_source_t){
                             .usage = usage,
                             .layer_mask = unmapped_layers,
+                            .suppress_layer_mask = mapped_on_layers[usage],
                             .input_state = get_state_ptr(usage, 0),
                         });
                     }
@@ -600,6 +625,7 @@ void set_mapping_from_config() {
                         reverse_mapping_map[usage].push_back((map_source_t){
                             .usage = usage,
                             .layer_mask = unmapped_layers,
+                            .suppress_layer_mask = mapped_on_layers[usage],
                             .input_state = get_state_ptr(usage, 0),
                         });
                     }
@@ -1252,7 +1278,12 @@ void process_mapping(bool auto_repeat) {
                     if (map_source.sticky) {
                         value = !!(*map_source.sticky_state & map_source.layer_mask) * map_source.scaling;
                     } else {
-                        if (layer_state_mask & map_source.layer_mask) {
+                        // suppress_layer_mask is 0 for every ordinary mapping; it
+                        // only stops an unmapped-passthrough source from firing
+                        // while the usage is explicitly mapped on some other
+                        // simultaneously active layer.
+                        if ((layer_state_mask & map_source.layer_mask) &&
+                            !(layer_state_mask & map_source.suppress_layer_mask)) {
                             value = map_source.hold ? map_source.tap_hold_state->hold : *map_source.input_state;
                             if (map_source.is_binary) {
                                 value = !!value;
@@ -1287,7 +1318,9 @@ void process_mapping(bool auto_repeat) {
                         value += 1 * map_source.scaling / 1000 - rev_map.default_value;
                     }
                 } else {
-                    if ((layer_state_mask & map_source.layer_mask)) {
+                    // see the relative branch above for suppress_layer_mask
+                    if ((layer_state_mask & map_source.layer_mask) &&
+                        !(layer_state_mask & map_source.suppress_layer_mask)) {
                         if ((map_source.tap && map_source.tap_hold_state->tap) ||
                             (map_source.hold && map_source.tap_hold_state->hold)) {
                             value += 1 * map_source.scaling / 1000 - rev_map.default_value;

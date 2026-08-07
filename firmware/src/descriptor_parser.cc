@@ -160,8 +160,14 @@ std::unordered_map<ReportType, std::unordered_map<uint8_t, uint16_t>> parse_desc
     usage_map[ReportType::FEATURE] = &feature_usage_map;
 
     while (idx < len) {
+        // A trailing pad byte is nothing to parse, so stop. This must not be a
+        // `continue`: idx has not advanced, so the loop condition is still true
+        // and the parse spins forever, holding MutexId::THEIR_USAGES (which also
+        // stalls core1) until the watchdog resets the chip. Descriptors come from
+        // untrusted downstream devices, so a device with a zero-padded descriptor
+        // would put us in a mount/reset loop.
         if (report_descriptor[idx] == 0 && idx == len - 1) {
-            continue;
+            break;
         }
 
         uint8_t item = report_descriptor[idx] & 0xFC;
@@ -171,6 +177,11 @@ std::unordered_map<ReportType, std::unordered_map<uint8_t, uint16_t>> parse_desc
         }
         uint32_t value = 0;
         idx++;
+        // a truncated final item would otherwise read past the end of the buffer;
+        // a well-formed item always has its whole payload inside len
+        if (idx + item_size > len) {
+            break;
+        }
         for (int i = 0; i < item_size; i++) {
             value |= report_descriptor[idx++] << (i * 8);
         }

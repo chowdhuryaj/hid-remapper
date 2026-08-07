@@ -8,10 +8,17 @@
 // usage 0xFFF5000N, which a mapping turns into a real keycode — the same
 // mechanism the keymap grid uses.
 //
-// Numeric convention (see EXPRESSIONS.md): on-device values are fixed point
-// x1000, so a register *number* N is written `N*1000` as a recall/store operand,
-// a value of 1.0 is `1000`, and small raw counters (a glyph index, a chord
-// bitmask) are written as-is. regRef() / val() keep this straight.
+// Numeric convention (see EXPRESSIONS.md): EVERYTHING that reaches the
+// expression stack is fixed point x1000. `input_state` multiplies the raw
+// delta by 1000, `input_state_binary`/`prev_input_state_binary` push 0 or
+// 1000, `time` pushes milliseconds x1000, `eq`/`gt`/`not` yield 0 or 1000,
+// and `mul` divides by 1000. So a register *number* N is written `N*1000` as
+// a recall/store operand (regRef), and ANY literal compared against a value
+// that came off the stack — a tap count, a sequence step index, a glyph
+// index, a time window in ms — must be written x1000 as well (val).
+// The one deliberate exception is a bitmask assembled with `1<<i mul`:
+// 1000 * (1<<i) / 1000 is raw by construction, so the chord accumulator and
+// the masks it is compared against are both raw and consistent.
 
 import { newMapping } from './model.js?v=15';
 import {
@@ -32,7 +39,16 @@ const H_SCROLL = '0x000c0238';
 const NOTHING = '0x00000000';
 
 const hexUsage = (base, n) => '0x' + (((base + n) >>> 0)).toString(16).padStart(8, '0');
-export const layerUsage = (L) => hexUsage(0xFFF10000, L);          // activate layer L
+// activate layer L. Throws rather than accepting null/undefined: the arithmetic
+// would quietly yield the layer-0 usage, i.e. a control that switches the whole
+// keymap to the base layer, which is indistinguishable from a working mode
+// until someone presses it.
+export const layerUsage = (L) => {
+    if (!Number.isInteger(L) || L < 0 || L > 7) {
+        throw new Error('layerUsage: layer must be 0..7, got ' + L);
+    }
+    return hexUsage(0xFFF10000, L);
+};
 export const exprUsage = (channelIndex) => hexUsage(0xFFF30000, channelIndex + 1); // Expression channelIndex+1
 export const registerUsage = (n) => hexUsage(0xFFF50000, n);       // Register n
 
@@ -45,8 +61,34 @@ function makeAllocator(config) {
     for (const m of config.mappings) {
         for (const l of m.layers) usedLayers.add(l);
     }
+    // The base config is not necessarily empty. A project imported from a
+    // remapper.org-authored config (or "Load from device") can already own
+    // expression channels and registers, and compile() deliberately preserves
+    // those expression strings. Handing out channel 0 / register 1 regardless
+    // would silently overwrite the user's own RPN and cross-write its
+    // registers with no error at all, and would also under-count the budget so
+    // the throws below fire late. Seed from what is already in use instead.
+    const usedChannels = new Set();
+    (config.expressions || []).forEach((e, i) => {
+        if (typeof e === 'string' && e.trim() !== '') usedChannels.add(i);
+    });
+    // Occupied register numbers, not a high-water mark: one base expression
+    // using register 30 must not write off the other 29.
+    const usedRegs = new Set();
+    for (const e of config.expressions || []) {
+        if (typeof e !== 'string') continue;
+        // A register operand is always the literal N*1000 sitting immediately
+        // before `recall`/`store` (see the numeric convention above), so this
+        // finds every register a base expression touches. An address computed
+        // on the stack cannot be seen this way — best-effort hardening on top
+        // of the channel seeding above, which is exact.
+        for (const m of e.matchAll(/(?:^|\s)(-?\d+)\s+(?:recall|store)(?=\s|$)/g)) {
+            const n = Number(m[1]) / 1000;
+            if (Number.isInteger(n) && (n >= 1) && (n <= 32)) usedRegs.add(n);
+        }
+    }
+    const pinnedBy = new Map();
     let nextChannel = 0;
-    let nextReg = 1;
     return {
         layer() {
             for (let L = 7; L >= 1; L--) {
@@ -56,20 +98,50 @@ function makeAllocator(config) {
         },
         // Behaviors with a persistent layerPin (so their layer usage is
         // stable across compiles and can be assigned in the key editor)
-        // claim it here instead of taking a dynamic slot.
-        reserve(L) {
+        // claim it here instead of taking a dynamic slot. A pin that is
+        // already taken has to throw rather than quietly fall back to a free
+        // layer: layerUsage(b.layerPin) is the usage the key editor already
+        // wrote into the user's mappings, so relocating the layer at compile
+        // time would leave that mapping activating a different, empty layer
+        // and the mode would simply never engage. `owner` is the behavior
+        // object, so a behavior re-claiming its own pin (compile() reserves
+        // pins up front, then the compiler asks again) is fine, while two
+        // behaviors sharing a pin is not.
+        reserve(L, owner) {
+            if (pinnedBy.has(L)) {
+                if (pinnedBy.get(L) === owner) return L;
+                throw new Error(`Layer ${L} is pinned by two behaviors at once — change one of them.`);
+            }
+            if (!Number.isInteger(L) || L < 1 || L > 7) {
+                throw new Error(`Behavior has an invalid pinned layer (${L}).`);
+            }
+            if (usedLayers.has(L)) {
+                throw new Error(`Layer ${L} is already used by the keymap, so this behavior cannot pin it — clear that layer or re-pin the behavior.`);
+            }
+            pinnedBy.set(L, owner);
             usedLayers.add(L);
             return L;
         },
         channel() {
+            while ((nextChannel < 8) && usedChannels.has(nextChannel)) nextChannel++;
             if (nextChannel >= 8) throw new Error('Out of expression channels (max 8).');
             return nextChannel++;
         },
+        // Returns `count` CONSECUTIVE free registers (callers that ask for
+        // several index them as a block), skipping any the base config already
+        // uses rather than starting past the highest one.
         reg(count = 1) {
-            if (nextReg + count - 1 > 32) throw new Error('Out of registers (max 32).');
-            const start = nextReg;
-            nextReg += count;
-            return start;
+            for (let start = 1; start + count - 1 <= 32; start++) {
+                let free = true;
+                for (let i = 0; i < count; i++) {
+                    if (usedRegs.has(start + i)) { free = false; break; }
+                }
+                if (free) {
+                    for (let i = 0; i < count; i++) usedRegs.add(start + i);
+                    return start;
+                }
+            }
+            throw new Error('Out of registers (max 32).');
         },
         // Claims the highest empty macro slot (0-based index), so compiled
         // preset macros stay clear of the user's own low-numbered macros.
@@ -98,7 +170,7 @@ export function compile(baseConfig, behaviors, projectOs = 'mac') {
 
     // Pinned layers first, so no dynamic allocation can steal one.
     for (const b of behaviors || []) {
-        if (b.enabled !== false && b.layerPin) alloc.reserve(b.layerPin);
+        if (b.enabled !== false && b.layerPin) alloc.reserve(b.layerPin, b);
     }
 
     for (const b of behaviors || []) {
@@ -159,7 +231,15 @@ function compileCursorKeys(b, config, alloc) {
     if (b.gate.mode === 'hold' || b.gate.mode === 'sticky') {
         const L = alloc.layer();
         config.mappings.push({ ...newMapping(b.gate.button, layerUsage(L), layersOf(b)), sticky: b.gate.mode === 'sticky' });
-        // suppress real pointer motion while the gesture is active
+        // Suppress real pointer motion while the gesture is active. Scoping
+        // this to [L] is what a suppression can be: mapping Cursor X/Y to
+        // NOTHING on every layer would kill the pointer permanently. Note
+        // what it does and does not buy — it puts L into the firmware's
+        // mapped_on_layers for Cursor X/Y, which stops the *unmapped
+        // passthrough* source there. It does not cancel another layer's
+        // explicit mapping of the same usage, and layers OR together with no
+        // priority, so with a second layer also active (drag scroll, DPI
+        // shift, ...) that layer's own cursor mapping still runs.
         config.mappings.push(newMapping(CURSOR_X, NOTHING, [L]));
         config.mappings.push(newMapping(CURSOR_Y, NOTHING, [L]));
         gate = `layer_state 0x${(1 << L).toString(16)} bitwise_and not not mul `;
@@ -245,7 +325,7 @@ function compileChordSet(b, config, alloc) {
 // plain rows (which accumulate presses and fire on first release), dance
 // rows judge simultaneity — all members must be down together.
 function compileChordDance(b, c, config, alloc) {
-    const win = Math.max(50, Math.round(b.window || 200));
+    const win = Math.max(50, Math.round(b.window || 200));  // raw ms; emitted as val(win)
     const r = regRef;
     const lvlNow = c.members.map((m, i) => `${m} input_state_binary` + (i > 0 ? ' mul' : '')).join(' ');
     const lvlPrev = c.members.map((m, i) => `${m} prev_input_state_binary` + (i > 0 ? ' mul' : '')).join(' ');
@@ -258,14 +338,14 @@ function compileChordDance(b, c, config, alloc) {
         `${r(C)} recall ${r(PE)} recall add ${r(C)} store`,
         `${r(PE)} recall time mul ${r(PE)} recall not ${r(T)} recall mul add ${r(T)} store`,
         // hold = still fully down past the window
-        `${lvlNow} time ${r(T)} recall sub ${win} gt mul ${r(HOLD)} store`,
+        `${lvlNow} time ${r(T)} recall sub ${val(win)} gt mul ${r(HOLD)} store`,
         `${r(C)} recall ${r(HOLD)} recall not mul ${r(C)} store`,
         // tap fire = chord released, count pending, window quiet
-        `${lvlNow} not ${r(C)} recall 0 gt mul time ${r(T)} recall sub ${win} gt mul ${r(TAP)} store`,
-        `${r(TAP)} recall ${r(C)} recall 1 eq mul ${r(F1)} store`,
+        `${lvlNow} not ${r(C)} recall 0 gt mul time ${r(T)} recall sub ${val(win)} gt mul ${r(TAP)} store`,
+        `${r(TAP)} recall ${r(C)} recall ${val(1)} eq mul ${r(F1)} store`,
     ];
     if (c.double) {
-        lines.push(`${r(TAP)} recall ${r(C)} recall 1 gt mul ${r(F2)} store`);
+        lines.push(`${r(TAP)} recall ${r(C)} recall ${val(1)} gt mul ${r(F2)} store`);
     }
     lines.push(`${r(C)} recall ${r(TAP)} recall not mul ${r(C)} store`);
     config.expressions[ch] = lines.join(' eol ');
@@ -308,7 +388,7 @@ function compileAxisKeys(b, config, alloc) {
 // untouched. Each sequence progresses independently (trie-style): a press
 // that matches nothing resets only the sequences it belongs to.
 function compileLeader(b, config, alloc) {
-    const win = Math.max(150, Math.round(b.window || 600));
+    const win = Math.max(150, Math.round(b.window || 600));  // raw ms; emitted as val(win)
     const seqs = (b.seqs || []).filter((s) => s.steps && s.steps.length >= 1 && s.steps.every(Boolean) && s.output);
     if (!b.leader || seqs.length === 0) return;
     const r = regRef;
@@ -328,13 +408,16 @@ function compileLeader(b, config, alloc) {
         // any step press while armed re-stamps the clock (per-step timeout)
         `${anyStepPE} ${r(rArm)} recall mul dup time mul swap not ${r(rT)} recall mul add ${r(rT)} store`,
         // timeout disarms
-        `${r(rArm)} recall time ${r(rT)} recall sub ${win} gt not mul ${r(rArm)} store`,
+        `${r(rArm)} recall time ${r(rT)} recall sub ${val(win)} gt not mul ${r(rArm)} store`,
     ];
     for (const { s, rP, rF } of perSeq) {
         // progress dies with the arm flag
         lines.push(`${r(rP)} recall ${r(rArm)} recall mul ${r(rP)} store`);
+        // progress advances by one press edge, i.e. by 1000, so the step
+        // index it is compared against is val(k) — a raw `k eq` would only
+        // ever match step 0 and no multi-step sequence could complete.
         const match = s.steps.map((st, k) =>
-            `${r(rP)} recall ${k} eq ${pe(st)} mul ${r(rArm)} recall mul`);
+            `${r(rP)} recall ${val(k)} eq ${pe(st)} mul ${r(rArm)} recall mul`);
         // fire = the last step matched at full progress
         lines.push(`${match[s.steps.length - 1]} ${r(rF)} store`);
         // advance through non-final matches; reset on a member press that
@@ -358,6 +441,11 @@ function compileLeader(b, config, alloc) {
     // wherever it was started.
     config.mappings.push(newMapping(registerUsage(rArm), layerUsage(L), layersOf(b)));
     config.mappings.push(newMapping(b.leader, NOTHING, layersOf(b)));  // leader is taken over
+    // Step buttons are only swallowed on L — they must keep their normal
+    // function when the sequence is not armed, so widening this to
+    // layersOf(b) is not an option. As above, a NOTHING mapping only removes
+    // the button's unmapped-passthrough source on L; a step button that the
+    // user explicitly mapped on another currently-active layer still fires.
     for (const m of stepButtons) {
         config.mappings.push(newMapping(m, NOTHING, [L]));
     }
@@ -387,14 +475,25 @@ function compileScrollText(b, config, alloc) {
     if (gateMode !== 'always') {
         const L = alloc.layer();
         config.mappings.push({ ...newMapping(b.gate.button, layerUsage(L), layersOf(b)), sticky: gateMode === 'sticky' });
-        config.mappings.push(newMapping(b.scroll, NOTHING, [L]));  // suppress normal scrolling while on
+        // Suppress normal scrolling while on. Same caveat as cursor_keys:
+        // this only removes the wheel's unmapped-passthrough source on layer
+        // L. Another simultaneously active layer that maps the wheel itself
+        // still scrolls. (An axis_keys behavior on the same axis does not
+        // have that problem — it can afford NOTHING on layersOf(b), which
+        // kills the passthrough everywhere.)
+        config.mappings.push(newMapping(b.scroll, NOTHING, [L]));
         gateExpr = `layer_state 0x${(1 << L).toString(16)} bitwise_and not not `;
     }
     const gated = (expr) => gateExpr ? `${expr} ${gateExpr}mul` : expr;
 
+    // The index lives in fixed point because the wheel delta arrives that way
+    // (`input_state` is the raw delta x1000), so the bias and the modulus are
+    // val(n), not n. Written raw, one detent moved the index by 1000 and
+    // `% n` pinned it at 0 for every n that divides 1000 (10 by default), so
+    // only the first glyph was ever reachable.
     const idxCh = alloc.channel();
     config.expressions[idxCh] =
-        `${regRef(regIdx)} recall ${gated(`${b.scroll} input_state`)} add ${n} add ${n} mod ${regRef(regIdx)} store`;
+        `${regRef(regIdx)} recall ${gated(`${b.scroll} input_state`)} add ${val(n)} add ${val(n)} mod ${regRef(regIdx)} store`;
 
     const dispCh = alloc.channel();
     const lines = [];
@@ -403,7 +502,7 @@ function compileScrollText(b, config, alloc) {
     } else {
         const regT = alloc.reg();
         const regDirty = alloc.reg();
-        const timeout = Math.max(50, Math.round(b.timeout || 200));
+        const timeout = Math.max(50, Math.round(b.timeout || 200));  // raw ms; emitted as val(timeout)
         const moved = gated(`${b.scroll} input_state abs 0 gt`);
         // T = moved ? now : T  (last scroll activity)
         lines.push(`${moved} dup time mul swap not ${regRef(regT)} recall mul add ${regRef(regT)} store`);
@@ -413,7 +512,7 @@ function compileScrollText(b, config, alloc) {
         const btns = (b.confirmButtons || []).slice(0, 8);
         let cond = btns.map((u, i) =>
             `${u} input_state_binary ${u} prev_input_state_binary not mul` + (i > 0 ? ' max' : '')).join(' ');
-        cond += (cond ? ' ' : '') + `time ${regRef(regT)} recall sub ${timeout} gt` + (cond ? ' max' : '');
+        cond += (cond ? ' ' : '') + `time ${regRef(regT)} recall sub ${val(timeout)} gt` + (cond ? ' max' : '');
         lines.push(`${gated(cond)} ${regRef(regDirty)} recall mul ${regRef(regFire)} store`);
         // consume the pending glyph once fired; also drop it if the gate went off
         lines.push(`${gated(`${regRef(regDirty)} recall`)} ${regRef(regFire)} recall not mul ${regRef(regDirty)} store`);
@@ -422,7 +521,7 @@ function compileScrollText(b, config, alloc) {
     for (let i = 0; i < n; i++) {
         const r = alloc.reg();
         outRegs.push(r);
-        lines.push(`${regRef(regIdx)} recall ${i} eq ${regRef(regFire)} recall mul ${regRef(r)} store`);
+        lines.push(`${regRef(regIdx)} recall ${val(i)} eq ${regRef(regFire)} recall mul ${regRef(r)} store`);
     }
     config.expressions[dispCh] = lines.join(' eol ');
     for (let i = 0; i < n; i++) {
@@ -442,6 +541,11 @@ function compileScrollText(b, config, alloc) {
 // gesture sets) cancels the moment you click something. One register, one
 // expression channel, one level mapping.
 export function compileCancellableToggle(config, alloc, trigger, target, cancelSources, layers) {
+    // No trigger means nothing to latch from. Interpolating a null usage into
+    // the expression string emits the literal token "null", which exprToElems
+    // rejects part-way through a live apply (after the mappings and the
+    // expression clear have already gone out), so refuse before allocating.
+    if (!trigger) return null;
     const L = alloc.reg();
     const ch = alloc.channel();
     const pe = (m) => `${m} input_state_binary ${m} prev_input_state_binary not mul`;
@@ -449,14 +553,17 @@ export function compileCancellableToggle(config, alloc, trigger, target, cancelS
     const cancelPE = cancels.length
         ? cancels.map((m, i) => pe(m) + (i > 0 ? ' bitwise_or' : '')).join(' ')
         : '0';
+    // The modulus is in fixed point like everything else: a press edge adds
+    // 1000, so the latch has to wrap at 2000. Written as a raw `2 mod` the
+    // register can never leave 0 (1000 % 2 == 0) and the mode never turns on.
     config.expressions[ch] =
-        `${regRef(L)} recall ${pe(trigger)} add 2 mod ${cancelPE} not mul ${regRef(L)} store`;
+        `${regRef(L)} recall ${pe(trigger)} add ${val(2)} mod ${cancelPE} not mul ${regRef(L)} store`;
     config.mappings.push(newMapping(registerUsage(L), target, layers));
     return L;
 }
 
 function compileDragScroll(b, config, alloc) {
-    const L = b.layerPin ? alloc.reserve(b.layerPin) : alloc.layer();
+    const L = b.layerPin ? alloc.reserve(b.layerPin, b) : alloc.layer();
     if (!b.trigger) {
         // Created from the key editor: activation comes only from mappings
         // that target the pinned layer (Tap = toggle, Hold = momentary).
@@ -489,7 +596,13 @@ function compileDragScroll(b, config, alloc) {
 // pointer_fx module; this compiles to one activation mapping (sticky = toggle,
 // like Flask's GR#_TOG) plus one mapping per configured direction pulse.
 function compileGestureSet(b, config, alloc) {
-    if (b.mode === 'toggle') {
+    if (!b.trigger) {
+        // No trigger: the key editor cleared it (setButtonPlan nulls the
+        // trigger when that button gets a different assignment, leaving
+        // mode === 'toggle' behind). Activation then comes only from mappings
+        // that target the set usage. Compiling anyway would put the token
+        // "null" into a mapping or an expression and break every later apply.
+    } else if (b.mode === 'toggle') {
         // Tap to latch the set; any other button press cancels the latch.
         compileCancellableToggle(config, alloc, b.trigger, pfxGestureSetActiveUsage(b.set),
             (b.cancelSources || []), layersOf(b));
@@ -569,7 +682,11 @@ function compileOsShortcut(b, config, alloc, ctx) {
 // it over. One expression channel; the fire registers pulse for one frame each.
 function compileTapDance(b, config, alloc) {
     const btn = b.button;
-    const win = Math.max(50, Math.round(b.window || 200)); // raw ms
+    // Raw ms for the UI; every emitted comparison uses val(win) because
+    // `time` is milliseconds x1000. Likewise the press count accumulates in
+    // steps of 1000 (input_state_binary pushes 1000), so the count literals
+    // are val(1)/val(2), not 1/2.
+    const win = Math.max(50, Math.round(b.window || 200));
     const r = regRef;
     const PE = alloc.reg(), C = alloc.reg(), T = alloc.reg(), HOLD = alloc.reg(), TAP = alloc.reg();
     const F1 = alloc.reg(), F2 = alloc.reg(), F3 = alloc.reg();
@@ -587,24 +704,24 @@ function compileTapDance(b, config, alloc) {
         // remember time of last press: T = PE ? time : T
         `${r(PE)} recall time mul ${r(PE)} recall not ${r(T)} recall mul add ${r(T)} store`,
         // hold active = held AND (now - T) > window
-        `${btn} input_state_binary time ${r(T)} recall sub ${win} gt mul ${r(HOLD)} store`,
+        `${btn} input_state_binary time ${r(T)} recall sub ${val(win)} gt mul ${r(HOLD)} store`,
     ];
     if (wantsTapHold) {
         // At hold time the count includes the current press: C==1 means a
         // plain hold, C>1 means at least one full tap came first. Split
         // BEFORE the consume line zeroes C.
-        lines.push(`${r(HOLD)} recall ${r(C)} recall 1 eq mul ${r(H1)} store`);
-        lines.push(`${r(HOLD)} recall ${r(C)} recall 1 gt mul ${r(H2)} store`);
+        lines.push(`${r(HOLD)} recall ${r(C)} recall ${val(1)} eq mul ${r(H1)} store`);
+        lines.push(`${r(HOLD)} recall ${r(C)} recall ${val(1)} gt mul ${r(H2)} store`);
     }
     lines.push(
         // holding consumes the tap count so a tap doesn't also fire on release
         `${r(C)} recall ${r(HOLD)} recall not mul ${r(C)} store`,
         // tap fire = released AND count>=1 AND quiet for > window
-        `${btn} input_state_binary not ${r(C)} recall 0 gt mul time ${r(T)} recall sub ${win} gt mul ${r(TAP)} store`,
+        `${btn} input_state_binary not ${r(C)} recall 0 gt mul time ${r(T)} recall sub ${val(win)} gt mul ${r(TAP)} store`,
         // dispatch by count
-        `${r(TAP)} recall ${r(C)} recall 1 eq mul ${r(F1)} store`,
-        `${r(TAP)} recall ${r(C)} recall 2 eq mul ${r(F2)} store`,
-        `${r(TAP)} recall ${r(C)} recall 2 gt mul ${r(F3)} store`,
+        `${r(TAP)} recall ${r(C)} recall ${val(1)} eq mul ${r(F1)} store`,
+        `${r(TAP)} recall ${r(C)} recall ${val(2)} eq mul ${r(F2)} store`,
+        `${r(TAP)} recall ${r(C)} recall ${val(2)} gt mul ${r(F3)} store`,
         // clear count once a tap has fired
         `${r(C)} recall ${r(TAP)} recall not mul ${r(C)} store`,
     );

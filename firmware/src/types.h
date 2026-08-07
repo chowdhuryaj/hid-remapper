@@ -150,6 +150,13 @@ struct map_source_t {
     bool is_binary = false;
     uint8_t orig_source_port = 0;
     uint8_t layer_mask = 1;
+    // Layers on which this usage is explicitly mapped. Only ever non-zero for
+    // unmapped-passthrough sources, which are built with a static layer_mask
+    // computed once at config time. Layers OR together (there is no layer
+    // priority), so without this a usage mapped on layer A would still pass
+    // through whenever layer A and some other layer are active at the same
+    // time - i.e. the same input routed twice. See remapper.cc.
+    uint8_t suppress_layer_mask = 0;
     int32_t* input_state;
     tap_hold_state_t* tap_hold_state;
     uint8_t* sticky_state;

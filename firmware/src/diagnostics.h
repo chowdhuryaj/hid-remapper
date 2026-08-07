@@ -51,6 +51,13 @@ extern uint8_t diag_crash_flags;     // DIAG_CRASH_FLAG_*
 //   0x0311/2    flash persist begin/end
 //   0x0321/2    parse_our_descriptor begin/end
 //   0x0331/2    update_their_descriptor_derivates begin/end
+//   0x0341/2    load_config begin/end (boot only)
+//   0x0351/2    set_mapping_from_config begin/end, BOOT path
+//   0x0361/2    parse_our_descriptor begin/end, BOOT path
+// The boot-path codes are separate from 0x0301/0x0321 on purpose: the same
+// work crashing at boot means the PERSISTED config is bad (it will crash again
+// on the next power-on, and the BOOTSEL safe-mode gesture is the way out),
+// while crashing on the live-apply path only condemns the config just pushed.
 extern void (*diag_breadcrumb)(uint32_t code);
 #define DIAG_BC(code) do { if (diag_breadcrumb) diag_breadcrumb(code); } while (0)
 
