@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.5.2  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.0.1a  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -526,7 +526,7 @@ DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.5.1"
+global RM_VERSION := "0.6.0.1a"
 ; -- WHERE THE CONFIG LIVES (v0.4.1) -----------------------------------------
 ;
 ; It used to live next to the script: A_ScriptDir "\RadMapperConfig.json".
