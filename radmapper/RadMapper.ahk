@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.0.2-preview --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.1-preview  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -25,6 +25,35 @@
 ;    rename, explicit shortcut validation, foreground cancellation, reliable
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
+;
+;  v0.6.1-preview: radial menus you can get OUT of, get INTO, and read.
+;    * SECOND TAP CANCELS. A tap-opened (latched) menu could only be left
+;      by Escape or a 6 s timeout; a hand on the mouse has neither. Tapping
+;      the same button again closes it, and a press while any menu is up
+;      closes that menu instead of stacking another.
+;    * HOLD, MOVE, RELEASE is the gesture when the menu is bound on HOLD
+;      (which "Assign a button" does). Release in the hub, or Escape, fires
+;      nothing. Bound on TAP, the menu latches and fires by resting.
+;    * MENUS INSIDE MENUS, depth two. A slice whose action is "Radial menu"
+;      is a door: rest on it while holding (radialSubMs, 340 ms) and that
+;      menu takes the wheel's place, re-centred under the cursor, still
+;      held -- hold, "Windowing", pause, "3", release. Releasing ON the
+;      door opens the same menu latched, so both habits work. Doors show
+;      a wheel glyph and a › after their name.
+;    * A 9-SLOT NUMBERED RING for window presets: the slot number is the
+;      key it sends (1-9), printed large, the preset name small beneath.
+;      It is the one exception to the 8-way limit and exists for this job.
+;    * ICONS. A slice can carry an icon name (Icon column in the editor):
+;      next, prev, delete, ruler, roi, clahe, window, magnify, series,
+;      menu, zoom, invert, reset, dictate -- vector glyphs drawn with the
+;      wheel's own primitives, recoloured with the slice state.
+;    * THE PACS MENU SHIPS FILLED: Next series F8 (up), Ruler R, ROI
+;      Shift+R, Magnify Y, Prev series F7 (down), Delete, Windowing (a
+;      door to "Window presets"), CLAHE Shift+C. The "Window presets" ring:
+;      1 Soft tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA,
+;      6 Infarct, 7 Liver, 8 Lung, 9 Lung wide. An existing config whose
+;      PACS menu is still the untouched eight-blank template gets the new
+;      one once; a PACS menu you have edited is left alone.
 ;
 ;  v0.6.0.2-preview review pass (on top of the Codex second pass):
 ;    * Radial menus cancel when the foreground moves to another PROCESS,
@@ -626,7 +655,7 @@ if !IsSet(RM_TEST)
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.0.2-preview"
+global RM_VERSION := "0.6.1-preview"
 global g_CfgRecoveryBlocked := false
 global g_CfgSaveFailed := false   ; last SaveCfg() threw or was blocked
 ; -- WHERE THE CONFIG LIVES (v0.4.1) -----------------------------------------
@@ -855,6 +884,8 @@ global DEFAULTS := Map(
     "radialDead", 26,
     "radialRestMs", 420,       ; latched mode: rest this long in a slice to
     "radialRadius", 132,       ;   fire it (a tap-opened menu has no release)
+    "radialSubMs", 340,        ; rest this long on a slice that opens another
+                               ;   menu and that menu takes over, still held
     "hkClipboard", "^!c",
     "hkScratch", "^!n",
     ; Window-switcher hide list. Rules separated by "|", each one
@@ -1480,34 +1511,62 @@ SeedMenus() {
                      MenuSlice("Prev field",  "ps_prev", "")]
     out.Push(ps)
 
-    pa := Map()
-    pa["name"] := "PACS"
-    pa["app"] := "PACS"
-    ; Eight labels, no keys. Fill these in from IntelliSpace User Preferences
-    ; -- see the Menus tab. A slice with no action is inert and flicking into
-    ; it does nothing.
-    pa["slices"] := [MenuSlice("W/L preset +", "none", ""),
-                     MenuSlice("Next series",  "none", ""),
-                     MenuSlice("Zoom fit",     "none", ""),
-                     MenuSlice("Measure",      "none", ""),
-                     MenuSlice("W/L preset -", "none", ""),
-                     MenuSlice("Invert",       "none", ""),
-                     MenuSlice("Zoom 100%",    "none", ""),
-                     MenuSlice("Prev series",  "none", "")]
-    out.Push(pa)
+    out.Push(SeedPacsMenu())
+    out.Push(SeedPresetMenu())
     return out
 }
 
+; The PACS wheel. Up/down are next/previous series so the two most frequent
+; commands are the two easiest flicks; the measurement tools sit on the
+; right, image tools on the left, and "Windowing" is a DOOR: rest on it (or
+; release on it) and the numbered preset ring takes its place.
+SeedPacsMenu() {
+    pa := Map()
+    pa["name"] := "PACS"
+    pa["app"] := "PACS"
+    pa["slices"] := [MenuSlice("Next series",  "keys", "{F8}",      "next"),
+                     MenuSlice("Ruler",        "keys", "r",         "ruler"),
+                     MenuSlice("ROI",          "keys", "+r",        "roi"),
+                     MenuSlice("Magnify",      "keys", "y",         "magnify"),
+                     MenuSlice("Prev series",  "keys", "{F7}",      "prev"),
+                     MenuSlice("Delete",       "keys", "{Delete}",  "delete"),
+                     MenuSlice("Windowing",    "radial", "Window presets", "window"),
+                     MenuSlice("CLAHE",        "keys", "+c",        "clahe")]
+    return pa
+}
+
+; Window presets 1-9: the slice NUMBER is the key it sends, and the label
+; is whatever the site calls that preset. Rename freely on the Menus tab.
+SeedPresetMenu() {
+    wp := Map()
+    wp["name"] := "Window presets"
+    wp["app"] := ""                          ; opened by name, never automatic
+    names := ["Soft tissue", "Bone", "Brain", "C-spine soft tissue", "CTA",
+              "Infarct", "Liver", "Lung", "Lung wide"]
+    sl := []
+    for i, nm in names
+        sl.Push(MenuSlice(nm, "keys", String(i)))
+    wp["slices"] := sl
+    return wp
+}
+
 /** One slice: a label and an ordinary {type, value} action. */
-MenuSlice(label, atype, value) {
+MenuSlice(label, atype, value, icon := "") {
     m := Map()
     m["label"] := label
+    if (icon != "")
+        m["icon"] := icon
     a := Map()
     a["type"] := atype
     a["value"] := value
     m["action"] := a
     return m
 }
+
+; Icon names a slice may carry (drawn as vector glyphs in the wheel by
+; RadialIcon). "" = no icon. Kept short: they sit in a 70 px dropdown.
+global RADIAL_ICONS := ["", "next", "prev", "delete", "ruler", "roi", "clahe",
+    "window", "magnify", "series", "menu", "zoom", "invert", "reset", "dictate"]
 
 /** One menu by name, or 0. */
 MenuByName(name) {
@@ -1713,6 +1772,31 @@ MigrateCfg() {
             if !MenuByName(MGet(m, "name", ""))
                 g_Cfg["menus"].Push(m)
         }
+    }
+    ; v0.6.1: the PACS menu used to ship as eight labelled BLANKS. If it is
+    ; still exactly that -- nothing filled in -- it is replaced by the real
+    ; one, and the Window presets ring is added if there is no menu of that
+    ; name. A PACS menu the user has touched is left alone. Flag-guarded so
+    ; deleting either afterwards keeps it deleted.
+    if (IsObject(s) && !s.Has("seedPacs061")) {
+        s["seedPacs061"] := 1
+        if !g_Cfg.Has("menus")
+            g_Cfg["menus"] := []
+        for i, m in g_Cfg["menus"] {
+            if (MGet(m, "name", "") != "PACS")
+                continue
+            untouched := true
+            for sl in MGet(m, "slices", []) {
+                if (MGet(MGet(sl, "action", Map()), "type", "none") != "none")
+                    untouched := false
+            }
+            if untouched
+                g_Cfg["menus"][i] := SeedPacsMenu()
+        }
+        if !MenuByName("PACS")
+            g_Cfg["menus"].Push(SeedPacsMenu())
+        if !MenuByName("Window presets")
+            g_Cfg["menus"].Push(SeedPresetMenu())
     }
     ; v0.3: chord and gesture ROWS are dropped outright -- there is no engine
     ; left to run them, and a silently-kept row would reappear in no UI.
@@ -3815,6 +3899,14 @@ ActionFire(binding, st) {
         case "layout":
             LayoutApply(v)
         case "radial":
+            ; A SECOND TAP while a menu is up is the cancel gesture: the only
+            ; other ways out of a tap-opened menu were Escape and a timeout,
+            ; and a hand on the mouse has neither.
+            if IsObject(g_Radial) {
+                RadialClose(false)
+                HUD("Menu closed", "mute")
+                return
+            }
             ; No holder: LATCHED. A menu opened by a tap has no release to
             ; commit on, so it draws at once and fires by resting in a slice.
             RadialOpen(v, 0)
@@ -3869,6 +3961,14 @@ ActionDown(binding, st, instant) {
         case "zoomptr":
             ScrollPtrStart(true, true)
         case "radial":
+            ; Pressing the button again while a menu is still up (a preset
+            ; ring left open, say) closes it rather than stacking another.
+            if IsObject(g_Radial) {
+                RadialClose(false)
+                if IsObject(st)
+                    st.radialCancelled := true
+                return
+            }
             RadialOpen(v, IsObject(st) ? st : 0)
         default:
             ActionFire(binding, st)          ; instant action bound on hold
@@ -3910,7 +4010,10 @@ ActionUp(binding, st) {
         case "scrollptr", "zoomptr":
             ScrollPtrStop()
         case "radial":
-            RadialClose(true)                ; release IS the commit gesture
+            ; release IS the commit gesture -- unless this press was the one
+            ; that cancelled a lingering menu, in which case there is
+            ; nothing to commit and RadialClose is a no-op anyway
+            RadialClose(true)
     }
 }
 
@@ -5626,6 +5729,13 @@ global g_Radial := 0       ; live menu {menu, slices, ax, ay, holder, latched,
 global RADIAL_DIR4 := ["Up", "Right", "Down", "Left"]
 global RADIAL_DIR8 := ["Up", "Up-right", "Right", "Down-right",
                        "Down", "Down-left", "Left", "Up-left"]
+; The 9-way ring exists for ONE job: numbered window presets 1-9, clockwise
+; from the top, so the slice number IS the key it sends. 40 degrees a slice
+; is past the 8-way comfort limit, which is why it is the exception and not
+; the default; a preset ring is read (the numbers are printed large), not
+; flicked blind.
+global RADIAL_DIR9 := ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+global RADIAL_MAXDEPTH := 2   ; a menu inside a menu, and no deeper
 
 /** Degrees clockwise from north, 0..360, for a screen-space delta. */
 RadialAngle(dx, dy) {
@@ -5649,16 +5759,36 @@ RadialAngle(dx, dy) {
 
 /** Preserve compass positions when changing between four and eight slots. */
 ResizeMenuSlices(slices, count) {
-    oldCount := slices.Length > 4 ? 8 : 4
     out := []
-    loop count {
-        i := A_Index
-        source := oldCount = count ? i
-            : (count = 8 ? (Mod(i, 2) ? (i + 1) // 2 : 0) : i * 2 - 1)
+    for source in MenuKeepMap(RadialCountFor(slices.Length), count)
         out.Push(source && slices.Has(source) ? slices[source]
             : MenuSlice("", "none", ""))
-    }
     return out
+}
+
+; For each slot of a NEW size, which slot of the OLD size feeds it (0 = a
+; fresh blank). Up/Right/Down/Left keep their direction across 4 <-> 8:
+; 4-way slot i sits at 8-way slot 2i-1. The 9-way numbered ring has no
+; compass meaning, so it is filled in order and truncated in order.
+MenuKeepMap(oldCount, newCount) {
+    map := []
+    loop newCount {
+        i := A_Index
+        if (oldCount = newCount)
+            src := i
+        else if (oldCount = 4 && newCount = 8)
+            src := Mod(i, 2) ? (i + 1) // 2 : 0
+        else if (oldCount = 8 && newCount = 4)
+            src := i * 2 - 1
+        else if (oldCount = 4 && newCount = 9)
+            src := (i <= 7 && Mod(i, 2)) ? (i + 1) // 2 : 0
+        else if (oldCount = 9 && newCount = 4)
+            src := i * 2 - 1
+        else
+            src := i <= oldCount ? i : 0          ; 8 <-> 9: in order
+        map.Push(src)
+    }
+    return map
 }
 
 RenameMenuBindings(oldName, newName) {
@@ -5708,15 +5838,26 @@ RadialSlices(mn) {
     ; The editor writes 4 or 8. Normalize hand-edited/old config to the same
     ; contract so corrupted input cannot create an unresearched 5- or 12-way
     ; menu. Missing rows are inert gaps; extra rows never execute.
-    count := raw.Length <= 4 ? 4 : 8
+    count := RadialCountFor(raw.Length)
     loop count {
         sl := raw.Has(A_Index) ? raw[A_Index] : 0
         act := MGet(sl, "action", 0)
+        live := IsObject(act) && MGet(act, "type", "none") != "none"
         out.Push({label: MGet(sl, "label", ""),
+                  icon: MGet(sl, "icon", ""),
                   act: IsObject(act) ? act : 0,
-                  live: IsObject(act) && MGet(act, "type", "none") != "none"})
+                  live: live,
+                  ; a slice whose action opens another menu: the wheel shows
+                  ; it as a door, and resting on it walks through
+                  sub: live && MGet(act, "type", "") = "radial"
+                       ? String(MGet(act, "value", "")) : ""})
     }
     return out
+}
+
+/** 4, 8 or 9 slices, never anything else (see RADIAL_DIR9). */
+RadialCountFor(n) {
+    return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
 }
 
 /**
@@ -5752,7 +5893,7 @@ RadialOpen(name, holder := 0, trial := false) {
                  latched: !IsObject(holder),
                  sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
                  targetPid: RadialPidOf(FgHwnd()),
-                 lyr: 0, drawn: false,
+                 lyr: 0, drawn: false, depth: 1,
                  t0: A_TickCount, restAt: A_TickCount}
     SetTimer(RadialTick, 16)
     RadialTick()
@@ -5808,10 +5949,56 @@ RadialTick(*) {
         R.lastSel := R.sel
         RadialPaint()
     }
+    ; A slice that opens another menu is a DOOR. Rest on it and that menu
+    ; takes the wheel's place, re-centred under the cursor, still held: hold,
+    ; go to "Windowing", pause, go to "3", release -- one gesture, depth two,
+    ; which is as deep as marking menus stay accurate. Releasing ON the door
+    ; instead opens the same menu latched (the ordinary fire path), so both
+    ; habits work.
+    if (R.sel > 0 && R.slices[R.sel].sub != "" && R.depth < RADIAL_MAXDEPTH
+        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
+        RadialEnter(R.slices[R.sel].sub)
+        return
+    }
     ; Latched mode commits by resting in a slice. Nothing else can commit it
     ; without pushing a click through the overlay.
-    if (R.latched && R.sel > 0 && (now - R.restAt >= Max(Cfg("radialRestMs"), 120)))
+    if (R.latched && R.sel > 0 && R.slices[R.sel].sub = ""
+        && (now - R.restAt >= Max(Cfg("radialRestMs"), 120)))
         RadialClose(true)
+}
+
+/** Swap the live wheel for a nested menu, anchored where the cursor is now. */
+RadialEnter(name) {
+    global g_Radial
+    R := g_Radial
+    if !IsObject(R)
+        return
+    mn := RadialFind(name)
+    if !IsObject(mn) {
+        HUD("No radial menu named " name, "warn")
+        return
+    }
+    slices := RadialSlices(mn)
+    if (slices.Length < 2)
+        return
+    if IsObject(R.lyr) {                     ; the old wheel sat at the old
+        try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
+        try R.lyr.Dispose()                  ; fresh where the hand is
+        R.lyr := 0
+    }
+    RM_GetPos(&ax, &ay)
+    R.menu := mn
+    R.name := MGet(mn, "name", "menu")
+    R.slices := slices
+    R.ax := ax
+    R.ay := ay
+    R.sel := 0
+    R.lastSel := -1
+    R.depth += 1
+    R.drawn := true                          ; a nested menu is always shown:
+    R.t0 := A_TickCount                      ; you asked for it by pausing
+    R.restAt := A_TickCount
+    RadialPaint()
 }
 
 /** Close, and fire the highlighted slice if this was a commit. */
@@ -5888,6 +6075,88 @@ RadialFireSlice(act, label, target, targetPid := 0, *) {
 }
 
 /**
+ * A small vector glyph, 22 px across, centred on (x, y), in one colour.
+ * Every icon is built from the same six primitives the wheel already uses
+ * (line, rectangle, ellipse, triangle, pie, polygon) -- no images, so they
+ * scale with the ring and recolour with the state.
+ */
+RadialIcon(name, x, y, col) {
+    try {
+        switch name {
+            case "next":                     ; play triangle + end bar
+                FilledTriangle(x - 8, y - 8, x + 3, y, x - 8, y + 8, col)
+                Rectangle(x + 5, y - 8, 3, 16, col, true)
+            case "prev":
+                FilledTriangle(x + 8, y - 8, x - 3, y, x + 8, y + 8, col)
+                Rectangle(x - 8, y - 8, 3, 16, col, true)
+            case "delete":                   ; a lidded bin
+                Rectangle(x - 6, y - 4, 12, 12, col, false)
+                Rectangle(x - 8, y - 7, 16, 2, col, true)
+                Rectangle(x - 2, y - 10, 4, 2, col, true)
+                Line(x - 2, y - 1, x - 2, y + 5, col, 1)
+                Line(x + 2, y - 1, x + 2, y + 5, col, 1)
+            case "ruler":                    ; a rule with graduations
+                Rectangle(x - 11, y - 4, 22, 9, col, false)
+                for k in [-7, -3, 1, 5]
+                    Line(x + k, y - 4, x + k, y - 1, col, 1)
+                Line(x + 9, y - 4, x + 9, y + 1, col, 1)
+            case "roi":                      ; dashed frame around a blob
+                for k in [-9, -3, 3]
+                    Line(x + k, y - 8, x + k + 3, y - 8, col, 1)
+                for k in [-9, -3, 3]
+                    Line(x + k, y + 8, x + k + 3, y + 8, col, 1)
+                for k in [-8, -2, 4]
+                    Line(x - 9, y + k, x - 9, y + k + 3, col, 1)
+                for k in [-8, -2, 4]
+                    Line(x + 9, y + k, x + 9, y + k + 3, col, 1)
+                Ellipse(x - 5, y - 3, 10, 7, col, true)
+            case "clahe":                    ; half-filled disc: contrast
+                Ellipse(x - 9, y - 9, 18, 18, col, false)
+                FilledPie(x - 9, y - 9, 18, 18, 90.0, 180.0, col)
+            case "window":                   ; a window pane: W/L
+                Rectangle(x - 9, y - 8, 18, 16, col, false)
+                Line(x, y - 8, x, y + 8, col, 1)
+                Line(x - 9, y, x + 9, y, col, 1)
+            case "magnify":                  ; lens and handle
+                Ellipse(x - 10, y - 10, 14, 14, col, false)
+                Ellipse(x - 9, y - 9, 12, 12, col, false)
+                Line(x + 3, y + 3, x + 9, y + 9, col, 3)
+            case "series":                   ; a stack of slices
+                Rectangle(x - 9, y - 3, 12, 10, col, false)
+                Rectangle(x - 6, y - 6, 12, 10, col, false)
+                Rectangle(x - 3, y - 9, 12, 10, col, false)
+            case "menu":                     ; a ring with a hub: another wheel
+                Ellipse(x - 9, y - 9, 18, 18, col, false)
+                Ellipse(x - 3, y - 3, 6, 6, col, true)
+                Line(x, y - 9, x, y - 5, col, 1)
+                Line(x, y + 5, x, y + 9, col, 1)
+                Line(x - 9, y, x - 5, y, col, 1)
+                Line(x + 5, y, x + 9, y, col, 1)
+            case "zoom":                     ; lens with a plus
+                Ellipse(x - 10, y - 10, 14, 14, col, false)
+                Line(x - 3, y - 6, x - 3, y, col, 1)
+                Line(x - 6, y - 3, x, y - 3, col, 1)
+                Line(x + 3, y + 3, x + 9, y + 9, col, 3)
+            case "invert":                   ; two half discs swapped
+                Ellipse(x - 9, y - 9, 18, 18, col, false)
+                FilledPie(x - 9, y - 9, 18, 18, -90.0, 180.0, col)
+            case "reset":                    ; a counter-clockwise arrow
+                Arc(x - 8, y - 8, 16, 16, col, 2, -60.0, 300.0)
+                FilledTriangle(x - 2, y - 12, x - 2, y - 4, x - 9, y - 8, col)
+            case "dictate":                  ; a microphone
+                Rectangle(x - 3, y - 10, 6, 11, col, true)
+                Arc(x - 6, y - 6, 12, 12, col, 1, 0.0, 180.0)
+                Line(x, y + 6, x, y + 9, col, 1)
+                Line(x - 4, y + 9, x + 4, y + 9, col, 1)
+            default:
+                Ellipse(x - 3, y - 3, 6, 6, col, true)
+        }
+    } catch as e {
+        Problem("radial", "icon '" name "' failed: " e.Message)
+    }
+}
+
+/**
  * Draw the wheel, centred on the anchor.
  *
  * Deliberately NOT clamped to the monitor. The geometry has to agree with
@@ -5949,14 +6218,40 @@ RadialPaint() {
 
         i := 1
         mid := (ri + ro) / 2
+        numbered := (n > 8)                  ; the preset ring: numbers first
         for sl in R.slices {
             ang := (-90 + (i - 1) * step) * 0.017453292519943295
             lx := cx + mid * Cos(ang)
             ly := cy + mid * Sin(ang)
+            active := (i = R.sel)
             txt := (sl.label != "") ? sl.label : (sl.live ? "?" : "—")
-            Lumi.Label(Round(lx - 58), Round(ly - 11), 116, txt,
-                sl.live ? ((i = R.sel) ? "body" : "dim") : "mute",
-                "center", 22)
+            inkCol := !sl.live ? Lumi.C["inkMute"]
+                    : active   ? Lumi.C["ink"] : Lumi.C["inkDim"]
+            if numbered {
+                ; the number is what the hand is choosing; the name is the
+                ; reminder of what it means
+                Text(Round(lx - 30), Round(ly - 24), 60, 26, String(i),
+                    active ? Lumi.C["ink"] : Lumi.C["cyanSoft"],
+                    Lumi.Size["hero"], Lumi.Face, "Bold")
+                    .TextAlign("center", "middle")
+                Text(Round(lx - 52), Round(ly + 2), 104, 18, txt, inkCol,
+                    Lumi.Size["small"], Lumi.Face).TextAlign("center", "middle")
+            } else if (sl.icon != "" || sl.sub != "") {
+                ; icon above, word below -- a glyph is recognised faster than
+                ; a word is read, and the word confirms it
+                RadialIcon(sl.icon != "" ? sl.icon : "menu",
+                    Round(lx), Round(ly - 12),
+                    !sl.live ? Lumi.C["inkMute"]
+                    : active ? Lumi.C["ink"] : Lumi.C["cyan"])
+                Text(Round(lx - 58), Round(ly + 4), 116, 20,
+                    txt (sl.sub != "" ? " ›" : ""), inkCol,
+                    Lumi.Size["small"], Lumi.Face, active ? "Bold" : "Regular")
+                    .TextAlign("center", "middle")
+            } else {
+                Lumi.Label(Round(lx - 58), Round(ly - 11), 116, txt,
+                    sl.live ? (active ? "body" : "dim") : "mute",
+                    "center", 22)
+            }
             i += 1
         }
         ; The hub says what is armed, so a glance answers "what will this do
@@ -12595,7 +12890,7 @@ class Atlas {
         Lumi.Btn(x + 336, by, 130, 30, "Add",
             (*) => Atlas.MenuAddNew(), "primary")
         Lumi.Label(x + 480, by, w - 480,
-            "Start with 4 directions. Add diagonals when you need more commands.",
+            "4 or 8 directions, or 9 numbered slots for window presets.",
             "mute", "left", 30)
 
         by2 := y + h - 48
@@ -14103,7 +14398,8 @@ class Atlas {
             return
         ref := IsObject(draft) ? draft.ref : Atlas.MenuSelRef()
         slices := MGet(menu, "slices", [])
-        count := slices.Length > 4 ? 8 : 4
+        count := RadialCountFor(slices.Length)
+        pitch := (count = 9) ? 33 : 37
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
                      Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
@@ -14132,45 +14428,54 @@ class Atlas {
             Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
 
         Lumi.Label(676, 84, 50, "Size", "dim", "left", 30)
-        st.size := Lumi.Select(676, 118, 120, 30, ["4", "8"],
-            count = 8 ? 2 : 1, (i, t) => Atlas.MenuResize(st, i))
+        st.size := Lumi.Select(676, 118, 120, 30, ["4", "8", "9 (1-9)"],
+            count = 9 ? 3 : (count = 8 ? 2 : 1), (i, t) => Atlas.MenuResize(st, i))
 
         Lumi.Label(24, 122, 320,
             "Program chooses the automatic menu. A named binding opens it directly.",
             "mute", "left", 22)
         Lumi.Rule(24, 156, w - 48)
 
-        Lumi.Label(24, 164, 90, "Direction", "section")
+        Lumi.Label(24, 164, 90, count = 9 ? "Number" : "Direction", "section")
         Lumi.Label(116, 164, 140, "Label", "section")
         Lumi.Label(268, 164, 240, "It does", "section")
-        Lumi.Label(520, 164, 200, "Details", "section")
+        Lumi.Label(520, 164, 140, "Details", "section")
+        Lumi.Label(670, 164, 70, "Icon", "section")
 
+        icons := []
+        for nm in RADIAL_ICONS
+            icons.Push(nm = "" ? "—" : nm)
         i := 1
         Loop count {
-            ry := 186 + (i - 1) * 38
+            ry := 186 + (i - 1) * pitch
             sl := slices.Has(i) ? slices[i] : 0
             act := IsObject(sl) ? MGet(sl, "action", 0) : 0
             code := IsObject(act) ? MGet(act, "type", "none") : "none"
             val := IsObject(act) ? MGet(act, "value", "") : ""
             lbl := IsObject(sl) ? MGet(sl, "label", "") : ""
-            dir := (count = 4 ? RADIAL_DIR4 : RADIAL_DIR8)[i]
+            ico := IsObject(sl) ? MGet(sl, "icon", "") : ""
+            dir := (count = 4 ? RADIAL_DIR4 : (count = 8 ? RADIAL_DIR8 : RADIAL_DIR9))[i]
             Lumi.Label(24, ry, 90, dir, "dim", "left", 30)
             r := {dlg: dlg}
             r.label := Lumi.Field(116, ry, 140, 30, lbl, 0, "label", true)
             r.act := Lumi.Select(268, ry, 240, 30, ACT_LABELS, ActIndexOf(code))
-            r.value := Lumi.Field(520, ry, 200, 30, val, 0, "value", true)
-            Lumi.Btn(730, ry, 58, 30, "Rec", Atlas.DeckRec(r), "accent")
+            r.value := Lumi.Field(520, ry, 144, 30, val, 0, "value", true)
+            r.icon := Lumi.Select(670, ry, 70, 30, icons,
+                Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
+            Lumi.Btn(746, ry, 50, 30, "Rec", Atlas.DeckRec(r), "accent")
             st.rows.Push(r)
             i += 1
         }
 
-        Lumi.Para(24, 494, w - 48, 56,
+        Lumi.Para(24, Min(494, 186 + count * pitch + 6), w - 48, 56,
             "For a PACS shortcut, choose Send keys and use Rec to press the "
             . "shortcut from your viewer settings. Disabled leaves a direction "
-            . "empty. Save, then Assign a button and Practice safely.", "mute")
+            . "empty. A direction set to Radial menu opens that menu inside "
+            . "this one: rest on it while holding, or release on it.", "mute")
 
         Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Chip(24, h - 52, 240, 20, count " directions · clockwise", "cyan")
+        Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
+            : count " directions · clockwise", "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
@@ -14184,7 +14489,7 @@ class Atlas {
 
     static MenuResize(st, index) {
         Lumi.EndEdit()
-        count := index = 2 ? 8 : 4
+        count := [4, 8, 9][Max(1, Min(3, index))]
         if (count = st.count || !Atlas.DlgAlive(st))
             return
         if (st.ref > g_Cfg["menus"].Length
@@ -14192,29 +14497,33 @@ class Atlas {
             Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
             return
         }
-        if (count = 4) {
-            occupied := false
-            for i in [2, 4, 6, 8] {
-                r := st.rows[i]
-                if (Trim(Lumi.FieldValue(r.label)) != ""
-                    || (ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none") != "none")
-                    occupied := true
-            }
-            if (occupied && MsgBox("Switch to 4 directions?`n`nThe four diagonal "
-                . "commands will be removed from this draft. Up, Right, Down "
-                . "and Left stay in place. Cancel the editor to keep the saved menu.",
-                "RadMapper", "YesNo Icon? Owner" Lumi.HwndOf(st.dlg)) != "Yes") {
-                st.size.index := 2
-                Lumi.__SelectLabel(st.size)
-                Lumi.Refresh(st.dlg)
-                return
-            }
+        ; Rows the new size has no slot for: warn before the draft loses them
+        kept := Map()
+        for src in MenuKeepMap(st.count, count)
+            kept[src] := 1
+        occupied := false
+        for i, r in st.rows {
+            if kept.Has(i)
+                continue
+            if (Trim(Lumi.FieldValue(r.label)) != ""
+                || (ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none") != "none")
+                occupied := true
+        }
+        if (occupied && MsgBox("Switch to " count " slots?`n`nCommands in the "
+            . "slots that go away will be removed from this draft. The ones "
+            . "that stay keep their place. Cancel the editor to keep the saved menu.",
+            "RadMapper", "YesNo Icon? Owner" Lumi.HwndOf(st.dlg)) != "Yes") {
+            st.size.index := st.count = 9 ? 3 : (st.count = 8 ? 2 : 1)
+            Lumi.__SelectLabel(st.size)
+            Lumi.Refresh(st.dlg)
+            return
         }
         slices := []
         for r in st.rows
             slices.Push(MenuSlice(Lumi.FieldValue(r.label),
                 ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none",
-                Lumi.FieldValue(r.value)))
+                Lumi.FieldValue(r.value),
+                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
         app := AppCodeFromDisp(st.app.items[st.app.index])
         menu := Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
             "slices", ResizeMenuSlices(slices, count))
@@ -14280,7 +14589,8 @@ class Atlas {
                     lbl := ActLabelOf(atype)
             } else
                 val := ""
-            plan.Push(MenuSlice(lbl, atype, val))
+            plan.Push(MenuSlice(lbl, atype, val,
+                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
             i += 1
         }
         ; A menu that fires nothing anywhere is allowed -- that is what a

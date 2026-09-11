@@ -1,4 +1,4 @@
-# RadMapper 0.6.0.2-preview
+# RadMapper 0.6.1-preview
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -25,18 +25,27 @@ Mouse and Keyboard pages. Nothing else is remapped until you add it.
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.
 
-## Set up one radial menu
+## Radial menus
 
-1. **Home → Set up a radial menu → Edit commands.** Start with four directions.
-   Give each a label, choose **Send keys**, then use **Rec** to record the
-   shortcut from your viewer's settings. Leave unused directions Disabled.
-2. Save, select the menu, and choose **Assign a button**. The menu and the Hold
-   trigger are prefilled; pick the program and button, then save.
-3. Choose **Practice safely**. Practice never sends a command. In real use, hold
-   the assigned button, move toward a command, and release. Release in the
-   centre or press Escape to cancel.
-4. Verify one assignment in the intended app before adding more. PACS shortcuts
-   vary by site, so the supplied PACS labels deliberately have no keys.
+A **PACS** menu ships ready to use: Next series (F8) up, Prev series (F7) down,
+Ruler (R), ROI (Shift+R), Magnify (Y), Delete, CLAHE (Shift+C), and
+**Windowing**, which opens a second ring of numbered window presets (1 Soft
+tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA, 6 Infarct, 7 Liver,
+8 Lung, 9 Lung wide). Rename any of these on the Menus page to match your site.
+
+1. **Menus → select PACS → Assign a button.** The Hold trigger is prefilled;
+   pick the button, then save.
+2. **Hold** that button, **move** toward a command, **release**. Release in
+   the centre hub, or press Escape, and nothing fires.
+3. For a preset: hold, move to **Windowing**, pause a moment and the preset
+   ring appears under the cursor, move to the number, release.
+4. If the menu is bound to a **tap** instead, it stays open: rest on a command
+   to fire it, or **tap the button again to close it**.
+5. **Practice safely** on the Menus page shows the wheel without sending anything.
+
+To edit a menu, use **Edit commands**: each row has a label, an action, the
+recorded shortcut, and an icon. A row set to "Radial menu" opens another menu
+inside this one. Size 9 is the numbered ring for presets.
 
 ## If something feels wrong
 
