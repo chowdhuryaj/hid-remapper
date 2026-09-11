@@ -9041,6 +9041,8 @@ Init() {
     ; already-registered callback rather than adding it twice) and does not
     ; depend on the bundle.
     OnError(RadUnhandledError, -1)
+    if !SingleCopyGuard()
+        ExitApp(0)
     ResolveCfgPaths()                        ; must precede any config I/O
     LoadCfg()
     OnClipboardChange(ClipChanged)           ; feeds the clipboard shelf
@@ -9074,6 +9076,31 @@ Init() {
 
 FirstRunOpen(*) {
     try ShowMain()
+}
+
+; ONE RADMAPPER PER MACHINE, whatever the file is called or where it lives.
+; #SingleInstance only recognises the SAME script path, so RadMapper.ahk in
+; Downloads and RadMapper.ahk on the desktop run side by side -- and two
+; copies both hook the wheel: each one suppresses a notch and re-emits it,
+; the OTHER copy's hook catches the re-emission and re-emits it again, and
+; fast scrolling turns into lag and stalls (reported on 0.6.0.2, cause: an
+; older copy still running). A named mutex is per machine, not per path.
+global g_InstanceMutex := 0
+SingleCopyGuard() {
+    global g_InstanceMutex
+    ; Keep the handle for the life of the process; the mutex dies with us.
+    g_InstanceMutex := DllCall("CreateMutexW", "ptr", 0, "int", 0,
+        "wstr", "Local\RadMapper-single-copy", "ptr")
+    if (!g_InstanceMutex || A_LastError != 183)   ; 183 = ERROR_ALREADY_EXISTS
+        return true
+    ; Another copy owns the mutex. Do NOT try to kill it: it may be mid-hold
+    ; with a button latched, and only its own exit path releases cleanly.
+    MsgBox("Another RadMapper is already running, probably an older copy in "
+        . "a different folder.`n`nTwo copies fight over the mouse wheel and "
+        . "make scrolling lag.`n`nThis copy will now close. Right-click the "
+        . "other RadMapper tray icon, choose Exit, then start this one again.",
+        "RadMapper is already running", "Iconi")
+    return false
 }
 
 
