@@ -16,7 +16,13 @@ workstation. Treat it as a candidate for testing.
    - **Change what a mouse button does**
    - **Change what a keyboard key does**
    - **Set up a radial menu** (commands around the pointer, picked by direction)
-   - **Test my mouse** (every button lights up as you press it; nothing is changed)
+   - **Apply a starter pack** (one click sets up a common arrangement, such as
+     PowerScribe on the thumb buttons or the PACS wheel on button 4; anything
+     it would replace is listed first, and the result is ordinary settings you
+     can edit or delete on the Mouse page)
+
+To watch every button light up as you press it, use **Test my mouse and
+keyboard…** on the Diagnostics page.
 
 **Shipped defaults are active:** the backtick key toggles dictation, and the two
 thumb buttons jump the pointer between monitors. Review or remove these on the
