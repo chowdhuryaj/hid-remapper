@@ -10457,7 +10457,10 @@ class Atlas {
     ; "Layers" are HOLD layers (an input arming a set of rows); "Windows"
     ; are window LAYOUTS across the monitors. Different things, and the nav
     ; is the one place the two words sit next to each other.
-    static PANELS := ["Mouse", "Layers", "Keyboard", "Macros", "Apps",
+    ; "Home" is FIRST and is where the window opens (static panel := 1),
+    ; because the people this ships to have not read any of the above.
+    ; NOTHING may hard-code a number out of this list: use PanelIndex().
+    static PANELS := ["Home", "Mouse", "Layers", "Keyboard", "Macros", "Apps",
                       "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
     static hostRefs := []          ; Layers panel row -> host input code
 
@@ -11043,17 +11046,23 @@ class Atlas {
         ; and the nav survive: a panel that cannot draw must still be one
         ; you can navigate away from.
         try {
-            switch Atlas.panel {
-                case 1: Atlas.PanelMouse(px, py, pw, ph)
-                case 2: Atlas.PanelLayers(px, py, pw, ph)
-                case 3: Atlas.PanelKeys(px, py, pw, ph)
-                case 4: Atlas.PanelMacros(px, py, pw, ph)
-                case 5: Atlas.PanelApps(px, py, pw, ph)
-                case 6: Atlas.PanelWindows(px, py, pw, ph)
-                case 7: Atlas.PanelMenus(px, py, pw, ph)
-                case 8: Atlas.PanelPointer(px, py, pw, ph)
-                case 9: Atlas.PanelSettings(px, py, pw, ph)
-                case 10: Atlas.PanelDiag(px, py, pw, ph)
+            ; Dispatched BY NAME, not by number. The index-to-panel switch
+            ; that used to live here is exactly the kind of table that drifts
+            ; the moment an entry is inserted at the front -- which is what
+            ; adding "Home" did -- and a drifted case here opens the wrong
+            ; panel silently.
+            switch Atlas.PanelName() {
+                case "Home":        Atlas.PanelHome(px, py, pw, ph)
+                case "Mouse":       Atlas.PanelMouse(px, py, pw, ph)
+                case "Layers":      Atlas.PanelLayers(px, py, pw, ph)
+                case "Keyboard":    Atlas.PanelKeys(px, py, pw, ph)
+                case "Macros":      Atlas.PanelMacros(px, py, pw, ph)
+                case "Apps":        Atlas.PanelApps(px, py, pw, ph)
+                case "Windows":     Atlas.PanelWindows(px, py, pw, ph)
+                case "Menus":       Atlas.PanelMenus(px, py, pw, ph)
+                case "Pointer":     Atlas.PanelPointer(px, py, pw, ph)
+                case "Settings":    Atlas.PanelSettings(px, py, pw, ph)
+                case "Diagnostics": Atlas.PanelDiag(px, py, pw, ph)
             }
         } catch as e {
             Atlas.list := 0
@@ -11117,7 +11126,7 @@ class Atlas {
             . "the left. The same text is in Diagnostics; send it on and it "
             . "says exactly what to fix.", "mute")
         Lumi.Btn(x, y + 190, 190, 34, "Open Diagnostics",
-            (*) => Atlas.Go(10), "accent")
+            (*) => Atlas.Go(Atlas.PanelIndex("Diagnostics")), "accent")
     }
 
     static Header() {
@@ -11239,6 +11248,18 @@ class Atlas {
             Lumi.C["surface"], true)
         Line(Atlas.NAVW, Atlas.HEADH, Atlas.NAVW, Atlas.H, Lumi.C["hair"], 1)
         y := Atlas.HEADH + Lumi.SP["lg"]
+        ; The rail used to step a fixed 44 px per entry. With eleven entries
+        ; that runs THROUGH the engine switch and the panic button at the
+        ; bottom on any window shorter than about 780 px -- and the minimum
+        ; is 640. The pitch is derived from the space that is actually there
+        ; now, and never grows past the 44 the design was drawn at.
+        floorY := Atlas.H - 128           ; the rule above the engine switch
+        pitch := 44
+        if (Atlas.PANELS.Length > 0) {
+            room := floorY - y
+            pitch := ClampInt(room // Atlas.PANELS.Length, 30, 44, 44)
+        }
+        rowH := Max(24, pitch - 6)
         i := 1
         for name in Atlas.PANELS {
             active := (i = Atlas.panel)
@@ -11246,15 +11267,16 @@ class Atlas {
             ; shape, no transparent overlay (see Lumi.Clear for why)
             bg := active ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.22)
                          : Lumi.C["surface"]
-            row := RoundedRectangle(Lumi.SP["md"], y, Atlas.NAVW - 24, 38,
+            row := RoundedRectangle(Lumi.SP["md"], y, Atlas.NAVW - 24, rowH,
                 Lumi.RAD["row"], bg, true)
             row.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.20), bg)
             row.OnEvent("Click", Atlas.NavGo(i))
             if active
-                Rectangle(Lumi.SP["md"], y + 4, 2, 30, Lumi.C["magenta"], true)
+                Rectangle(Lumi.SP["md"], y + 4, 2, Max(12, rowH - 8),
+                    Lumi.C["magenta"], true)
             Lumi.Label(Lumi.SP["md"] + 18, y, 150, name,
-                active ? "body" : "dim", "left", 38)
-            y += 44
+                active ? "body" : "dim", "left", rowH)
+            y += pitch
             i += 1
         }
         ; engine switch lives in the rail: it is global, not panel-scoped
@@ -11263,8 +11285,92 @@ class Atlas {
             (v) => Atlas.ToggleEngine(v))
         Lumi.Label(Lumi.SP["md"] + 56, Atlas.H - 96, 120,
             g_Enabled ? "Engine on" : "Engine off", "dim", "left", 22)
+        ; "Panic release" is the name of the feature, not a description of
+        ; what it does for you. The word on the button is now the job.
         Lumi.Btn(Lumi.SP["md"], Atlas.H - 62, Atlas.NAVW - 24, 30,
-            "Panic release", (*) => (PanicRelease(), Atlas.Build()), "danger")
+            "Unstick my buttons", (*) => Atlas.Unstick(), "danger")
+    }
+
+    /**
+     * Release everything the engine is holding down, and SAY SO.
+     *
+     * The panic release used to fire silently and rebuild the window, which
+     * on a machine where nothing was actually stuck is indistinguishable
+     * from a button that does nothing at all.
+     */
+    static Unstick(*) {
+        PanicRelease()
+        Atlas.Build()
+        Lumi.Toast("Let go of every button and key — try your mouse now",
+            "jade", 2600)
+    }
+
+    /** Position of a panel in the nav, by name. 0 if there is no such panel. */
+    static PanelIndex(name) {
+        for i, n in Atlas.PANELS {
+            if (n = name)
+                return i
+        }
+        return 0
+    }
+
+    /** Name of the panel currently showing, or "" if the index is junk. */
+    static PanelName() {
+        return (Atlas.panel >= 1 && Atlas.panel <= Atlas.PANELS.Length)
+            ? Atlas.PANELS[Atlas.panel] : ""
+    }
+
+    /**
+     * Ask before something cannot be undone.
+     *
+     * The tick is STOPPED across the question: MsgBox blocks this thread,
+     * the 700 ms status tick does not stop for it, and a Build() landing
+     * mid-question disposes the very shape whose click handler is sitting
+     * here waiting for an answer. Owned by the settings window so it cannot
+     * open behind it -- the window is deliberately not top-most.
+     */
+    static Confirm(msg) {
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        Atlas.StopTick()
+        ans := "No"
+        try {
+            own := ""
+            if (IsObject(Atlas.lyr) && Atlas.lyr.hwnd)
+                own := " Owner" Atlas.lyr.hwnd
+            ans := MsgBox(msg, "RadMapper", "YesNo Icon?" own)
+        }
+        Atlas.StartTick()
+        return (ans = "Yes")
+    }
+
+    /**
+     * A hotkey written the way it is said out loud: "^!+F9" -> "Ctrl + Alt +
+     * Shift + F9". The stored string is AutoHotkey syntax and stays that way
+     * in the config and in the Settings fields; this is for the Home panel,
+     * where the reader has never seen that syntax and never should.
+     */
+    static HkWords(key) {
+        raw := Trim(String(Cfg(key)))
+        if (raw = "")
+            return "not set"
+        out := ""
+        rest := raw
+        while (rest != "") {
+            c := SubStr(rest, 1, 1)
+            if (c = "^")
+                out .= "Ctrl + "
+            else if (c = "!")
+                out .= "Alt + "
+            else if (c = "+")
+                out .= "Shift + "
+            else if (c = "#")
+                out .= "Win + "
+            else
+                break
+            rest := SubStr(rest, 2)
+        }
+        return out . rest
     }
 
     static NavGo(i) {
@@ -11324,6 +11430,10 @@ class Atlas {
     }
 
     static Go(i) {
+        ; A PanelIndex() miss returns 0, and 0 would draw a window with a
+        ; header, a nav and an empty body. Refuse it and stay where we are.
+        if (i < 1 || i > Atlas.PANELS.Length)
+            return
         Atlas.panel := i
         Atlas.Build()
     }
@@ -11346,12 +11456,81 @@ class Atlas {
                 n " diagnostic" (n = 1 ? "" : "s"), "warn")
     }
 
+    ; ── PANEL: HOME ─────────────────────────────────────────────────────────
+
+    /**
+     * Where the window opens, and the only panel written for someone who has
+     * never opened it before.
+     *
+     * No word on this screen is a RadMapper word. There is no "binding", no
+     * "layer", no "scope", no "input" and no "profile": every one of those is
+     * a thing you learn on the panel that needs it, and none of them helps
+     * you decide which panel that is. Four jobs, said the way the person
+     * asking for them would say them, and each one is a button.
+     */
+    static PanelHome(x, y, w, h) {
+        Lumi.Label(x, y, 420, "Start here", "title")
+        Lumi.Para(x, y + 30, Min(w - 20, 720), 40,
+            "RadMapper changes what your mouse buttons and keyboard keys do "
+            . "while you work. Nothing changes until you set it up here.",
+            "mute")
+
+        ; ── is it on? in words, not in a light ──────────────────────────
+        Lumi.Card(x, y + 76, w, 60, "surface")
+        Lumi.Chip(x + 16, y + 94, 92, 24, g_Enabled ? "on" : "off",
+            g_Enabled ? "jade" : "warn")
+        Lumi.Label(x + 120, y + 86, w - 140,
+            g_Enabled
+                ? "RadMapper is ON — your buttons and keys do what you set up here."
+                : "RadMapper is OFF — your mouse and keyboard behave normally.",
+            "body", "left", 22)
+        Lumi.Label(x + 120, y + 108, w - 140,
+            "Use the switch at the bottom of the list on the left to turn it "
+            . "on or off.", "mute", "left", 20)
+
+        ; ── the four jobs ───────────────────────────────────────────────
+        Lumi.Label(x, y + 150, 420, "What do you want to do?", "section")
+        bw := Min(380, (w - 16) // 2)
+        bh := 54
+        Lumi.Btn(x, y + 176, bw, bh, "Change what a mouse button does",
+            (*) => Atlas.Go(Atlas.PanelIndex("Mouse")), "primary")
+        Lumi.Btn(x + bw + 16, y + 176, bw, bh,
+            "Change what a keyboard key does",
+            (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
+        Lumi.Btn(x, y + 176 + bh + 12, bw, bh, "Test my mouse",
+            (*) => Atlas.Go(Atlas.PanelIndex("Diagnostics")), "accent")
+        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Fix a stuck button",
+            (*) => Atlas.Unstick(), "danger")
+
+        ; ── the keys that work even when nothing else does ──────────────
+        ky := y + 176 + (bh + 12) * 2 + 14
+        Lumi.Rule(x, ky, w - 8)
+        Lumi.Label(x, ky + 10, 420, "Keys that always work", "section")
+        Lumi.Label(x, ky + 32, w - 20,
+            "Press " Atlas.HkWords("hkPanic")
+            . " if a button ever feels stuck down.", "dim", "left", 22)
+        Lumi.Label(x, ky + 56, w - 20,
+            "Press " Atlas.HkWords("hkToggle")
+            . " to switch RadMapper off, and again to switch it back on.",
+            "dim", "left", 22)
+        Lumi.Label(x, ky + 80, w - 20,
+            "Press " Atlas.HkWords("hkGui") " to bring this window back.",
+            "dim", "left", 22)
+
+        ; ── where the settings live ─────────────────────────────────────
+        ; Pinned to the BOTTOM, so it is in the same place whatever size the
+        ; window is, and so nothing above it has to be measured against it.
+        Lumi.Label(x, y + h - 46, w - 20, "Your settings are saved here:",
+            "mute", "left", 20)
+        Lumi.Label(x, y + h - 26, w - 20, CFG_PATH, "code", "left", 22)
+    }
+
     ; ── PANEL: MOUSE ────────────────────────────────────────────────────────
 
     static PanelMouse(x, y, w, h) {
         Lumi.Label(x, y, 300, "Mouse map", "title")
-        Lumi.Label(x, y + 26, 460,
-            "Click a zone to scope the list to that input.", "mute")
+        Lumi.Label(x, y + 26, 560,
+            "Click a part of the mouse to see what it does.", "mute")
 
         ; scope selectors
         Lumi.Label(x + w - 470, y + 4, 40, "App", "mute", "left", 24)
@@ -11389,17 +11568,23 @@ class Atlas {
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
             (i, dbl) => (dbl ? Atlas.EditRow(i) : 0), 30,
-            ["Trigger", "Action", "Mods"])
+            ["When you", "It does", "Also hold"])
 
+        ; The four buttons were at fixed offsets adding up to 486 px inside a
+        ; column that is only 384 px wide at the window's minimum size, so
+        ; the last two hung off the right edge of the window entirely. Widths
+        ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
-        Lumi.Btn(lx, by, 150, 34, "Add binding", (*) => Atlas.EditRow(0), "primary")
-        Lumi.Btn(lx + 160, by, 90, 34, "Edit", (*) => Atlas.EditSel(), "accent")
-        Lumi.Btn(lx + 258, by, 90, 34, "Delete", (*) => Atlas.DeleteSel(), "danger")
-        Lumi.Btn(lx + 356, by, 130, 34, "Wheel deck…",
+        b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
+            (*) => Atlas.EditRow(0), "primary")
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit", (*) => Atlas.EditSel(), "accent")
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete", (*) => Atlas.DeleteSel(), "danger")
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)), "accent")
         if (rows.Length = 0)
             Lumi.Label(lx, y + 150, lw,
-                "No assignments here — this input keeps its system default.",
+                "Nothing set here — this one still works the normal way.",
                 "mute")
     }
 
@@ -11583,11 +11768,10 @@ class Atlas {
     static PanelLayers(x, y, w, h) {
         Lumi.Label(x, y, 400, "Layers", "title")
         Lumi.Para(x, y + 28, w - 40, 56,
-            "Hold an input, and every row scoped to it comes alive for as "
-            . "long as you hold. One thumb button doubles your whole map "
-            . "without another key or another inch of travel — and the "
-            . "holder's own action still fires if you tap it without using "
-            . "the layer.", "mute")
+            "Hold one button down and a second set of actions comes alive "
+            . "for as long as you hold it, so one thumb button doubles "
+            . "everything else. Tap that button without using the second set "
+            . "and it still does its own job.", "mute")
 
         hosts := Atlas.LayerHosts()
         rows := []
@@ -11602,21 +11786,21 @@ class Atlas {
             [{w: 240}, {w: 150, kind: "mono"}, {w: 90, kind: "mute"},
              {w: 110, kind: "mute"}],
             (i, dbl) => Atlas.GoLayerRow(i), 30,
-            ["Layer host", "Code", "Kind", "Arms"])
+            ["Hold this", "Code", "Kind", "Brings alive"])
         if (rows.Length = 0)
             Lumi.Label(x + 16, y + 130, w - 32,
-                "No layers yet. Start one below, then add bindings to it in "
-                . "the Mouse tab.", "mute")
+                "Nothing set up yet. Pick a button below, then add actions "
+                . "to it on the Mouse page.", "mute")
 
         Lumi.Label(x, y + h - 116, w,
-            "Click a layer to scope its tab to it — anything you add there "
-            . "then lands on that layer.", "mute", "left", 24)
+            "Click a row and the Mouse or Keyboard page switches to it — "
+            . "anything you add there then belongs to it.", "mute", "left", 24)
         by := y + h - 82
-        Lumi.Btn(x, by, 190, 34, "Layer on X1",
+        Lumi.Btn(x, by, 190, 34, "Use thumb button 1",
             (*) => Atlas.GoLayer("XButton1"), "primary")
-        Lumi.Btn(x + 200, by, 190, 34, "Layer on X2",
+        Lumi.Btn(x + 200, by, 190, 34, "Use thumb button 2",
             (*) => Atlas.GoLayer("XButton2"), "ghost")
-        Lumi.Btn(x + 400, by, 230, 34, "Layer on the wheel click",
+        Lumi.Btn(x + 400, by, 230, 34, "Use the wheel click",
             (*) => Atlas.GoLayer("MButton"), "ghost")
         ; No shortcut button for a KEY host, and that is deliberate: keys
         ; have no enumerable list, so "Hold CapsLock" only becomes a layer
@@ -11671,18 +11855,21 @@ class Atlas {
     static GoLayer(code) {
         items := LayerChoices()
         idx := Atlas.IndexOfText(items, "Hold " InputLabel(code))
+        if (idx < 1)                 ; IndexOfText returns 0 when the host has
+            idx := 1                 ; no "Hold ..." entry yet; 0 is not a
+                                     ; selectable index and drew a blank box
         if IsKeyInput(code) {
             Atlas.kbLayerIdx := idx
-            Atlas.panel := 3
             tab := "Keyboard"
         } else {
             Atlas.layerIdx := idx
-            Atlas.panel := 1
             tab := "Mouse"
         }
+        Atlas.panel := Atlas.PanelIndex(tab)
         Atlas.Build()
-        Lumi.Toast(tab " tab scoped to the " InputLabel(code)
-            . " layer — what you add now lands there", "cyan", 2800)
+        Lumi.Toast("The " tab " page now belongs to " InputLabel(code)
+            . " — what you add here only works while you hold it",
+            "cyan", 2800)
     }
 
     ; ── PANEL: KEYBOARD ─────────────────────────────────────────────────────
@@ -11702,8 +11889,8 @@ class Atlas {
      */
     static PanelKeys(x, y, w, h) {
         Lumi.Label(x, y, 300, "Keyboard map", "title")
-        Lumi.Label(x, y + 26, 460,
-            "Click a key to scope the list to it.", "mute")
+        Lumi.Label(x, y + 26, 560,
+            "Click a key to see what it does.", "mute")
 
         ; scope selectors -- same controls, same coordinates as the Mouse panel
         Lumi.Label(x + w - 470, y + 4, 40, "App", "mute", "left", 24)
@@ -11758,16 +11945,17 @@ class Atlas {
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
             (i, dbl) => (dbl ? Atlas.EditRow(i, true) : 0), 30,
-            ["Trigger", "Action", "Mods"])
+            ["When you", "It does", "Also hold"])
 
         by := y + h - 78
-        Lumi.Btn(lx, by, 150, 34, "Add key row",
+        b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
             (*) => Atlas.EditRow(0, true), "primary")
-        Lumi.Btn(lx + 160, by, 90, 34, "Edit",
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit",
             (*) => Atlas.EditSel(true), "accent")
-        Lumi.Btn(lx + 258, by, 90, 34, "Delete",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
             (*) => Atlas.DeleteSel(), "danger")
-        Lumi.Btn(lx + 356, by, 130, 34, "Wheel deck…",
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(true)), "accent")
         if (rows.Length = 0 && Atlas.keySel != "")
             Lumi.Label(lx, y + 150, lw,
@@ -11921,11 +12109,12 @@ class Atlas {
     }
 
     static PanelApps(x, y, w, h) {
-        Lumi.Label(x, y, 400, "App profiles", "title")
+        Lumi.Label(x, y, 400, "Programs", "title")
         Lumi.Para(x, y + 28, w - 40, 40,
-            "Bindings scoped to an app win over global ones. Match by "
-            . "process name (chrome.exe), a full criteria string "
-            . "(ahk_exe x.exe), or title:fragment.", "mute")
+            "Anything you set up for one program wins over what you set up "
+            . "for everything. A program is recognised by its file name "
+            . "(chrome.exe), or by a piece of its window title "
+            . "(title:Report).", "mute")
         rows := []
         Atlas.rowRefs := []
         for i, app in g_Cfg["apps"] {
@@ -11936,9 +12125,9 @@ class Atlas {
             nh := ""
             for inp in MGet(app, "noHold", [])
                 nh .= (nh = "" ? "" : "+") InputLabel(inp)
-            q := (nh = "") ? "" : ("no-hold " nh)
+            q := (nh = "") ? "" : ("instant clicks: " nh)
             if MGet(app, "noFollow", 0)
-                q .= (q = "" ? "" : " · ") "no-follow"
+                q .= (q = "" ? "" : " · ") "no pointer jump"
             rows.Push({cells: [app["name"], m,
                 IsObject(pk) ? (pk.x ", " pk.y) : "—",
                 q = "" ? "—" : q]})
@@ -11947,25 +12136,24 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 78, w, h - 176, rows,
             [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
              {w: 190, kind: "mono"}],
-            0, 30, ["Profile", "Match", "Park spot", "Quirks"])
+            0, 30, ["Program", "Recognised by", "Pointer spot", "Special"])
 
         Lumi.Label(x, y + h - 96, w,
-            "A park spot is where the pointer belongs when that app has focus "
-            . "— the dictation field in PowerScribe, the image in the viewer. "
-            . "Follow-focus goes there instead of the window centre, and the "
-            . "“Park cursor” action jumps there on demand.", "mute", "left", 34)
+            "A pointer spot is where the pointer belongs when that program "
+            . "is in front — the dictation box in PowerScribe, the image in "
+            . "the viewer. Pick a program in the list first, then use the "
+            . "buttons below.", "mute", "left", 34)
         by := y + h - 52
-        bw := Max((w - 40) // 5, 118)        ; five buttons that still fit at
-        gp := 10                             ;   the window's minimum width
-        Lumi.Btn(x, by, bw, 34, "Capture park spot",
+        b := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Set pointer spot",
             (*) => Atlas.CaptureSpot(), "primary")
-        Lumi.Btn(x + bw + gp, by, bw, 34, "Clear spot",
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Forget spot",
             (*) => Atlas.ClearSpot(), "ghost")
-        Lumi.Btn(x + (bw + gp) * 2, by, bw, 34, "MB1-3 no-hold",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Instant clicks",
             (*) => Atlas.ToggleNoHold(), "accent")
-        Lumi.Btn(x + (bw + gp) * 3, by, bw, 34, "No follow-focus",
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "No pointer jump",
             (*) => Atlas.ToggleNoFollow(), "accent")
-        Lumi.Btn(x + (bw + gp) * 4, by, bw, 34, "App editor",
+        Lumi.Btn(b[5].x, by, b[5].w, 34, "More settings…",
             (*) => Atlas.Classic("apps"), "ghost")
     }
 
@@ -11977,7 +12165,7 @@ class Atlas {
     static ToggleNoFollow() {
         ref := Atlas.SelectedRef()
         if (ref = 0 || ref > g_Cfg["apps"].Length) {
-            Lumi.Toast("Select an app profile first", "warn")
+            Lumi.Toast("Pick a program in the list first", "warn")
             return
         }
         app := g_Cfg["apps"][ref]
@@ -11987,8 +12175,8 @@ class Atlas {
         AfterCfgChange()
         Atlas.Build()
         Lumi.Toast(on
-            ? ("The cursor will not follow focus into " MGet(app, "name", ""))
-            : ("Follow-focus active again in " MGet(app, "name", "")),
+            ? ("The pointer will not jump into " MGet(app, "name", ""))
+            : ("The pointer can jump into " MGet(app, "name", "") " again"),
             on ? "jade" : "magenta")
     }
 
@@ -12000,7 +12188,7 @@ class Atlas {
     static ToggleNoHold() {
         ref := Atlas.SelectedRef()
         if (ref = 0 || ref > g_Cfg["apps"].Length) {
-            Lumi.Toast("Select an app profile first", "warn")
+            Lumi.Toast("Pick a program in the list first", "warn")
             return
         }
         app := g_Cfg["apps"][ref]
@@ -12010,8 +12198,10 @@ class Atlas {
         AfterCfgChange()
         Atlas.Build()
         Lumi.Toast(on
-            ? ("MB1-3 hold bindings ignored in " MGet(app, "name", "") )
-            : ("MB1-3 holds active again in " MGet(app, "name", "")),
+            ? ("Left, right and wheel clicks are instant in "
+               MGet(app, "name", "") " — holding them does nothing extra")
+            : ("Holding left, right and wheel click works again in "
+               MGet(app, "name", "")),
             on ? "jade" : "magenta")
     }
 
@@ -12024,12 +12214,13 @@ class Atlas {
         Lumi.CloseSelect()
         ref := Atlas.SelectedRef()
         if (ref = 0 || ref > g_Cfg["apps"].Length) {
-            Lumi.Toast("Select an app profile first", "warn")
+            Lumi.Toast("Pick a program in the list first", "warn")
             return
         }
         Atlas.parkRef := ref
-        Lumi.Toast("Move the pointer to the spot for "
-            . g_Cfg["apps"][ref]["name"] " — capturing in 3 s", "magenta", 3000)
+        Lumi.Toast("Move the pointer where you want it in "
+            . g_Cfg["apps"][ref]["name"] " — saving in 3 seconds",
+            "magenta", 3000)
         Atlas.Hide()
         SetTimer(ObjBindMethod(Atlas, "CaptureDone"), -3000)
     }
@@ -12042,19 +12233,22 @@ class Atlas {
         name := g_Cfg["apps"][ref]["name"]
         RM_GetPos(&px, &py)
         SetPark(name, px, py)
-        Lumi.Toast("Park spot for " name ": " px ", " py, "jade")
+        Lumi.Toast("Pointer spot saved for " name, "jade")
         Atlas.Show()
     }
 
     static ClearSpot() {
         ref := Atlas.SelectedRef()
         if (ref = 0 || ref > g_Cfg["apps"].Length) {
-            Lumi.Toast("Select an app profile first", "warn")
+            Lumi.Toast("Pick a program in the list first", "warn")
             return
         }
         name := g_Cfg["apps"][ref]["name"]
+        if !Atlas.Confirm("Forget the saved pointer spot for " name "?`n`n"
+            . "You can capture a new one at any time.")
+            return
         ClearPark(name)
-        Lumi.Toast("Park spot cleared for " name, "magenta")
+        Lumi.Toast("Pointer spot forgotten for " name, "magenta")
         Atlas.Build()
     }
 
@@ -12071,11 +12265,12 @@ class Atlas {
     static PanelMenus(x, y, w, h) {
         Lumi.Label(x, y, 400, "Radial menus", "title")
         Lumi.Para(x, y + 28, w, 56,
-            "Eight commands around the cursor, chosen by DIRECTION. Bind one "
-            . "to a hold with the “Radial menu” action: flick a direction and "
-            . "let go and it fires with nothing ever drawn — hold still for a "
-            . "moment first and the wheel appears so you can look. Releasing "
-            . "in the middle, or Escape, cancels and fires nothing.", "mute")
+            "Eight commands arranged around the pointer, picked by "
+            . "DIRECTION. Put one on a button you hold: flick in a direction "
+            . "and let go and it runs without anything being drawn — or hold "
+            . "still for a moment and the wheel appears so you can look. "
+            . "Letting go in the middle, or pressing Escape, does nothing.",
+            "mute")
 
         rows := []
         Atlas.menuRefs := []
@@ -12089,7 +12284,7 @@ class Atlas {
                     live += 1
             }
             app := MGet(m, "app", "")
-            rows.Push({cells: [nm, app = "" ? "any app" : app,
+            rows.Push({cells: [nm, app = "" ? "any program" : app,
                 sl.Length " slice" (sl.Length = 1 ? "" : "s"),
                 live " filled", Atlas.MenuBoundTo(nm)]})
             Atlas.menuRefs.Push(i)
@@ -12098,10 +12293,10 @@ class Atlas {
             [{w: 210}, {w: 150, kind: "mute"}, {w: 110, kind: "mono"},
              {w: 110, kind: "mono"}, {w: w - 620, kind: "mono"}],
             (i, dbl) => (dbl ? Atlas.MenuEditSel() : 0), 30,
-            ["Menu", "App", "Size", "Filled", "Opened by"])
+            ["Menu", "Program", "Size", "Filled in", "Opened by"])
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
-                "No menus yet — name one below and add it.", "mute")
+                "No menus yet — type a name below and click Add.", "mute")
 
         by := y + h - 96
         Lumi.Label(x, by, 90, "New menu", "dim", "left", 30)
@@ -12116,7 +12311,7 @@ class Atlas {
 
         by2 := y + h - 48
         bw := Max((w - 30) // 4, 130)
-        Lumi.Btn(x, by2, bw, 34, "Edit slices…",
+        Lumi.Btn(x, by2, bw, 34, "Edit its commands…",
             (*) => Atlas.MenuEditSel(), "accent")
         Lumi.Btn(x + bw + 10, by2, bw, 34, "Duplicate",
             (*) => Atlas.MenuDuplicate(), "ghost")
@@ -12145,7 +12340,7 @@ class Atlas {
                 lbl .= " (auto)"
             out .= (out = "" ? "" : ", ") lbl
         }
-        return out = "" ? "— not bound —" : out
+        return out = "" ? "— nothing opens it yet —" : out
     }
 
     static MenuSelRef() {
@@ -12166,11 +12361,11 @@ class Atlas {
         Lumi.EndEdit()
         name := Trim(Lumi.FieldValue(Atlas.menuName))
         if (name = "") {
-            Lumi.Toast("Give the menu a name first", "warn")
+            Lumi.Toast("Type a name for it first", "warn")
             return
         }
         if MenuByName(name) {
-            Lumi.Toast("A menu called “" name "” already exists", "warn")
+            Lumi.Toast("There is already a menu called “" name "”", "warn")
             return
         }
         m := Map()
@@ -12183,13 +12378,13 @@ class Atlas {
         g_Cfg["menus"].Push(m)
         SaveCfg()
         Atlas.Build()
-        Lumi.Toast("Added “" name "” — now fill in its slices", "jade")
+        Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
     }
 
     static MenuDuplicate() {
         m := Atlas.MenuSel()
         if !IsObject(m) {
-            Lumi.Toast("Select a menu first", "warn")
+            Lumi.Toast("Pick a menu in the list first", "warn")
             return
         }
         base := MGet(m, "name", "menu")
@@ -12217,10 +12412,14 @@ class Atlas {
     static MenuDelete() {
         ref := Atlas.MenuSelRef()
         if !ref {
-            Lumi.Toast("Select a menu first", "warn")
+            Lumi.Toast("Pick a menu in the list first", "warn")
             return
         }
         name := MGet(g_Cfg["menus"][ref], "name", "")
+        if !Atlas.Confirm("Delete the menu “" name "”?`n`n"
+            . "Its eight commands go with it, and anything you set to open "
+            . "it will stop opening anything. This cannot be undone.")
+            return
         g_Cfg["menus"].RemoveAt(ref)
         SaveCfg()
         Atlas.Build()
@@ -12236,7 +12435,7 @@ class Atlas {
     static MenuTry() {
         m := Atlas.MenuSel()
         if !IsObject(m) {
-            Lumi.Toast("Select a menu first", "warn")
+            Lumi.Toast("Pick a menu in the list first", "warn")
             return
         }
         name := MGet(m, "name", "")
@@ -12259,21 +12458,21 @@ class Atlas {
 
     static MenuEditSel() {
         if !IsObject(Atlas.MenuSel()) {
-            Lumi.Toast("Select a menu first", "warn")
+            Lumi.Toast("Pick a menu in the list first", "warn")
             return
         }
         Atlas.OpenDlg(() => Atlas.MenuDlg())
     }
 
     static PanelWindows(x, y, w, h) {
-        Lumi.Label(x, y, 400, "Window layouts", "title")
+        Lumi.Label(x, y, 400, "Window arrangements", "title")
         Lumi.Para(x, y + 28, w, 56,
-            "Capture where every window sits across your monitors, then put "
-            . "the whole arrangement back with one action — or bind it to an "
-            . "input with the “Apply window layout” action. Arm the guard on "
-            . "a layout and RadMapper snaps windows back when an application "
-            . "moves or resizes them on its own; it never fights a drag in "
-            . "progress, and it leaves minimised windows alone.", "mute")
+            "Save where every window sits across your monitors, then put the "
+            . "whole arrangement back in one click — or put it on a button. "
+            . "Turn on “keep in place” for an arrangement and RadMapper puts "
+            . "a window back when a program moves or resizes it on its own. "
+            . "It never fights you while you are dragging a window, and it "
+            . "leaves minimised windows alone.", "mute")
 
         rows := []
         Atlas.layoutRefs := []
@@ -12281,40 +12480,41 @@ class Atlas {
             nm := MGet(lay, "name", "")
             cnt := MGet(lay, "slots", []).Length
             rows.Push({cells: [nm, cnt " window" (cnt = 1 ? "" : "s"),
-                MGet(lay, "guard", 0) ? "armed" : "—",
-                (g_LayoutGuard = nm && nm != "") ? "ACTIVE" : ""]})
+                MGet(lay, "guard", 0) ? "on" : "—",
+                (g_LayoutGuard = nm && nm != "") ? "IN USE" : ""]})
             Atlas.layoutRefs.Push(i)
         }
         Atlas.list := Lumi.List(x, y + 96, w, h - 214, rows,
             [{w: 300}, {w: 130, kind: "mute"}, {w: 110, kind: "mono"},
              {w: 110, kind: "mono"}],
             (i, dbl) => (dbl ? Atlas.LayoutApplySel() : 0), 30,
-            ["Layout", "Windows", "Guard", "State"])
+            ["Arrangement", "Windows", "Keep in place", "Now"])
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
-                "No layouts yet — arrange your windows the way you want them, "
-                . "type a name below, and capture.", "mute")
+                "Nothing saved yet — arrange your windows the way you want "
+                . "them, type a name below, and click Save this one.", "mute")
 
         by := y + h - 100
         Lumi.Label(x, by, 90, "New name", "dim", "left", 30)
         Atlas.layoutName := Lumi.Field(x + 96, by, 250, 30, "", 0,
             "e.g. Reading", true)
-        Lumi.Btn(x + 356, by, 170, 30, "Capture current",
+        Lumi.Btn(x + 356, by, 170, 30, "Save this one",
             (*) => Atlas.LayoutCaptureNew(), "primary")
         Lumi.Label(x + 540, by, w - 540,
             g_LayoutGuard != ""
-                ? ("Guard active on “" g_LayoutGuard "” · " g_LayoutSnaps
-                   " snap" (g_LayoutSnaps = 1 ? "" : "s") " this session")
-                : "Guard idle", "mute", "left", 30)
+                ? ("Keeping “" g_LayoutGuard "” in place · " g_LayoutSnaps
+                   " window" (g_LayoutSnaps = 1 ? "" : "s") " put back so far")
+                : "Not keeping anything in place", "mute", "left", 30)
 
         by2 := y + h - 52
-        Lumi.Btn(x, by2, 130, 34, "Apply",
+        b := Atlas.BtnRow(x, Min(w, 640), [0.2, 0.28, 0.28, 0.24])
+        Lumi.Btn(b[1].x, by2, b[1].w, 34, "Use it",
             (*) => Atlas.LayoutApplySel(), "accent")
-        Lumi.Btn(x + 140, by2, 160, 34, "Arm / disarm guard",
+        Lumi.Btn(b[2].x, by2, b[2].w, 34, "Keep in place on / off",
             (*) => Atlas.LayoutGuardSel(), "ghost")
-        Lumi.Btn(x + 310, by2, 150, 34, "Recapture",
+        Lumi.Btn(b[3].x, by2, b[3].w, 34, "Save over it",
             (*) => Atlas.LayoutRecapture(), "ghost")
-        Lumi.Btn(x + 470, by2, 120, 34, "Delete",
+        Lumi.Btn(b[4].x, by2, b[4].w, 34, "Delete",
             (*) => Atlas.LayoutDelete(), "danger")
     }
 
@@ -12337,39 +12537,39 @@ class Atlas {
         Lumi.EndEdit()
         name := Trim(Lumi.FieldValue(Atlas.layoutName))
         if (name = "") {
-            Lumi.Toast("Give the layout a name first", "warn")
+            Lumi.Toast("Type a name for it first", "warn")
             return
         }
         n := LayoutCapture(name)
         if (n = 0) {
-            Lumi.Toast("Nothing to capture — no placeable windows found",
+            Lumi.Toast("Nothing to save — no movable windows are open",
                 "warn", 2600)
             return
         }
         SaveCfg()
         Atlas.Build()
-        Lumi.Toast("Captured “" name "” — " n " window"
+        Lumi.Toast("Saved “" name "” — " n " window"
             . (n = 1 ? "" : "s"), "jade")
     }
 
     static LayoutRecapture() {
         lay := Atlas.LayoutSel()
         if !IsObject(lay) {
-            Lumi.Toast("Select a layout first", "warn")
+            Lumi.Toast("Pick an arrangement in the list first", "warn")
             return
         }
         name := MGet(lay, "name", "")
         n := LayoutCapture(name)          ; same name = overwrite in place
         SaveCfg()
         Atlas.Build()
-        Lumi.Toast("Recaptured “" name "” — " n " window"
+        Lumi.Toast("Saved over “" name "” — " n " window"
             . (n = 1 ? "" : "s"), "jade")
     }
 
     static LayoutApplySel() {
         lay := Atlas.LayoutSel()
         if !IsObject(lay) {
-            Lumi.Toast("Select a layout first", "warn")
+            Lumi.Toast("Pick an arrangement in the list first", "warn")
             return
         }
         LayoutApply(MGet(lay, "name", ""))
@@ -12384,7 +12584,7 @@ class Atlas {
     static LayoutGuardSel() {
         lay := Atlas.LayoutSel()
         if !IsObject(lay) {
-            Lumi.Toast("Select a layout first", "warn")
+            Lumi.Toast("Pick an arrangement in the list first", "warn")
             return
         }
         name := MGet(lay, "name", "")
@@ -12403,24 +12603,28 @@ class Atlas {
         }
         SaveCfg()
         Atlas.Build()
-        Lumi.Toast(on ? ("Guard armed on “" name "”")
-                      : ("Guard disarmed on “" name "”"),
+        Lumi.Toast(on ? ("Now keeping “" name "” in place")
+                      : ("No longer keeping “" name "” in place"),
             on ? "jade" : "magenta")
     }
 
     static LayoutDelete() {
         ref := Atlas.LayoutSelRef()
         if (ref = 0) {
-            Lumi.Toast("Select a layout first", "warn")
+            Lumi.Toast("Pick an arrangement in the list first", "warn")
             return
         }
         name := MGet(g_Cfg["layouts"][ref], "name", "")
+        if !Atlas.Confirm("Delete the saved window arrangement “" name
+            . "”?`n`nThis cannot be undone. Your windows themselves are "
+            . "not touched — only the saved record of where they sit.")
+            return
         if (g_LayoutGuard = name)
             LayoutGuardDisarm()
         g_Cfg["layouts"].RemoveAt(ref)
         SaveCfg()
         Atlas.Build()
-        Lumi.Toast("Layout deleted", "magenta")
+        Lumi.Toast("Arrangement deleted", "magenta")
     }
 
     ; ── LAYOUT HELPERS ──────────────────────────────────────────────────────
@@ -12475,6 +12679,38 @@ class Atlas {
     }
 
     /** Row pitch that fills the space it is given, within legible limits. */
+    /**
+     * Lay a row of buttons across a known width.
+     *
+     * `parts` are the shares of the width each button gets; they are scaled
+     * to what is there and separated by `gap`. This exists because the two
+     * input panels placed their four buttons at HAND-PICKED offsets summing
+     * to 486 px inside a column that is 384 px wide at the window's minimum
+     * size -- the last two buttons hung off the right-hand edge of the
+     * window, unreachable, on every small screen.
+     */
+    static BtnRow(x, w, parts, gap := 10) {
+        n := parts.Length
+        total := 0
+        for v in parts
+            total += v
+        if (total <= 0)
+            total := n
+        avail := w - gap * (n - 1)
+        if (avail < n * 40)
+            avail := n * 40
+        out := []
+        cx := x
+        i := 1
+        for v in parts {
+            bw := (i = n) ? Max(40, x + w - cx) : Max(40, Round(avail * v / total))
+            out.Push({x: cx, w: bw})
+            cx += bw + gap
+            i += 1
+        }
+        return out
+    }
+
     static Pitch(space, rows, lo := 26, hi := 32) {
         if (rows < 1)
             return hi
@@ -12724,8 +12960,8 @@ class Atlas {
     static PanelDiag(x, y, w, h) {
         Lumi.Label(x, y, 400, "Diagnostics", "title")
         Lumi.Label(x, y + 28, w,
-            "Problems and self-recoveries this session. Memory only — never "
-            . "written to disk, cleared on exit.", "mute")
+            "Anything that went wrong, or fixed itself, since RadMapper "
+            . "started. Nothing here is saved to disk.", "mute")
 
         rows := []
         i := g_Problems.Length
@@ -12736,19 +12972,27 @@ class Atlas {
         }
         Atlas.list := Lumi.List(x, y + 66, w, h - 150, rows,
             [{w: 90, kind: "code"}, {w: 150, kind: "mono"}, {w: w - 280}],
-            0, 28, ["Time", "Kind", "Detail"])
+            0, 28, ["Time", "Kind", "What happened"])
 
+        Lumi.Label(x, y + h - 92, w,
+            "To watch your mouse and keyboard live — to check that every "
+            . "button is being seen — open the older window below and use "
+            . "its Test tab. Nothing you press there is blocked.",
+            "mute", "left", 24)
         by := y + h - 62
-        Lumi.Btn(x, by, 170, 34, "Copy to clipboard",
-            (*) => (ProblemsCopy(), Lumi.Toast("Diagnostics copied", "jade")), "accent")
-        Lumi.Btn(x + 180, by, 110, 34, "Clear",
+        b := Atlas.BtnRow(x, Min(w, 620), [0.28, 0.22, 0.50])
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Copy this list",
+            (*) => (ProblemsCopy(),
+                Lumi.Toast("Copied — paste it into an email", "jade")),
+            "accent")
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Clear the list",
             (*) => (ProblemsClear(), Atlas.Build()), "ghost")
-        Lumi.Btn(x + 300, by, 190, 34, "Open classic window",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Test my mouse and keyboard…",
             (*) => Atlas.Classic("test"), "ghost")
         if (rows.Length = 0)
             Lumi.Label(x, y + 110, w,
-                "Nothing to report — no failures or recoveries this session.",
-                "mute")
+                "Nothing to report — nothing has gone wrong since RadMapper "
+                . "started.", "mute")
     }
 
     ; ── ROW ACTIONS ─────────────────────────────────────────────────────────
@@ -12764,7 +13008,7 @@ class Atlas {
     static EditSel(keyMode := false) {
         ref := Atlas.SelectedRef()
         if (ref = 0) {
-            Lumi.Toast("Select a row first", "warn")
+            Lumi.Toast("Pick a row in the list first", "warn")
             return
         }
         Atlas.EditRow(Atlas.list.sel, keyMode)
@@ -12788,13 +13032,33 @@ class Atlas {
     static DeleteSel() {
         ref := Atlas.SelectedRef()
         if (ref = 0) {
-            Lumi.Toast("Select a row first", "warn")
+            Lumi.Toast("Pick a row in the list first", "warn")
             return
         }
+        ; Confirm first, and name the thing being deleted. The ref is taken
+        ; BEFORE the question: the list this row came from is rebuilt by the
+        ; status tick, and re-reading the selection afterwards could point at
+        ; a different row than the one the reader agreed to.
+        ; ... and the ref is re-checked against the CURRENT config, not
+        ; trusted from the list: rowRefs is rebuilt on every panel draw, and
+        ; a row deleted from the classic window between draws would leave an
+        ; index pointing past the end of the array.
+        if (ref > g_Cfg["bindings"].Length) {
+            Lumi.Toast("That row is no longer there", "warn")
+            Atlas.Build()
+            return
+        }
+        r := g_Cfg["bindings"][ref]
+        what := Trim(InputLabel(MGet(r, "button", "")) " "
+            . MGet(r, "event", ""))
+        if !Atlas.Confirm("Delete the setting for " what "?`n`n"
+            . "That button or key goes back to doing whatever Windows and "
+            . "the program normally do with it.")
+            return
         g_Cfg["bindings"].RemoveAt(ref)
         SaveCfg()
         AfterCfgChange()
-        Lumi.Toast("Binding deleted", "magenta")
+        Lumi.Toast("Deleted — that one is back to normal", "magenta")
         Atlas.Build()
     }
 
@@ -12846,8 +13110,8 @@ class Atlas {
         dlg.Drag()               ; it is borderless too -- it needs a caption
 
         Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 460, (idx ? "Edit " : "New ")
-            . (keyMode ? "key binding" : "mouse binding"), "title")
+        Lumi.Label(24, 16, 520, (idx ? "Edit what this does" : "Set up "
+            . (keyMode ? "a key" : "a mouse button")), "title")
         Lumi.Rule(24, 52, w - 48)
 
         apps := AppChoices()
@@ -12855,16 +13119,16 @@ class Atlas {
         events := Atlas.EventChoices(keyMode)
         st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg}
 
-        Lumi.Label(24, 70, 110, "App", "dim", "left", 30)
+        Lumi.Label(24, 70, 120, "In program", "dim", "left", 30)
         st.app := Lumi.Select(150, 70, 240, 30, apps,
             Atlas.IndexOfText(apps, AppDisp(row ? MGet(row, "app", "*")
                 : Atlas.ScopeApp())))
-        Lumi.Label(24, 112, 110, "Layer (hold)", "dim", "left", 30)
+        Lumi.Label(24, 112, 120, "Only while holding", "dim", "left", 30)
         st.layer := Lumi.Select(150, 112, 300, 30, layers,
             Atlas.IndexOfText(layers, LayerLabelFromCode(row
                 ? MGet(row, "layer", "*") : Atlas.ScopeLayer())))
 
-        Lumi.Label(24, 154, 110, keyMode ? "Key" : "Input", "dim", "left", 30)
+        Lumi.Label(24, 154, 120, keyMode ? "Key" : "Button", "dim", "left", 30)
         if keyMode {
             st.input := Lumi.Field(150, 154, 240, 30,
                 row ? MGet(row, "button", "") : Atlas.KeySeed(),
@@ -12887,12 +13151,12 @@ class Atlas {
                     ? MGet(row, "button", "LButton") : Atlas.sel)))
         }
 
-        Lumi.Label(24, 196, 110, "Trigger", "dim", "left", 30)
+        Lumi.Label(24, 196, 120, "When you", "dim", "left", 30)
         ev := row ? MGet(row, "event", "tap") : Atlas.EventSeed(keyMode)
         st.event := Lumi.Select(150, 196, 240, 30, events,
             Atlas.IndexOfText(events, ev))
 
-        Lumi.Label(24, 238, 110, "Modifiers", "dim", "left", 30)
+        Lumi.Label(24, 238, 120, "Also hold", "dim", "left", 30)
         mods := row ? MGet(row, "mods", "") : ""
         st.ctrl := Lumi.Toggle(150, 242, "Ctrl", InStr(mods, "^") ? 1 : 0, 0, 36, 18)
         st.alt := Lumi.Toggle(258, 242, "Alt", InStr(mods, "!") ? 1 : 0, 0, 36, 18)
@@ -12900,11 +13164,11 @@ class Atlas {
         st.win := Lumi.Toggle(468, 242, "Win", InStr(mods, "#") ? 1 : 0, 0, 36, 18)
 
         actCode := row ? row["action"]["type"] : "keys"
-        Lumi.Label(24, 280, 110, "Action", "dim", "left", 30)
+        Lumi.Label(24, 280, 120, "It does", "dim", "left", 30)
         st.act := Lumi.Select(150, 280, 380, 30, ACT_LABELS,
             ActIndexOf(actCode), Atlas.ActPicked(st))
 
-        Lumi.Label(24, 322, 110, "Value", "dim", "left", 30)
+        Lumi.Label(24, 322, 120, "Details", "dim", "left", 30)
         st.value := Lumi.Field(150, 322, 306, 30,
             row ? MGet(row["action"], "value", "") : "", 0, "action value", true)
         ; The three tools, back where they belong. Rec records a live combo,
@@ -12922,7 +13186,7 @@ class Atlas {
 
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 190, 20,
-            keyMode ? "keyboard row" : "mouse row",
+            keyMode ? "keyboard" : "mouse",
             keyMode ? "jade" : "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
@@ -13084,7 +13348,7 @@ class Atlas {
         hwnd := Lumi.HwndOf(st.dlg)
 
         if (btn = "") {
-            Lumi.Toast(st.keyMode ? "Pick a key first" : "Pick an input first",
+            Lumi.Toast(st.keyMode ? "Pick a key first" : "Pick a button first",
                 "warn")
             return
         }
@@ -13092,30 +13356,30 @@ class Atlas {
         ; names a key, belongs in the other tab -- where its map applies.
         ; Same rule both ways round; the classic dialogs have always had it.
         if (st.keyMode && IsMouseInput(btn)) {
-            Lumi.Toast("'" btn "' is a mouse input — add it on the Mouse tab",
+            Lumi.Toast("'" btn "' is a mouse button — add it on the Mouse page",
                 "danger", 2800)
             return
         }
         if (!st.keyMode && !IsMouseInput(btn)) {
-            Lumi.Toast("'" btn "' is a key — add it on the Keyboard tab",
+            Lumi.Toast("'" btn "' is a key — add it on the Keyboard page",
                 "danger", 2800)
             return
         }
         if (st.keyMode && !KeyNameValid(btn)) {
-            Lumi.Toast("'" btn "' is not a key AutoHotkey can hook — use a"
+            Lumi.Toast("RadMapper cannot watch '" btn "' — use a"
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
             return
         }
         if (IsWheel(btn) && event != "turn") {
-            Lumi.Toast("Wheel inputs only support the 'turn' trigger", "warn", 2400)
+            Lumi.Toast("The wheel can only be set up for 'turn'", "warn", 2400)
             return
         }
         if (!IsWheel(btn) && event = "turn") {
-            Lumi.Toast("'turn' applies to wheel inputs only", "warn", 2400)
+            Lumi.Toast("'turn' is for the wheel only", "warn", 2400)
             return
         }
         if LayerIncludes(lay, btn) {
-            Lumi.Toast("A binding cannot hold its own input as its layer",
+            Lumi.Toast("A button cannot be the one you hold for itself",
                 "warn", 2600)
             return
         }
@@ -13146,11 +13410,12 @@ class Atlas {
         try {
             if st.idx {
                 if UpsertRowEdit("bindings", b, FindDupBinding(b), st.idx)
-                    Lumi.Toast("Replaced a duplicate row", "violet")
+                    Lumi.Toast("Replaced the one you already had", "violet")
             } else if UpsertBinding(b)
-                Lumi.Toast("Replaced the existing row for that context", "violet")
+                Lumi.Toast("Replaced what you already had for this program "
+                    . "and hold", "violet")
             else
-                Lumi.Toast("Binding saved", "jade")
+                Lumi.Toast("Saved", "jade")
             SaveCfg()
             AfterCfgChange()
         } catch as e {
@@ -13217,7 +13482,7 @@ class Atlas {
         app := keyMode ? Atlas.KbScopeApp() : Atlas.ScopeApp()
 
         Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Wheel deck", "title")
+        Lumi.Label(24, 16, 560, "Scroll while holding a button", "title")
         Lumi.Label(24, 42, w - 48,
             "Hold one input, then scroll — one row per direction.",
             "mute", "left", 20)
@@ -13226,11 +13491,11 @@ class Atlas {
         apps := AppChoices()
         st := {keyMode: keyMode, dlg: dlg, rows: []}
 
-        Lumi.Label(24, 84, 110, "App", "dim", "left", 30)
+        Lumi.Label(24, 84, 120, "In program", "dim", "left", 30)
         st.app := Lumi.Select(150, 84, 300, 30, apps,
             Atlas.IndexOfText(apps, AppDisp(app)))
 
-        Lumi.Label(24, 126, 110, keyMode ? "Hold key" : "Hold input",
+        Lumi.Label(24, 126, 120, keyMode ? "Hold this key" : "Hold this button",
             "dim", "left", 30)
         if keyMode {
             ; named .input, not .host: RecKey/PickKey address st.input,
@@ -13342,29 +13607,30 @@ class Atlas {
         hwnd := Lumi.HwndOf(st.dlg)
 
         if (host = "") {
-            Lumi.Toast(st.keyMode ? "Pick a key to hold first"
+            Lumi.Toast(st.keyMode ? "Pick a key to hold down first"
                                   : "Pick an input to hold first", "warn")
             return
         }
         ; The same tab and validity rules the binding editor applies, for the
         ; same reasons -- a deck is only ever four ordinary rows.
         if IsWheel(host) {
-            Lumi.Toast("A wheel cannot be the hold — pick a button or key",
+            Lumi.Toast("The wheel cannot be the thing you hold — pick a "
+                . "button or a key",
                 "danger", 2800)
             return
         }
         if (st.keyMode && IsMouseInput(host)) {
-            Lumi.Toast("'" host "' is a mouse input — build this deck on the"
+            Lumi.Toast("'" host "' is a mouse button — set this up on the"
                 . " Mouse tab", "danger", 3000)
             return
         }
         if (!st.keyMode && !IsMouseInput(host)) {
-            Lumi.Toast("'" host "' is a key — build this deck on the Keyboard"
+            Lumi.Toast("'" host "' is a key — set this up on the Keyboard"
                 . " tab", "danger", 3000)
             return
         }
         if (st.keyMode && !KeyNameValid(host)) {
-            Lumi.Toast("'" host "' is not a key AutoHotkey can hook — use a"
+            Lumi.Toast("RadMapper cannot watch '" host "' — use a"
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
             return
         }
@@ -13490,7 +13756,7 @@ class Atlas {
         dlg.Drag()
 
         Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Radial menu", "title")
+        Lumi.Label(24, 16, 520, "Menu around the pointer", "title")
         Lumi.Label(24, 42, w - 48,
             "Slice 1 points up; the rest run clockwise.", "mute", "left", 20)
         Lumi.Rule(24, 66, w - 48)
@@ -13503,7 +13769,7 @@ class Atlas {
 
         apps := AppChoices()
         cur := MGet(menu, "app", "")
-        Lumi.Label(356, 84, 40, "App", "dim", "left", 30)
+        Lumi.Label(352, 84, 48, "Program", "dim", "left", 30)
         st.app := Lumi.Select(404, 84, 250, 30, apps,
             Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
 
@@ -13511,15 +13777,15 @@ class Atlas {
         st.size := Lumi.Select(676, 118, 120, 30, ["4", "8"],
             slices.Length > 4 ? 2 : 1)
 
-        Lumi.Label(24, 122, 300,
-            "Blank app = offered whenever no app-specific menu matches.",
+        Lumi.Label(24, 122, 320,
+            "Leave the program blank and this menu is used everywhere.",
             "mute", "left", 22)
         Lumi.Rule(24, 156, w - 48)
 
         Lumi.Label(24, 164, 90, "Direction", "section")
         Lumi.Label(116, 164, 140, "Label", "section")
-        Lumi.Label(268, 164, 240, "Action", "section")
-        Lumi.Label(520, 164, 200, "Value", "section")
+        Lumi.Label(268, 164, 240, "It does", "section")
+        Lumi.Label(520, 164, 200, "Details", "section")
 
         i := 1
         Loop 8 {
@@ -13545,13 +13811,13 @@ class Atlas {
         }
 
         Lumi.Para(24, 494, w - 48, 56,
-            "With 4 slices only the first four rows are used, and they point "
-            . "up / right / down / left. A row set to “Disabled” is a gap: "
-            . "flicking into it fires nothing, which is what you want for a "
-            . "direction you have not decided about yet.", "mute")
+            "With 4 commands only the first four rows are used, and they "
+            . "point up / right / down / left. A row left as “Disabled” is a "
+            . "gap: flicking that way does nothing, which is what you want "
+            . "for a direction you have not decided about yet.", "mute")
 
         Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Chip(24, h - 52, 210, 20, "8 slices, one level", "cyan")
+        Lumi.Chip(24, h - 52, 240, 20, "eight commands, one ring", "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
@@ -13570,20 +13836,20 @@ class Atlas {
     static DoSaveMenu(st) {
         Lumi.EndEdit()
         if (!st.ref || st.ref > MGet(g_Cfg, "menus", []).Length) {
-            Lumi.Toast("That menu is gone", "warn")
+            Lumi.Toast("That menu is no longer there", "warn")
             Atlas.CloseDlg()
             return
         }
         hwnd := Lumi.HwndOf(st.dlg)
         name := Trim(Lumi.FieldValue(st.name))
         if (name = "") {
-            Lumi.Toast("A menu needs a name — it is how a binding finds it",
+            Lumi.Toast("A menu needs a name — that is how a button finds it",
                 "warn")
             return
         }
         for i, other in g_Cfg["menus"] {
             if (i != st.ref && MGet(other, "name", "") = name) {
-                Lumi.Toast("Another menu is already called “" name "”", "warn")
+                Lumi.Toast("There is already a menu called “" name "”", "warn")
                 return
             }
         }
@@ -13740,7 +14006,7 @@ class Atlas {
         Lumi.EndEdit()
         try {
             ShowClassic()
-            Lumi.Toast("Opened the classic window", "cyan")
+            Lumi.Toast("Opened the older settings window", "cyan")
         }
     }
 }
