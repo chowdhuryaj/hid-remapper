@@ -815,7 +815,7 @@ global g_KbRegistered := []    ; keyboard hotkey strings currently registered
 ; Binding membership index (see RebuildIndex). Starts as a valid EMPTY index
 ; so the hot-path lookups never need an existence guard.
 global g_Idx := {bind: Map(), layerBind: Map(), anyMods: false,
-    anyApp: false, refd: Map()}
+    anyApp: false, anyNoHold: false, anyNoFollow: false, refd: Map()}
 global g_AppCache := {hwnd: 0, tick: 0, name: ""}   ; ActiveAppName cache
 global g_MacroBusy := false
 global g_MouseHkWarned := "" ; last mouse-in-Settings-hotkey set warned about
@@ -2059,8 +2059,9 @@ CfgImport() {
     incoming := 0
     try {
         incoming := JsonLoad(FileRead(src, "UTF-8"))
-        if (!IsObject(incoming) || !incoming.Has("bindings"))
-            throw Error("not a RadMapper config (no `"bindings`" key)")
+        if (!IsObject(incoming) || !incoming.Has("bindings")
+            || Type(incoming["bindings"]) != "Array")
+            throw Error("not a RadMapper config (no `"bindings`" array)")
     } catch as e {
         MsgBox("Import failed: " e.Message "`nThe current config is untouched.",
             "RadMapper", "Iconx")
@@ -3203,7 +3204,7 @@ StartPollIfNeeded(st) {
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
         || t = "dragmove" || t = "sniper" || t = "boost" || t = "scrollptr"
-        || t = "zoomptr")
+        || t = "zoomptr" || t = "radial")
 }
 
 HoldTimer(st, gen, *) {
@@ -3714,7 +3715,14 @@ ActionUp(binding, st) {
                 btn := v != "" ? v : (IsObject(st) ? st.btn : "LButton")
             SendNativeUp(btn)
         case "moddrag":
-            SafeSend("{Blind}{LButton Up}{" v " Up}")
+            ; TWO sends, not one: Send parses the whole string before it emits
+            ; anything, so a value that has become unusable since the hold
+            ; began (a config edit mid-drag, a hand-edited row) would throw and
+            ; take the LButton Up down with it -- a left button left latched
+            ; over an image. The button release must never depend on the
+            ; modifier name parsing.
+            SafeSend("{Blind}{LButton Up}")
+            SafeSend("{Blind}{" v " Up}")
         case "keysrepeat":
             return                           ; repeat timer self-cancels
         case "dragmove":
@@ -7964,6 +7972,15 @@ ActIndexOf(code) {
     return ACT_CODES.Length                  ; "none"
 }
 
+; The hint for an action code, or "" for a code the table does not list.
+; A retired type still on disk -- a pre-v0.3.4 "teleport" row naming a
+; monitor NUMBER survives MigrateRow deliberately -- used to throw out of the
+; dialog builder on the ACT_HINTS lookup, which leaves a half-built modal
+; window over the reading screen. The vector dialog already guarded this.
+ActHintOf(code) {
+    return ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
+}
+
 /** The dropdown label for an action code -- a readable fallback name. */
 ActLabelOf(code) {
     i := ActIndexOf(code)
@@ -8046,8 +8063,8 @@ BindingDlg(editRow, preset := 0) {
     AddValueTools(dlg, edVal)
 
     hint := dlg.AddText("x120 y234 w330 h30 cGray",
-        ACT_HINTS[row ? row["action"]["type"] : "keys"])
-    ddAct.OnEvent("Change", (*) => (hint.Text := ACT_HINTS[ACT_CODES[ddAct.Value]]))
+        ActHintOf(row ? row["action"]["type"] : "keys"))
+    ddAct.OnEvent("Change", (*) => (hint.Text := ActHintOf(ACT_CODES[ddAct.Value])))
 
     ok := dlg.AddButton("x120 y274 w90 Default", "OK")
     dlg.AddButton("x+10 w90", "Cancel").OnEvent("Click", (*) => ModalClose(dlg))
@@ -8267,8 +8284,8 @@ KeyDlg(editRow) {
     AddValueTools(dlg, edVal)
 
     hint := dlg.AddText("x120 y234 w330 h30 cGray",
-        ACT_HINTS[row ? row["action"]["type"] : "keys"])
-    ddAct.OnEvent("Change", (*) => (hint.Text := ACT_HINTS[ACT_CODES[ddAct.Value]]))
+        ActHintOf(row ? row["action"]["type"] : "keys"))
+    ddAct.OnEvent("Change", (*) => (hint.Text := ActHintOf(ACT_CODES[ddAct.Value])))
 
     ok := dlg.AddButton("x120 y274 w90 Default", "OK")
     dlg.AddButton("x+10 w90", "Cancel").OnEvent("Click", (*) => ModalClose(dlg))
@@ -8777,6 +8794,14 @@ Cleanup(*) {
 }
 
 Init() {
+    ; The error hook is registered by GpGFX's static __New as well, but that
+    ; call sits INSIDE its try, after Gdip.Startup() -- so on a machine where
+    ; the graphics stack fails to start (exactly when errors are most likely)
+    ; it never runs, and an unhandled error raises a modal AutoHotkey dialog
+    ; over the study. Registering it here too is idempotent (v2 moves an
+    ; already-registered callback rather than adding it twice) and does not
+    ; depend on the bundle.
+    OnError(RadUnhandledError, -1)
     ResolveCfgPaths()                        ; must precede any config I/O
     LoadCfg()
     OnClipboardChange(ClipChanged)           ; feeds the clipboard shelf
