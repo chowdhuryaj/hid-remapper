@@ -8878,7 +8878,11 @@ class Lumi {
         ; ink
         "ink",      "0xFFF2F3F8",   ; primary text
         "inkDim",   "0xFFA6ACC8",   ; secondary text
-        "inkMute",  "0xFF6E7599",   ; disabled, placeholders, ticks
+        "inkMute",  "0xFF787FA3",   ; disabled, placeholders, ticks -- lightened
+                                    ; from 6E7599 (WCAG pass: was 2.62:1 on
+                                    ; raised2, below the 3:1 floor for
+                                    ; placeholder/disabled text; now 3.0-4.7:1
+                                    ; across surface/raised/raised2/sunk)
         ; ── NEON HOT PINK -- identity, selection, alarm ──────────────────
         "magenta",  "0xFFFF2D95",   ; the signature hue
         "pink",     "0xFFFF6FB5",   ; lighter tint: warnings, soft accents
@@ -8899,8 +8903,14 @@ class Lumi {
 
     static Face := "Segoe UI"
     static Mono := "Consolas"
-    static Size := Map("hero", 20, "title", 14, "sub", 12, "body", 11,
-                       "small", 10, "tiny", 9)
+    ; body/small/tiny raised for legibility on a clinical display (WCAG
+    ; accessibility pass, v0.6): +2 / +1 / +1 px. Checked against every
+    ; fixed box height that text sits in (Chip 20-24, Btn 26-36, Field
+    ; 30-32, List rowH 30, SELROW 28, Toast h=52) -- the smallest, Chip's
+    ; 20 px with "tiny", still clears a 10 px line with headroom. hero/
+    ; title/sub are left alone: their boxes (34/24/-) are already tight.
+    static Size := Map("hero", 20, "title", 14, "sub", 12, "body", 13,
+                       "small", 11, "tiny", 10)
 
     ; one spacing scale, no in-between values
     static SP  := Map("xs", 4, "sm", 8, "md", 12, "lg", 16, "xl", 24, "xxl", 32)
@@ -8908,7 +8918,9 @@ class Lumi {
     ; style of every dashboard template on the internet; 3-4 px reads as an
     ; instrument panel and lets the hairlines do the work of separating things.
     static RAD := Map("card", 4, "row", 3, "field", 3, "chip", 2)
-    static MS  := Map("hover", 140, "panel", 220, "toast", 1600)
+    ; toast duration raised 1600 -> 2600 ms: a reading-position or wheel
+    ; confirmation needs longer than a click acknowledgement to actually read.
+    static MS  := Map("hover", 140, "panel", 220, "toast", 2600)
 
     ; Dropdown geometry. SELMAX is only the FALLBACK window height, used when
     ; the monitor under the control cannot be resolved; normally __SelectOpen
@@ -9310,7 +9322,10 @@ class Lumi {
      * Toggle switch. Olive when on (olive = state), inert grey when off.
      * onChange(newValue) runs after the visual has already flipped.
      */
-    static Toggle(x, y, label, value, onChange := 0, w := 44, h := 22) {
+    ; default hit target raised 44x22 -> 52x28 (WCAG pass: 22 px was below
+    ; the 28 px floor for an interactive target). Explicit w/h passed by a
+    ; caller (e.g. the modifier toggles in the key-recorder) are untouched.
+    static Toggle(x, y, label, value, onChange := 0, w := 52, h := 28) {
         track := RoundedRectangle(x, y, w, h, Lumi.RAD["field"],
             value ? Lumi.C["teal"] : Lumi.C["raised"], true)
         edge := RoundedRectangle(x, y, w, h, Lumi.RAD["field"],
