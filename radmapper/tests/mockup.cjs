@@ -1,0 +1,11 @@
+const assert = require('node:assert/strict');
+const {resizeSlots} = require('../mockup/app.js');
+const four = ['Up','Right','Down','Left'].map(label=>({label,action:'keys',shortcut:label}));
+const eight = resizeSlots(four,8);
+assert.deepEqual(eight.filter((_,i)=>i%2===0),four);
+assert.ok(eight.filter((_,i)=>i%2).every(s=>s.action==='none' && s.label===''));
+assert.deepEqual(resizeSlots(eight,4),four);
+eight[0].label='Changed';
+assert.equal(four[0].label,'Up');
+assert.throws(()=>resizeSlots(four,6));
+console.log('PASS: mockup direction preservation, empty diagonals, draft isolation, invalid sizes');
