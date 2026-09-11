@@ -2077,15 +2077,9 @@ ValidateCfgShape(c) {
         if (c.Has(key) && !(c[key] is Map))
             throw Error(key " must be an object")
     }
-    for menu in MGet(c, "menus", []) {
-        if (!(menu is Map) || !(MGet(menu, "slices", 0) is Array)
-            || Type(MGet(menu, "name", 0)) != "String")
-            throw Error("Each menu needs a name and a slices list")
-        for sl in menu["slices"] {
-            if (!(sl is Map) || !(MGet(sl, "action", 0) is Map))
-                throw Error("Each menu direction needs an action object")
-        }
-    }
+    ; Menus and slices are NOT hard failures: a single malformed row must
+    ; never send the whole file to a backup or to defaults. ValidateCfg()
+    ; drops them, the same way it drops malformed bindings and apps.
 }
 
 ; Drop malformed rows from a hand-edited config file so one bad row cannot
@@ -2105,6 +2099,21 @@ ValidateCfg() {
             kept.Push(app)
     }
     g_Cfg["apps"] := kept
+    if (g_Cfg.Has("menus") && g_Cfg["menus"] is Array) {
+        kept := []
+        for menu in g_Cfg["menus"] {
+            if (!(menu is Map) || !(MGet(menu, "slices", 0) is Array)
+                || String(MGet(menu, "name", "")) = "")
+                continue
+            menu["name"] := String(menu["name"])
+            for i, sl in menu["slices"] {
+                if (!(sl is Map) || !(MGet(sl, "action", 0) is Map))
+                    menu["slices"][i] := MenuSlice("", "none", "")
+            }
+            kept.Push(menu)
+        }
+        g_Cfg["menus"] := kept
+    }
 }
 
 SaveCfg() {
@@ -2203,7 +2212,7 @@ CfgExport() {
 }
 
 CfgImport() {
-    global g_Cfg, g_CfgDirty
+    global g_Cfg, g_CfgDirty, g_CfgSaveFailed
     src := FileSelect(3, , "Import RadMapper config", "JSON (*.json)")
     if (src = "")
         return
@@ -2234,6 +2243,7 @@ CfgImport() {
     if !SaveCfg() {
         g_Cfg := previous
         g_CfgDirty := wasDirty
+        g_CfgSaveFailed := false             ; memory and disk agree again
         return
     }
     AfterCfgChange()
@@ -5856,9 +5866,10 @@ RadialFocusLost(target, targetPid) {
     fg := FgHwnd()
     if (fg = target || !target)
         return false
-    if g_OurHwnds.Has(fg)
+    fgPid := RadialPidOf(fg)
+    if (fgPid = DllCall("GetCurrentProcessId", "uint"))   ; any layer of ours
         return false
-    return RadialPidOf(fg) != targetPid
+    return fgPid != targetPid
 }
 
 RadialFireSlice(act, label, target, targetPid := 0, *) {
@@ -11555,13 +11566,7 @@ class Atlas {
             "Unstick my buttons", (*) => Atlas.Unstick(), "danger")
     }
 
-    /**
-     * Release everything the engine is holding down, and SAY SO.
-     *
-     * The panic release used to fire silently and rebuild the window, which
-     * on a machine where nothing was actually stuck is indistinguishable
-     * from a button that does nothing at all.
-     */
+    /** F1: the whole setup path in one box, in plain words. */
     static Help() {
         MsgBox("Start with one shortcut`n`n"
             . "Mouse / Keyboard: choose a button or key, then add an assignment. "
@@ -11577,6 +11582,13 @@ class Atlas {
             "RadMapper quick help", "Owner" Lumi.HwndOf(Atlas.dlg ? Atlas.dlg : Atlas.lyr))
     }
 
+    /**
+     * Release everything the engine is holding down, and SAY SO.
+     *
+     * The panic release used to fire silently and rebuild the window, which
+     * on a machine where nothing was actually stuck is indistinguishable
+     * from a button that does nothing at all.
+     */
     static Unstick(*) {
         PanicRelease()
         Atlas.Build()
@@ -12451,7 +12463,7 @@ class Atlas {
         app := g_Cfg["apps"][ref]
         on := !MGet(app, "noFollow", 0)
         app["noFollow"] := on ? 1 : 0
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
         Atlas.Build()
         Lumi.Toast(on
@@ -12474,7 +12486,7 @@ class Atlas {
         app := g_Cfg["apps"][ref]
         on := MGet(app, "noHold", []).Length = 0
         app["noHold"] := on ? ["LButton", "RButton", "MButton"] : []
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
         Atlas.Build()
         Lumi.Toast(on
@@ -12622,6 +12634,27 @@ class Atlas {
         return out = "" ? "— nothing opens it yet —" : out
     }
 
+    /** Select a row of the CURRENT list view -- call after Build(), which
+     *  replaces the view; a sel written before it lands on the old one. */
+    static SelectListRow(i) {
+        if (!IsObject(Atlas.list) || i < 1 || i > Atlas.list.rows.Length)
+            return
+        Atlas.list.sel := i
+        Atlas.savedSel := i
+        try Lumi.__ListPaint(Atlas.list)
+    }
+
+    /** SaveCfg for panel actions that go on to show a success toast: on a
+     *  failed or blocked save, a warning toast lands AFTER theirs so the
+     *  last word on screen is the true one. */
+    static SaveOrWarn() {
+        if SaveCfg()
+            return true
+        SetTimer(() => Lumi.Toast("Changed in memory only — not saved to disk. "
+            . "See Diagnostics.", "danger", 5000), -350)
+        return false
+    }
+
     static MenuAssign() {
         menu := Atlas.MenuSel()
         if !IsObject(menu) {
@@ -12667,11 +12700,10 @@ class Atlas {
         if !g_Cfg.Has("menus")
             g_Cfg["menus"] := []
         g_Cfg["menus"].Push(m)
-        if IsObject(Atlas.list)
-            Atlas.list.sel := g_Cfg["menus"].Length
         if !SaveCfg()
             return
         Atlas.Build()
+        Atlas.SelectListRow(g_Cfg["menus"].Length)
         Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
     }
 
@@ -12698,11 +12730,10 @@ class Atlas {
         }
         copy["slices"] := sl
         g_Cfg["menus"].Push(copy)
-        if IsObject(Atlas.list)
-            Atlas.list.sel := g_Cfg["menus"].Length
         if !SaveCfg()
             return
         Atlas.Build()
+        Atlas.SelectListRow(g_Cfg["menus"].Length)
         Lumi.Toast("Copied to “" name "”", "jade")
     }
 
@@ -12718,7 +12749,7 @@ class Atlas {
             . "it will stop opening anything. This cannot be undone.")
             return
         g_Cfg["menus"].RemoveAt(ref)
-        SaveCfg()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Deleted “" name "”", "magenta")
     }
@@ -12850,7 +12881,7 @@ class Atlas {
                 "warn", 2600)
             return
         }
-        SaveCfg()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Saved “" name "” — " n " window"
             . (n = 1 ? "" : "s"), "jade")
@@ -12864,7 +12895,7 @@ class Atlas {
         }
         name := MGet(lay, "name", "")
         n := LayoutCapture(name)          ; same name = overwrite in place
-        SaveCfg()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Saved over “" name "” — " n " window"
             . (n = 1 ? "" : "s"), "jade")
@@ -12905,7 +12936,7 @@ class Atlas {
         } else if (g_LayoutGuard = name) {
             LayoutGuardDisarm()
         }
-        SaveCfg()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast(on ? ("Now keeping “" name "” in place")
                       : ("No longer keeping “" name "” in place"),
@@ -12926,7 +12957,7 @@ class Atlas {
         if (g_LayoutGuard = name)
             LayoutGuardDisarm()
         g_Cfg["layouts"].RemoveAt(ref)
-        SaveCfg()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Arrangement deleted", "magenta")
     }
@@ -13243,19 +13274,19 @@ class Atlas {
     /** A setting the engine acts on immediately -- save and re-arm now. */
     static SetCfgLive(key, v) {
         CfgSet(key, v)
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
     }
 
     static SetCfgInt(key, t, lo, hi, dflt) {
         CfgSet(key, ClampInt(t, lo, hi, dflt))
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
     }
 
     static SetCfgStr(key, t) {
         CfgSet(key, Trim(t))
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
     }
 
@@ -13360,7 +13391,7 @@ class Atlas {
             . "the program normally do with it.")
             return
         g_Cfg["bindings"].RemoveAt(ref)
-        SaveCfg()
+        Atlas.SaveOrWarn()
         AfterCfgChange()
         Lumi.Toast("Deleted — that one is back to normal", "magenta")
         Atlas.Build()
@@ -13716,7 +13747,14 @@ class Atlas {
             return
 
         b := NewBinding(app, lay, mods, btn, event, atype, val)
-        if (!st.idx && FindDupBinding(b).Length > 0) {
+        realDups := 0
+        if !st.idx {
+            for d in FindDupBinding(b) {
+                if !IsInertRow(g_Cfg["bindings"][d])
+                    realDups += 1
+            }
+        }
+        if (realDups > 0) {
             if (MsgBox("Replace the existing assignment for " InputLabel(btn)
                 . " " event " in " AppDisp(app) "?", "RadMapper",
                 "YesNo Icon? Owner" hwnd) != "Yes")
@@ -14159,7 +14197,7 @@ class Atlas {
             for i in [2, 4, 6, 8] {
                 r := st.rows[i]
                 if (Trim(Lumi.FieldValue(r.label)) != ""
-                    || ACT_CODES[r.act.index] != "none")
+                    || (ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none") != "none")
                     occupied := true
             }
             if (occupied && MsgBox("Switch to 4 directions?`n`nThe four diagonal "
@@ -14175,7 +14213,8 @@ class Atlas {
         slices := []
         for r in st.rows
             slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                ACT_CODES[r.act.index], Lumi.FieldValue(r.value)))
+                ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none",
+                Lumi.FieldValue(r.value)))
         app := AppCodeFromDisp(st.app.items[st.app.index])
         menu := Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
             "slices", ResizeMenuSlices(slices, count))
