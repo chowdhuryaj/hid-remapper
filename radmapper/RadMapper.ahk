@@ -399,6 +399,82 @@
 ;  failures are recorded in Diagnostics. The global error hook suppresses
 ;  modal dialogs while preserving the failure record.
 ;
+;  v0.6.0.1a is a PROTOTYPE for colleagues who are not technical, and a
+;  bug-fix release underneath it. The UI is the same window with a front
+;  door added; the engine is the same engine with six faults closed.
+;
+;    * HOME PAGE. The window now opens on "Start here": one sentence on
+;      what RadMapper does, whether it is on or off IN WORDS, and four
+;      large buttons for the four jobs people actually come for -- change
+;      a mouse button, change a key, test my mouse, fix a stuck button --
+;      followed by the three hotkeys that always work, spelled out
+;      ("Ctrl + Alt + Q", not "^!q"), and the path the settings are saved
+;      at. The first launch of each version opens the window on this page
+;      by itself, so nobody has to find the tray icon.
+;    * PLAIN WORDS. "Binding" is a setting, an "input" is a button or key,
+;      a "profile" is a program, "layer host" is "hold this", "park spot"
+;      is "pointer spot", the guard "keeps windows in place", "no-hold" is
+;      "instant clicks", "Panic release" is "Unstick my buttons" and it
+;      says so in a toast when it has done it. List headers read "When
+;      you / It does / Also hold". Config keys, action codes and the
+;      ACT_* tables are untouched: this is a copy change, not a schema one.
+;    * DELETING ASKS FIRST. A setting, a menu, a layout or a pointer spot
+;      is not removed until a Yes/No box says so. The status tick is
+;      paused around the box so the 700 ms rebuild cannot dispose the
+;      button whose handler is waiting on the answer.
+;    * LEGIBILITY. Body text 11 -> 13 px, small 10 -> 11, tiny 9 -> 10,
+;      checked against every fixed box height; the disabled/placeholder
+;      ink lifted from 2.6:1 to >= 3:1 on every surface (WCAG); toggles
+;      52x28 instead of 44x22; toasts stay up 2.6 s instead of 1.6.
+;    * TWO LAYOUT FAULTS FIXED. The Mouse and Keyboard panels placed four
+;      buttons summing to 486 px in a 384 px column at the minimum window
+;      size, so "Delete" and "Wheel deck..." hung off the right edge,
+;      unreachable; button rows are now sized to the column they sit in
+;      (Atlas.BtnRow). And the nav rail stepped a fixed 44 px per entry,
+;      which with eleven entries ran through the engine switch on any
+;      window under about 780 px tall -- the minimum is 640; the pitch is
+;      now derived from the space that is there.
+;    * PANELS DISPATCH BY NAME, not by number, so inserting Home at the
+;      front of the list could not open the wrong panel silently; the two
+;      places that hard-coded an index now look the name up.
+;
+;  ENGINE FIXES
+;    * The global error hook was only registered inside GpGFX's static
+;      init, after Gdip.Startup() and inside its try -- so on a machine
+;      where the graphics stack fails to start, every unhandled error
+;      raised a modal AutoHotkey dialog over the study. Registered first
+;      thing in Init() as well.
+;    * "Modifier + left-drag" released the button and the modifier in ONE
+;      Send; Send parses the whole string before emitting anything, so an
+;      unusable modifier value threw and the LButton Up was never sent --
+;      a latched left button over an image. Released in two calls, the
+;      button first.
+;    * Radial menus were missing from the list of hold actions that stay
+;      engaged until release. On a button that also hosts a layer, the
+;      menu therefore opened AT RELEASE in latched mode, with nothing
+;      held, and committed a slice by dwell. Listed.
+;    * The classic binding and key dialogs looked up an action hint with
+;      no guard; a retired action type still on disk threw mid-build and
+;      left a half-built modal over the reading screen. Guarded.
+;    * The empty membership index omitted two flags the hot path reads
+;      unguarded, so a hook thread could throw before the first rebuild.
+;    * Importing a config whose "bindings" was not an array replaced the
+;      live config and then failed outside the try. Rejected up front.
+;    * The calibrator, the shelves and the chooser restored the active
+;      construction layer only on the success path; a failed build or
+;      repaint left a dead layer as the target for every later widget
+;      (the v0.5.1 "typing does nothing" failure, in three more places).
+;      All restore in finally now. A shelf drag that threw left the shelf
+;      permanently marked busy; guarded the same way.
+;
+;  NOT DONE YET (v0.6.0 proper)
+;    * The nav entry names other than Home still use engine vocabulary
+;      (Layers, Macros, Pointer).
+;    * The classic Win32 window did not get the copy pass.
+;    * None of this has run on a workstation: this build was checked for
+;      syntax balance and by reading, not by execution. Report anything
+;      odd from the Diagnostics page.
+;
 ;  FEATURES
 ;    * RADIAL MENUS: hold, flick a direction, release. Eight slices, one
 ;      level, dwell before drawing, always abortable
