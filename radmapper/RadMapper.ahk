@@ -26,6 +26,15 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1-preview also adds "PACS: SEND KEYS", the PowerScribe routing
+;  pointed at the viewer: from any app, PACS is brought forward by its
+;  Apps-tab profile (exe, never a handle), the keys land, and focus returns
+;  to where you were. It prefers the window whose title contains pacsWindow
+;  ("VirtualMonitor": IntelliSpace's viewer rather than its worklist), and
+;  falls back to whichever PACS window was last active. Same serialized
+;  queue as PowerScribe, so bursts land in order and panic aborts them.
+;  Available as an action, a radial slice and a macro step (pacskeys).
+;
 ;  v0.6.1-preview: radial menus you can get OUT of, get INTO, and read.
 ;    * SECOND TAP CANCELS. A tap-opened (latched) menu could only be left
 ;      by Escape or a 6 s timeout; a hand on the mouse has neither. Tapping
@@ -720,7 +729,7 @@ global INPUT_LABELS := Map(
 ; fold to "none" the same way. ("scrollptr" came back in v0.3.1 as drag
 ; scroll, so those rows keep working.)
 global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick", "moddrag",
-    "dragmove", "ps_dictate", "ps_next", "ps_prev", "ps_keys",
+    "dragmove", "ps_dictate", "ps_next", "ps_prev", "ps_keys", "pacs_keys",
     "tele_prev", "tele_next", "parkgo",
     "sniper", "boost", "scrollptr", "zoomptr", "clicklock", "wldial", "appswitch",
     "clipboard", "scratchpad",
@@ -734,6 +743,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Native drag after move (hold)", "PowerScribe: toggle dictation",
     "PowerScribe: next field", "PowerScribe: previous field",
     "PowerScribe: send keys",
+    "PACS: send keys",
     "Teleport cursor: previous monitor", "Teleport cursor: next monitor",
     "Park cursor (this app's spot)",
     "Sniper speed (hold=momentary, tap=toggle)",
@@ -769,6 +779,7 @@ global ACT_HINTS := Map(
     "ps_next", "No value needed",
     "ps_prev", "No value needed",
     "ps_keys", "Use Rec or Keys. This shortcut is sent to PowerScribe; typed function keys need braces, e.g. {F6}.",
+    "pacs_keys", "Use Rec or Keys. Sent to the PACS viewer from ANY app: PACS is brought forward, the keys land, focus comes back.",
     "tele_prev", "No value needed (monitors are ordered left to right)",
     "tele_next", "No value needed (monitors are ordered left to right)",
     "parkgo", "No value needed (set the spot in the Apps tab)",
@@ -822,6 +833,10 @@ global DEFAULTS := Map(
     "hudFollow", 1,            ; 1 = on the monitor under the cursor
     "psDictateKey", "{F4}",
     "psReturnDelay", 60,       ; ms before focus returns after firing into PS
+    "pacsApp", "PACS",         ; the Apps-tab profile "PACS: send keys" targets
+    "pacsWindow", "VirtualMonitor", ; preferred window TITLE (substring) of that
+                               ;   app: IntelliSpace's viewer, not its worklist.
+                               ;   Blank = whichever window was last active
     "theme", "auto",           ; auto = follow Windows apps theme | light | dark
     "ui", "atlas",             ; atlas = the GpGFX Lumi Atlas window
     "welcomedVer", "",         ; last version that opened the window on
@@ -3874,6 +3889,8 @@ ActionFire(binding, st) {
             PSFire("+{Tab}")
         case "ps_keys":
             PSFire(v)
+        case "pacs_keys":
+            PACSFire(v)
         case "tele_prev":
             TeleportMonitor(-1)
         case "tele_next":
@@ -6308,6 +6325,96 @@ PSFire(keys) {
     RM_PSFire(keys)
 }
 
+; "PACS: send keys" -- the PowerScribe routing, pointed at the PACS profile.
+; Same queue, same drain loop, same rules: if the app is already in front
+; the keys just go; otherwise it is brought forward BY ITS PROFILE MATCH
+; (exe, never a handle), the keys land, and focus returns to where you
+; were. So a radial slice or a thumb button can drive the viewer while the
+; report editor keeps the cursor.
+PACSFire(keys) {
+    global g_PSQueue
+    if (g_PSQueue.Length >= 16)
+        return
+    g_PSQueue.Push({app: Cfg("pacsApp"), keys: keys})
+    SetTimer(PSDrain, -1)
+}
+
+; Every WinTitle criterion that names the app profile, preferred window
+; first: the Apps-tab match entries, each optionally narrowed by the title
+; substring in pacsWindow (IntelliSpace has a worklist AND a viewer under one
+; exe; F7/F8 belong to the viewer).
+AppCrits(appName, prefer := "") {
+    out := []
+    for app in MGet(g_Cfg, "apps", []) {
+        if (MGet(app, "name", "") != appName)
+            continue
+        for m in MGet(app, "match", []) {
+            crit := MatchCrit(m)
+            if (prefer != "" && SubStr(crit, 1, 4) = "ahk_")
+                out.Push(prefer " " crit)     ; "VirtualMonitor ahk_exe X"
+        }
+        for m in MGet(app, "match", [])
+            out.Push(MatchCrit(m))
+    }
+    return out
+}
+
+AppDeliverNow(appName, keys) {
+    gen := g_PSGen
+    crits := AppCrits(appName, appName = Cfg("pacsApp") ? Cfg("pacsWindow") : "")
+    if (crits.Length = 0) {
+        Problem("app-missing", "No '" appName "' profile on the Apps tab")
+        HUD("No " appName " profile on the Apps tab", "warn")
+        return
+    }
+    for crit in crits {
+        if WinActive(crit) {
+            SafeSend(keys)
+            return
+        }
+    }
+    win := ""
+    for crit in crits {
+        if WinExist(crit) {
+            win := crit
+            break
+        }
+    }
+    if (win = "") {
+        Problem("app-missing", appName " window not found")
+        HUD(appName " window not found", "warn")
+        return
+    }
+    prev := WinExist("A")
+    try {
+        if (WinGetMinMax(win) = -1)              ; only when MINIMIZED
+            WinRestore(win)
+    }
+    try WinActivate(win)
+    if !WinWaitActive(win, , 0.5) {
+        try WinActivate(win)                     ; foreground lock: one retry
+        if !WinWaitActive(win, , 0.5) {
+            if (g_PSGen = gen && WinExist(win)) {
+                try ControlSend(keys, , win)
+                Problem("app-blocked", appName " focus blocked - key delivered in background")
+                HUD(appName " focus blocked - key sent in background")
+            }
+            return
+        }
+    }
+    if (g_PSGen != gen) {
+        if prev
+            try WinActivate("ahk_id " prev)
+        return
+    }
+    Sleep(50)
+    SafeSend(keys)
+    if prev {
+        Sleep(Cfg("psReturnDelay"))
+        try WinActivate("ahk_id " prev)
+    }
+}
+
 ; Production delivery is DEFERRED to a timer thread. The engine entry points
 ; run Critical: doing WinActivate/WinWaitActive inside the hook thread both
 ; stalls the input pipeline for up to a second and is exactly where Windows'
@@ -6339,7 +6446,10 @@ PSDrain() {
             try keys := g_PSQueue.RemoveAt(1)
             catch                    ; panic swapped/cleared the queue between
                 break                ; the while-check and this line
-            PSDeliverNow(keys)
+            if IsObject(keys)                ; an app-targeted delivery
+                AppDeliverNow(keys.app, keys.keys)
+            else
+                PSDeliverNow(keys)
         }
     } finally {
         g_PSBusy := false
@@ -6456,6 +6566,8 @@ RunMacro(name, *) {
                     PSMacroSync()
                 case "pskeys":
                     PSFire(v)
+                case "pacskeys":
+                    PACSFire(v)
                     PSMacroSync()
                 case "focus":
                     FocusApp(v)
@@ -8444,7 +8556,8 @@ ValidateActionValue(owner, atype, raw, &ok) {
     ok := true
     hwnd := ValueHostHwnd(owner)
     v := raw
-    if ((atype = "keys" || atype = "keysrepeat" || atype = "ps_keys") && Trim(raw) = "") {
+    if ((atype = "keys" || atype = "keysrepeat" || atype = "ps_keys"
+        || atype = "pacs_keys") && Trim(raw) = "") {
         ok := false
         MsgBox("Record a shortcut or choose Disabled to leave this input empty.",
             "RadMapper", "Icon! Owner" hwnd)
@@ -9042,7 +9155,7 @@ StepDlg(editRow) {
     dlg := Gui("+Owner" . g_UI.g.Hwnd, editRow ? "Edit step" : "Add step")
     StyleDlg(dlg)
     types := ["keys", "text", "sleep", "focus", "psdictate", "psnext",
-        "psprev", "pskeys", "run", "teleport", "tooltip"]
+        "psprev", "pskeys", "pacskeys", "run", "teleport", "tooltip"]
     dlg.AddText("x12 y14 w60", "Type:")
     ddType := dlg.AddDropDownList("x80 y10 w200", types)
     ChooseText(ddType, types, step ? MGet(step, "type", "keys") : "keys")

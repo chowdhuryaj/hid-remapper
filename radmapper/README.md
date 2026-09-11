@@ -43,6 +43,13 @@ tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA, 6 Infarct, 7 Liver,
    to fire it, or **tap the button again to close it**.
 5. **Practice safely** on the Menus page shows the wheel without sending anything.
 
+**Sending keys to PACS from anywhere:** the action **PACS: send keys** works
+like the PowerScribe actions. Bind it to any button in any program and the
+viewer is brought forward, receives the shortcut, and focus returns to where
+you were. It targets the PACS profile on the Apps page and prefers the window
+whose title contains "VirtualMonitor" (the IntelliSpace viewer); both are
+settings if your PACS differs.
+
 To edit a menu, use **Edit commands**: each row has a label, an action, the
 recorded shortcut, and an icon. A row set to "Radial menu" opens another menu
 inside this one. Size 9 is the numbered ring for presets.
