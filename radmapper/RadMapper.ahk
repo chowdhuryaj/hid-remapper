@@ -26,6 +26,10 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1b: the shipped PACS wheel now REPLACES an edited "PACS" menu too.
+;  The edited one is kept as "PACS (previous)", opened only by that name,
+;  so nothing is lost and the button that opened "PACS" opens the new one.
+;
 ;  v0.6.1-preview also adds "PACS: SEND KEYS", the PowerScribe routing
 ;  pointed at the viewer: from any app, PACS is brought forward by its
 ;  Apps-tab profile (exe, never a handle), the keys land, and focus returns
@@ -1550,6 +1554,17 @@ SeedPacsMenu() {
     return pa
 }
 
+; True when a menu is the shipped PACS wheel (or a rename of it): eight
+; slices, F8 up, F7 down, and a door to the preset ring on the left.
+MenuIsShippedPacs(m) {
+    sl := MGet(m, "slices", [])
+    if (sl.Length != 8)
+        return false
+    v := (i) => MGet(MGet(sl[i], "action", Map()), "value", "")
+    t := (i) => MGet(MGet(sl[i], "action", Map()), "type", "")
+    return (v(1) = "{F8}" && v(5) = "{F7}" && t(7) = "radial")
+}
+
 ; Window presets 1-9: the slice NUMBER is the key it sends, and the label
 ; is whatever the site calls that preset. Rename freely on the Menus tab.
 SeedPresetMenu() {
@@ -1807,6 +1822,32 @@ MigrateCfg() {
             }
             if untouched
                 g_Cfg["menus"][i] := SeedPacsMenu()
+        }
+        if !MenuByName("PACS")
+            g_Cfg["menus"].Push(SeedPacsMenu())
+        if !MenuByName("Window presets")
+            g_Cfg["menus"].Push(SeedPresetMenu())
+    }
+    ; v0.6.1b: the gentle version above only replaced an UNTOUCHED template,
+    ; and a PACS menu that had been edited kept its old blanks -- which is
+    ; not what "ship the new default" meant. Now: whatever is called "PACS"
+    ; and is not already the shipped menu is kept under "PACS (previous)",
+    ; opened only by that name, and the shipped PACS menu takes its place.
+    ; Bindings that open "PACS" by name therefore open the new one.
+    if (IsObject(s) && !s.Has("seedPacs061b")) {
+        s["seedPacs061b"] := 1
+        if !g_Cfg.Has("menus")
+            g_Cfg["menus"] := []
+        old := MenuByName("PACS")
+        if (IsObject(old) && !MenuIsShippedPacs(old)) {
+            nm := "PACS (previous)"
+            k := 2
+            while MenuByName(nm) {
+                nm := "PACS (previous " k ")"
+                k += 1
+            }
+            old["name"] := nm
+            old["app"] := ""                 ; by name only, never automatic
         }
         if !MenuByName("PACS")
             g_Cfg["menus"].Push(SeedPacsMenu())
