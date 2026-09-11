@@ -26,6 +26,27 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1d: SIMPLE MODE, on by default. The rail shows Home, Mouse,
+;  Keyboard, Menus, Settings and Diagnostics; the action dropdown shows the
+;  sixteen things a radiologist actually binds (plus whatever a row already
+;  uses). One switch on Home ("Show advanced pages and every action") adds
+;  Layers, Macros, Apps, Windows, Pointer and the full 32-entry table.
+;  Nothing is removed and no config changes: hidden pages keep their slot,
+;  and each dropdown carries its own code list so a row's meaning never
+;  depends on which list drew it (Atlas.ActSelect / Atlas.ActCode).
+;
+;  v0.6.1c: two things that looked broken and were.
+;    * THE RADIAL MENU BLINKED while held. Every repaint (each slice
+;      change) re-applied the window's extended styles and re-inserted it
+;      topmost; on a visible layered window that is a flash. Styles are
+;      set once when the wheel's window is created.
+;    * DRAG SCROLL "JUMPED BETWEEN TWO POINTS". That was the pin: the
+;      cursor is warped back to the anchor every 10 ms, and the hand moves
+;      it a few pixels first, so the eye sees it flicker between the two.
+;      While pinned the pointer is now HIDDEN and a small ring marks the
+;      anchor (scrollPtrHide; the ring says where the scroll is held).
+;      The system cursors are restored on stop, on panic and on exit.
+;
 ;  v0.6.1b: the shipped PACS wheel now REPLACES an edited "PACS" menu too.
 ;  The edited one is kept as "PACS (previous)", opened only by that name,
 ;  so nothing is lost and the button that opened "PACS" opens the new one.
@@ -843,6 +864,8 @@ global DEFAULTS := Map(
                                ;   Blank = whichever window was last active
     "theme", "auto",           ; auto = follow Windows apps theme | light | dark
     "ui", "atlas",             ; atlas = the GpGFX Lumi Atlas window
+    "uiAdvanced", 0,           ; 0 = Simple: hide Layers/Macros/Apps/Windows/
+                               ;   Pointer and show the short action list
     "welcomedVer", "",         ; last version that opened the window on
                                ;   launch; "" = never (first run)
                                ; classic = the original Win32 window
@@ -851,6 +874,10 @@ global DEFAULTS := Map(
     "scrollPtrPx", 18,         ; px of pointer travel per wheel notch (drag scroll)
     "scrollPtrInvert", 0,      ; 1 = push to scroll instead of drag the page
     "scrollPtrPin", 1,         ; 1 = pin the cursor to the anchor while scrolling
+    "scrollPtrHide", 1,        ; 1 = hide the pointer while pinned (it is being
+                               ;   warped back every tick; seen, that reads as a
+                               ;   cursor jumping between two spots) and mark
+                               ;   the anchor with a small ring instead
     "scrollPtrMax", 20,        ; max notches emitted per 10 ms tick (runaway cap)
     "hkDictate", "",           ; PS/teleport hotkeys ship unassigned (v0.3);
     "hkPrevField", "",         ; set them in the Settings tab when wanted
@@ -4208,6 +4235,10 @@ ScrollPtrStart(mom := false, zoom := false) {
     g_ScrollPtrMom := mom
     g_SPAccX := 0.0
     g_SPAccY := 0.0
+    if (Cfg("scrollPtrPin") && Cfg("scrollPtrHide")) {
+        SysCursorHide()
+        SPMarkerShow(x, y)
+    }
     SetTimer(SPTick, 10)
     if Cfg("hud")
         HUD(zoom ? "Drag zoom — move to zoom" : "Drag scroll — move to scroll")
@@ -4222,8 +4253,81 @@ ScrollPtrStop() {
     g_ScrollPtrMom := false
     g_SPAccX := 0.0
     g_SPAccY := 0.0
+    SPMarkerHide()
+    SysCursorShow()
     if Cfg("hud")
         HUD("Drag scroll off")
+}
+
+; ── the pointer during a pinned drag scroll ──────────────────────────────
+; Pinning warps the cursor back to the anchor every 10 ms. The hand still
+; moves it a few pixels first, so what the eye sees is a cursor flickering
+; between the anchor and wherever the hand just was. Hide it for the
+; duration and show a small ring at the anchor instead, so the spot the
+; scroll is "held" at is still visible. The system cursors are restored
+; from the registry (SPI_SETCURSORS) on stop, on panic and on exit.
+global g_SysCursorHidden := false
+global g_SPMarker := 0
+
+SysCursorHide() {
+    global g_SysCursorHidden
+    if g_SysCursorHidden
+        return
+    ; a 32x32 cursor whose AND mask is all 1 and XOR mask all 0 draws nothing
+    andMask := Buffer(128, 0xFF)
+    xorMask := Buffer(128, 0)
+    for id in [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644,
+               32645, 32646, 32648, 32649, 32650, 32651] {
+        h := DllCall("CreateCursor", "ptr", 0, "int", 0, "int", 0, "int", 32,
+            "int", 32, "ptr", andMask, "ptr", xorMask, "ptr")
+        if h
+            DllCall("SetSystemCursor", "ptr", h, "uint", id)   ; takes ownership
+    }
+    g_SysCursorHidden := true
+}
+
+SysCursorShow() {
+    global g_SysCursorHidden
+    if !g_SysCursorHidden
+        return
+    g_SysCursorHidden := false
+    DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
+}
+
+SPMarkerShow(x, y) {
+    global g_SPMarker, g_PassThru
+    SPMarkerHide()
+    if (!IsSet(Lumi) || !IsSet(Layer))
+        return
+    prev := LayerStack.ActiveLayer
+    try {
+        r := 11
+        L := Layer(x - r, y - r, r * 2, r * 2, "RadScrollAnchor")
+        LayerStack.ActiveLayer := L
+        Ellipse(2, 2, r * 2 - 4, r * 2 - 4, Lumi.C["cyan"], false)
+        Ellipse(3, 3, r * 2 - 6, r * 2 - 6, Lumi.C["cyan"], false)
+        Ellipse(r - 2, r - 2, 4, 4, Lumi.C["cyan"], true)
+        L.ClickThrough := true
+        L.NoActivate()
+        L.TopMost(true)
+        g_PassThru[L.hwnd] := 1
+        L.Draw()
+        g_SPMarker := L
+    } catch as e {
+        Problem("scrollptr", "anchor marker failed: " e.Message)
+    } finally {
+        if IsObject(prev)
+            LayerStack.ActiveLayer := prev
+    }
+}
+
+SPMarkerHide() {
+    global g_SPMarker, g_PassThru
+    if !IsObject(g_SPMarker)
+        return
+    try g_PassThru.Delete(g_SPMarker.hwnd)
+    try g_SPMarker.Dispose()
+    g_SPMarker := 0
 }
 
 ScrollPtrToggle() {
@@ -6241,6 +6345,15 @@ RadialPaint() {
             ; engine must never claim it positionally -- that would gate the
             ; native input underneath and eat the very click it is watching.
             g_PassThru[lyr.hwnd] := 1
+            ; Window STYLES are set here, ONCE. They used to be re-applied on
+            ; every repaint (each slice change), and SetWindowLongPtr on a
+            ; visible layered window plus a SetWindowPos re-insert is
+            ; exactly what makes one blink -- "the menu flashes in and out
+            ; while I hold the button" (0.6.1 report).
+            lyr.ClickThrough := true
+            lyr.NoActivate()
+            lyr.TopMost(true)
+            lyr.alwaysFullErase := true      ; text may outgrow its box
         }
         lyr := R.lyr
         LayerStack.ActiveLayer := lyr
@@ -6321,10 +6434,6 @@ RadialPaint() {
             IsObject(pick) ? (pick.live ? pick.label : "—") : "cancel",
             IsObject(pick) && pick.live ? "accent" : "mute", "center", 20)
 
-        lyr.ClickThrough := true
-        lyr.NoActivate()
-        lyr.TopMost(true)
-        Lumi.FullErase(lyr)
         lyr.Draw()
     } catch as e {
         Problem("radial", "menu paint failed: " e.Message
@@ -7048,6 +7157,8 @@ PanicRelease() {
     global g_Layer, g_LayerStack, g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
+    try SysCursorShow()                      ; never leave the pointer hidden
+    try SPMarkerHide()
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
         . "{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
     for name, st in g_BS.Clone() {           ; v0.3: a KEY held down by our own
@@ -9481,6 +9592,8 @@ Cleanup(*) {
     SetTimer(FollowTick, 0)
     RadialClose(false)
     TeleportSignalStop()
+    try ScrollPtrStop()                      ; restores a hidden pointer too
+    try SysCursorShow()
     g_Problems := []                         ; in-memory only, dies with us
     if g_CfgDirty
         SaveCfg()                            ; never drop a debounced slider value
@@ -11183,6 +11296,66 @@ class Atlas {
     ; "Home" is FIRST and is where the window opens (static panel := 1),
     ; because the people this ships to have not read any of the above.
     ; NOTHING may hard-code a number out of this list: use PanelIndex().
+    ; SIMPLE MODE hides the pages a first-week user never needs. Nothing is
+    ; removed: the pages, their config and every action still exist, and one
+    ; switch on Home brings them back. Index semantics are unchanged --
+    ; hidden entries keep their slot in PANELS; the rail just skips them.
+    static HIDDEN := Map("Layers", 1, "Macros", 1, "Apps", 1, "Windows", 1,
+                         "Pointer", 1)
+    static Advanced() => Cfg("uiAdvanced") ? true : false
+    static PanelHidden(name) => !Atlas.Advanced() && Atlas.HIDDEN.Has(name)
+    static SetAdvanced(v) {
+        CfgSet("uiAdvanced", v ? 1 : 0)
+        Atlas.SaveOrWarn()
+        if Atlas.PanelHidden(Atlas.PanelName())
+            Atlas.panel := 1
+        Atlas.Build()
+        Lumi.Toast(v ? "Advanced pages shown" : "Simple view — the essentials only", "cyan")
+    }
+
+    ; The action dropdown. In Simple mode it is the SHORT list -- the things
+    ; a radiologist actually binds -- plus whatever the row already uses, so
+    ; an existing advanced row still reads correctly. Advanced mode is the
+    ; whole table. Each Select carries its own codes array, so a row's
+    ; meaning never depends on which list it was drawn from.
+    static SIMPLE_ACTS := ["keys", "text", "ps_dictate", "ps_next", "ps_prev",
+        "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
+        "zoomptr", "radial", "layout", "macro", "guiopen", "none"]
+    static ActView(code := "") {
+        if Atlas.Advanced()
+            return {labels: ACT_LABELS, codes: ACT_CODES}
+        labels := []
+        codes := []
+        for c in Atlas.SIMPLE_ACTS {
+            if (c = "none" && code != "" && !Atlas.HasCode(codes, code)
+                && ActIndexOf(code) > 0) {
+                labels.Push(ActLabelOf(code))    ; keep the row's own action
+                codes.Push(code)
+            }
+            labels.Push(ActLabelOf(c))
+            codes.Push(c)
+        }
+        return {labels: labels, codes: codes}
+    }
+    static HasCode(arr, code) {
+        for c in arr {
+            if (c = code)
+                return true
+        }
+        return false
+    }
+    static ActSelect(x, y, w, h, code, onChange := 0) {
+        view := Atlas.ActView(code)
+        idx := Atlas.IndexOfText(view.codes, code)
+        sel := Lumi.Select(x, y, w, h, view.labels, idx, onChange)
+        sel.codes := view.codes
+        return sel
+    }
+    static ActCode(sel) {
+        codes := (IsObject(sel) && sel.HasProp("codes")) ? sel.codes : ACT_CODES
+        return codes.Has(sel.index) ? codes[sel.index] : "none"
+    }
+
     static PANELS := ["Home", "Mouse", "Layers", "Keyboard", "Macros", "Apps",
                       "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
     static hostRefs := []          ; Layers panel row -> host input code
@@ -11978,14 +12151,23 @@ class Atlas {
         ; is 640. The pitch is derived from the space that is actually there
         ; now, and never grows past the 44 the design was drawn at.
         floorY := Atlas.H - 128           ; the rule above the engine switch
+        shown := 0
+        for name in Atlas.PANELS {
+            if !Atlas.PanelHidden(name)
+                shown += 1
+        }
         pitch := 44
-        if (Atlas.PANELS.Length > 0) {
+        if (shown > 0) {
             room := floorY - y
-            pitch := ClampInt(room // Atlas.PANELS.Length, 30, 44, 44)
+            pitch := ClampInt(room // shown, 30, 44, 44)
         }
         rowH := Max(24, pitch - 6)
         i := 1
         for name in Atlas.PANELS {
+            if Atlas.PanelHidden(name) {
+                i += 1
+                continue
+            }
             active := (i = Atlas.panel)
             ; the row itself is the button: opaque tone, hover on the same
             ; shape, no transparent overlay (see Lumi.Clear for why)
@@ -12257,6 +12439,15 @@ class Atlas {
         Lumi.Label(x, ky + 80, w - 20,
             "Press " Atlas.HkWords("hkGui") " to reopen settings. F1 opens quick help.",
             "dim", "left", 22)
+
+        ; ── simple or advanced ──────────────────────────────────────────
+        Lumi.Toggle(x, ky + 110, "Show advanced pages and every action",
+            Atlas.Advanced() ? 1 : 0, (v) => Atlas.SetAdvanced(v))
+        Lumi.Label(x + 64, ky + 138, w - 80,
+            "Off: the essentials — Mouse, Keyboard, Menus, Settings, Diagnostics "
+            . "and a short list of actions. On: Layers, Macros, Apps, Windows "
+            . "and Pointer too. Nothing is lost either way.",
+            "mute", "left", 20)
 
         ; ── where the settings live ─────────────────────────────────────
         ; Pinned to the BOTTOM, so it is in the same place whatever size the
@@ -13949,8 +14140,7 @@ class Atlas {
 
         actCode := row ? row["action"]["type"] : "keys"
         Lumi.Label(24, 280, 120, "It does", "dim", "left", 30)
-        st.act := Lumi.Select(150, 280, 380, 30, ACT_LABELS,
-            ActIndexOf(actCode), Atlas.ActPicked(st))
+        st.act := Atlas.ActSelect(150, 280, 380, 30, actCode, Atlas.ActPicked(st))
 
         Lumi.Label(24, 322, 120, "Details", "dim", "left", 30)
         st.value := Lumi.Field(150, 322, 306, 30,
@@ -14019,7 +14209,7 @@ class Atlas {
     }
 
     static ActHint(st, i) {
-        code := ACT_CODES.Has(i) ? ACT_CODES[i] : ""
+        code := Atlas.ActCode(st.act)
         txt := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
         try {
             st.hint.str := txt
@@ -14132,7 +14322,7 @@ class Atlas {
         else
             btn := InputCodeFromLabel(st.input.items.Has(st.input.index)
                 ? st.input.items[st.input.index] : "")
-        atype := ACT_CODES.Has(st.act.index) ? ACT_CODES[st.act.index] : "none"
+        atype := Atlas.ActCode(st.act)
         val := Lumi.FieldValue(st.value)
         hwnd := Lumi.HwndOf(st.dlg)
 
@@ -14333,7 +14523,7 @@ class Atlas {
             val := existing ? MGet(existing["action"], "value", "") : ""
             Lumi.Label(24, ry, 96, d[2], "dim", "left", 30)
             r := {wheel: wheel, dlg: dlg}
-            r.act := Lumi.Select(126, ry, 330, 30, ACT_LABELS, ActIndexOf(code))
+            r.act := Atlas.ActSelect(126, ry, 330, 30, code)
             r.value := Lumi.Field(464, ry, 226, 30, val, 0, "value", true)
             ; Rec cannot reuse the editor's RecValue: that one guards the
             ; write with DlgAlive, which compares against Atlas.dstate --
@@ -14446,7 +14636,7 @@ class Atlas {
         ; the user would have to work out which two landed.
         plan := []
         for r in st.rows {
-            atype := ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none"
+            atype := Atlas.ActCode(r.act)
             val := Lumi.FieldValue(r.value)
             if (atype = "none") {
                 plan.Push({wheel: r.wheel, type: "none", value: ""})
@@ -14612,7 +14802,7 @@ class Atlas {
             Lumi.Label(24, ry, 90, dir, "dim", "left", 30)
             r := {dlg: dlg}
             r.label := Lumi.Field(116, ry, 140, 30, lbl, 0, "label", true)
-            r.act := Lumi.Select(268, ry, 240, 30, ACT_LABELS, ActIndexOf(code))
+            r.act := Atlas.ActSelect(268, ry, 240, 30, code)
             r.value := Lumi.Field(520, ry, 144, 30, val, 0, "value", true)
             r.icon := Lumi.Select(670, ry, 70, 30, icons,
                 Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
@@ -14660,7 +14850,7 @@ class Atlas {
             if kept.Has(i)
                 continue
             if (Trim(Lumi.FieldValue(r.label)) != ""
-                || (ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none") != "none")
+                || Atlas.ActCode(r.act) != "none")
                 occupied := true
         }
         if (occupied && MsgBox("Switch to " count " slots?`n`nCommands in the "
@@ -14675,7 +14865,7 @@ class Atlas {
         slices := []
         for r in st.rows
             slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none",
+                Atlas.ActCode(r.act),
                 Lumi.FieldValue(r.value),
                 RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
         app := AppCodeFromDisp(st.app.items[st.app.index])
@@ -14729,7 +14919,7 @@ class Atlas {
         for r in st.rows {
             if (i > count)
                 break
-            atype := ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none"
+            atype := Atlas.ActCode(r.act)
             val := Lumi.FieldValue(r.value)
             lbl := Trim(Lumi.FieldValue(r.label))
             if (atype != "none") {
