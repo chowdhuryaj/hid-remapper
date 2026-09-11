@@ -693,6 +693,8 @@ global DEFAULTS := Map(
     "psReturnDelay", 60,       ; ms before focus returns after firing into PS
     "theme", "auto",           ; auto = follow Windows apps theme | light | dark
     "ui", "atlas",             ; atlas = the GpGFX Lumi Atlas window
+    "welcomedVer", "",         ; last version that opened the window on
+                               ;   launch; "" = never (first run)
                                ; classic = the original Win32 window
     "sniperSpeed", 3,          ; SPI mouse speed 1..20 while sniper active
     "boostSpeed", 16,          ; SPI mouse speed 1..20 while boost active
@@ -8823,6 +8825,18 @@ Init() {
     ; so it was a false alarm on every launch.)
     TrayTip("Running. Double-click the tray icon or press " Cfg("hkGui")
         . " for settings.", "RadMapper " RM_VERSION)
+    ; FIRST RUN (v0.6): a colleague who was handed this file should not have
+    ; to find the tray icon. The first launch of each version opens the
+    ; settings window on its Home page; every later launch stays quiet.
+    if (Cfg("welcomedVer") != RM_VERSION) {
+        CfgSet("welcomedVer", RM_VERSION)
+        try SaveCfg()
+        SetTimer(FirstRunOpen, -800)
+    }
+}
+
+FirstRunOpen(*) {
+    try ShowMain()
 }
 
 
