@@ -26,6 +26,18 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1c: two things that looked broken and were.
+;    * THE RADIAL MENU BLINKED while held. Every repaint (each slice
+;      change) re-applied the window's extended styles and re-inserted it
+;      topmost; on a visible layered window that is a flash. Styles are
+;      set once when the wheel's window is created.
+;    * DRAG SCROLL "JUMPED BETWEEN TWO POINTS". That was the pin: the
+;      cursor is warped back to the anchor every 10 ms, and the hand moves
+;      it a few pixels first, so the eye sees it flicker between the two.
+;      While pinned the pointer is now HIDDEN and a small ring marks the
+;      anchor (scrollPtrHide; the ring says where the scroll is held).
+;      The system cursors are restored on stop, on panic and on exit.
+;
 ;  v0.6.1b: the shipped PACS wheel now REPLACES an edited "PACS" menu too.
 ;  The edited one is kept as "PACS (previous)", opened only by that name,
 ;  so nothing is lost and the button that opened "PACS" opens the new one.
@@ -851,6 +863,10 @@ global DEFAULTS := Map(
     "scrollPtrPx", 18,         ; px of pointer travel per wheel notch (drag scroll)
     "scrollPtrInvert", 0,      ; 1 = push to scroll instead of drag the page
     "scrollPtrPin", 1,         ; 1 = pin the cursor to the anchor while scrolling
+    "scrollPtrHide", 1,        ; 1 = hide the pointer while pinned (it is being
+                               ;   warped back every tick; seen, that reads as a
+                               ;   cursor jumping between two spots) and mark
+                               ;   the anchor with a small ring instead
     "scrollPtrMax", 20,        ; max notches emitted per 10 ms tick (runaway cap)
     "hkDictate", "",           ; PS/teleport hotkeys ship unassigned (v0.3);
     "hkPrevField", "",         ; set them in the Settings tab when wanted
@@ -4208,6 +4224,10 @@ ScrollPtrStart(mom := false, zoom := false) {
     g_ScrollPtrMom := mom
     g_SPAccX := 0.0
     g_SPAccY := 0.0
+    if (Cfg("scrollPtrPin") && Cfg("scrollPtrHide")) {
+        SysCursorHide()
+        SPMarkerShow(x, y)
+    }
     SetTimer(SPTick, 10)
     if Cfg("hud")
         HUD(zoom ? "Drag zoom — move to zoom" : "Drag scroll — move to scroll")
@@ -4222,8 +4242,81 @@ ScrollPtrStop() {
     g_ScrollPtrMom := false
     g_SPAccX := 0.0
     g_SPAccY := 0.0
+    SPMarkerHide()
+    SysCursorShow()
     if Cfg("hud")
         HUD("Drag scroll off")
+}
+
+; ── the pointer during a pinned drag scroll ──────────────────────────────
+; Pinning warps the cursor back to the anchor every 10 ms. The hand still
+; moves it a few pixels first, so what the eye sees is a cursor flickering
+; between the anchor and wherever the hand just was. Hide it for the
+; duration and show a small ring at the anchor instead, so the spot the
+; scroll is "held" at is still visible. The system cursors are restored
+; from the registry (SPI_SETCURSORS) on stop, on panic and on exit.
+global g_SysCursorHidden := false
+global g_SPMarker := 0
+
+SysCursorHide() {
+    global g_SysCursorHidden
+    if g_SysCursorHidden
+        return
+    ; a 32x32 cursor whose AND mask is all 1 and XOR mask all 0 draws nothing
+    andMask := Buffer(128, 0xFF)
+    xorMask := Buffer(128, 0)
+    for id in [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644,
+               32645, 32646, 32648, 32649, 32650, 32651] {
+        h := DllCall("CreateCursor", "ptr", 0, "int", 0, "int", 0, "int", 32,
+            "int", 32, "ptr", andMask, "ptr", xorMask, "ptr")
+        if h
+            DllCall("SetSystemCursor", "ptr", h, "uint", id)   ; takes ownership
+    }
+    g_SysCursorHidden := true
+}
+
+SysCursorShow() {
+    global g_SysCursorHidden
+    if !g_SysCursorHidden
+        return
+    g_SysCursorHidden := false
+    DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
+}
+
+SPMarkerShow(x, y) {
+    global g_SPMarker, g_PassThru
+    SPMarkerHide()
+    if (!IsSet(Lumi) || !IsSet(Layer))
+        return
+    prev := LayerStack.ActiveLayer
+    try {
+        r := 11
+        L := Layer(x - r, y - r, r * 2, r * 2, "RadScrollAnchor")
+        LayerStack.ActiveLayer := L
+        Ellipse(2, 2, r * 2 - 4, r * 2 - 4, Lumi.C["cyan"], false)
+        Ellipse(3, 3, r * 2 - 6, r * 2 - 6, Lumi.C["cyan"], false)
+        Ellipse(r - 2, r - 2, 4, 4, Lumi.C["cyan"], true)
+        L.ClickThrough := true
+        L.NoActivate()
+        L.TopMost(true)
+        g_PassThru[L.hwnd] := 1
+        L.Draw()
+        g_SPMarker := L
+    } catch as e {
+        Problem("scrollptr", "anchor marker failed: " e.Message)
+    } finally {
+        if IsObject(prev)
+            LayerStack.ActiveLayer := prev
+    }
+}
+
+SPMarkerHide() {
+    global g_SPMarker, g_PassThru
+    if !IsObject(g_SPMarker)
+        return
+    try g_PassThru.Delete(g_SPMarker.hwnd)
+    try g_SPMarker.Dispose()
+    g_SPMarker := 0
 }
 
 ScrollPtrToggle() {
@@ -6241,6 +6334,15 @@ RadialPaint() {
             ; engine must never claim it positionally -- that would gate the
             ; native input underneath and eat the very click it is watching.
             g_PassThru[lyr.hwnd] := 1
+            ; Window STYLES are set here, ONCE. They used to be re-applied on
+            ; every repaint (each slice change), and SetWindowLongPtr on a
+            ; visible layered window plus a SetWindowPos re-insert is
+            ; exactly what makes one blink -- "the menu flashes in and out
+            ; while I hold the button" (0.6.1 report).
+            lyr.ClickThrough := true
+            lyr.NoActivate()
+            lyr.TopMost(true)
+            lyr.alwaysFullErase := true      ; text may outgrow its box
         }
         lyr := R.lyr
         LayerStack.ActiveLayer := lyr
@@ -6321,10 +6423,6 @@ RadialPaint() {
             IsObject(pick) ? (pick.live ? pick.label : "—") : "cancel",
             IsObject(pick) && pick.live ? "accent" : "mute", "center", 20)
 
-        lyr.ClickThrough := true
-        lyr.NoActivate()
-        lyr.TopMost(true)
-        Lumi.FullErase(lyr)
         lyr.Draw()
     } catch as e {
         Problem("radial", "menu paint failed: " e.Message
@@ -7048,6 +7146,8 @@ PanicRelease() {
     global g_Layer, g_LayerStack, g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
+    try SysCursorShow()                      ; never leave the pointer hidden
+    try SPMarkerHide()
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
         . "{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
     for name, st in g_BS.Clone() {           ; v0.3: a KEY held down by our own
@@ -9481,6 +9581,8 @@ Cleanup(*) {
     SetTimer(FollowTick, 0)
     RadialClose(false)
     TeleportSignalStop()
+    try ScrollPtrStop()                      ; restores a hidden pointer too
+    try SysCursorShow()
     g_Problems := []                         ; in-memory only, dies with us
     if g_CfgDirty
         SaveCfg()                            ; never drop a debounced slider value
