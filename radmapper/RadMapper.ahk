@@ -26,6 +26,15 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1d: SIMPLE MODE, on by default. The rail shows Home, Mouse,
+;  Keyboard, Menus, Settings and Diagnostics; the action dropdown shows the
+;  sixteen things a radiologist actually binds (plus whatever a row already
+;  uses). One switch on Home ("Show advanced pages and every action") adds
+;  Layers, Macros, Apps, Windows, Pointer and the full 32-entry table.
+;  Nothing is removed and no config changes: hidden pages keep their slot,
+;  and each dropdown carries its own code list so a row's meaning never
+;  depends on which list drew it (Atlas.ActSelect / Atlas.ActCode).
+;
 ;  v0.6.1c: two things that looked broken and were.
 ;    * THE RADIAL MENU BLINKED while held. Every repaint (each slice
 ;      change) re-applied the window's extended styles and re-inserted it
@@ -855,6 +864,8 @@ global DEFAULTS := Map(
                                ;   Blank = whichever window was last active
     "theme", "auto",           ; auto = follow Windows apps theme | light | dark
     "ui", "atlas",             ; atlas = the GpGFX Lumi Atlas window
+    "uiAdvanced", 0,           ; 0 = Simple: hide Layers/Macros/Apps/Windows/
+                               ;   Pointer and show the short action list
     "welcomedVer", "",         ; last version that opened the window on
                                ;   launch; "" = never (first run)
                                ; classic = the original Win32 window
@@ -11285,6 +11296,66 @@ class Atlas {
     ; "Home" is FIRST and is where the window opens (static panel := 1),
     ; because the people this ships to have not read any of the above.
     ; NOTHING may hard-code a number out of this list: use PanelIndex().
+    ; SIMPLE MODE hides the pages a first-week user never needs. Nothing is
+    ; removed: the pages, their config and every action still exist, and one
+    ; switch on Home brings them back. Index semantics are unchanged --
+    ; hidden entries keep their slot in PANELS; the rail just skips them.
+    static HIDDEN := Map("Layers", 1, "Macros", 1, "Apps", 1, "Windows", 1,
+                         "Pointer", 1)
+    static Advanced() => Cfg("uiAdvanced") ? true : false
+    static PanelHidden(name) => !Atlas.Advanced() && Atlas.HIDDEN.Has(name)
+    static SetAdvanced(v) {
+        CfgSet("uiAdvanced", v ? 1 : 0)
+        Atlas.SaveOrWarn()
+        if Atlas.PanelHidden(Atlas.PanelName())
+            Atlas.panel := 1
+        Atlas.Build()
+        Lumi.Toast(v ? "Advanced pages shown" : "Simple view — the essentials only", "cyan")
+    }
+
+    ; The action dropdown. In Simple mode it is the SHORT list -- the things
+    ; a radiologist actually binds -- plus whatever the row already uses, so
+    ; an existing advanced row still reads correctly. Advanced mode is the
+    ; whole table. Each Select carries its own codes array, so a row's
+    ; meaning never depends on which list it was drawn from.
+    static SIMPLE_ACTS := ["keys", "text", "ps_dictate", "ps_next", "ps_prev",
+        "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
+        "zoomptr", "radial", "layout", "macro", "guiopen", "none"]
+    static ActView(code := "") {
+        if Atlas.Advanced()
+            return {labels: ACT_LABELS, codes: ACT_CODES}
+        labels := []
+        codes := []
+        for c in Atlas.SIMPLE_ACTS {
+            if (c = "none" && code != "" && !Atlas.HasCode(codes, code)
+                && ActIndexOf(code) > 0) {
+                labels.Push(ActLabelOf(code))    ; keep the row's own action
+                codes.Push(code)
+            }
+            labels.Push(ActLabelOf(c))
+            codes.Push(c)
+        }
+        return {labels: labels, codes: codes}
+    }
+    static HasCode(arr, code) {
+        for c in arr {
+            if (c = code)
+                return true
+        }
+        return false
+    }
+    static ActSelect(x, y, w, h, code, onChange := 0) {
+        view := Atlas.ActView(code)
+        idx := Atlas.IndexOfText(view.codes, code)
+        sel := Lumi.Select(x, y, w, h, view.labels, idx, onChange)
+        sel.codes := view.codes
+        return sel
+    }
+    static ActCode(sel) {
+        codes := (IsObject(sel) && sel.HasProp("codes")) ? sel.codes : ACT_CODES
+        return codes.Has(sel.index) ? codes[sel.index] : "none"
+    }
+
     static PANELS := ["Home", "Mouse", "Layers", "Keyboard", "Macros", "Apps",
                       "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
     static hostRefs := []          ; Layers panel row -> host input code
@@ -12080,14 +12151,23 @@ class Atlas {
         ; is 640. The pitch is derived from the space that is actually there
         ; now, and never grows past the 44 the design was drawn at.
         floorY := Atlas.H - 128           ; the rule above the engine switch
+        shown := 0
+        for name in Atlas.PANELS {
+            if !Atlas.PanelHidden(name)
+                shown += 1
+        }
         pitch := 44
-        if (Atlas.PANELS.Length > 0) {
+        if (shown > 0) {
             room := floorY - y
-            pitch := ClampInt(room // Atlas.PANELS.Length, 30, 44, 44)
+            pitch := ClampInt(room // shown, 30, 44, 44)
         }
         rowH := Max(24, pitch - 6)
         i := 1
         for name in Atlas.PANELS {
+            if Atlas.PanelHidden(name) {
+                i += 1
+                continue
+            }
             active := (i = Atlas.panel)
             ; the row itself is the button: opaque tone, hover on the same
             ; shape, no transparent overlay (see Lumi.Clear for why)
@@ -12359,6 +12439,15 @@ class Atlas {
         Lumi.Label(x, ky + 80, w - 20,
             "Press " Atlas.HkWords("hkGui") " to reopen settings. F1 opens quick help.",
             "dim", "left", 22)
+
+        ; ── simple or advanced ──────────────────────────────────────────
+        Lumi.Toggle(x, ky + 110, "Show advanced pages and every action",
+            Atlas.Advanced() ? 1 : 0, (v) => Atlas.SetAdvanced(v))
+        Lumi.Label(x + 64, ky + 138, w - 80,
+            "Off: the essentials — Mouse, Keyboard, Menus, Settings, Diagnostics "
+            . "and a short list of actions. On: Layers, Macros, Apps, Windows "
+            . "and Pointer too. Nothing is lost either way.",
+            "mute", "left", 20)
 
         ; ── where the settings live ─────────────────────────────────────
         ; Pinned to the BOTTOM, so it is in the same place whatever size the
@@ -14051,8 +14140,7 @@ class Atlas {
 
         actCode := row ? row["action"]["type"] : "keys"
         Lumi.Label(24, 280, 120, "It does", "dim", "left", 30)
-        st.act := Lumi.Select(150, 280, 380, 30, ACT_LABELS,
-            ActIndexOf(actCode), Atlas.ActPicked(st))
+        st.act := Atlas.ActSelect(150, 280, 380, 30, actCode, Atlas.ActPicked(st))
 
         Lumi.Label(24, 322, 120, "Details", "dim", "left", 30)
         st.value := Lumi.Field(150, 322, 306, 30,
@@ -14121,7 +14209,7 @@ class Atlas {
     }
 
     static ActHint(st, i) {
-        code := ACT_CODES.Has(i) ? ACT_CODES[i] : ""
+        code := Atlas.ActCode(st.act)
         txt := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
         try {
             st.hint.str := txt
@@ -14234,7 +14322,7 @@ class Atlas {
         else
             btn := InputCodeFromLabel(st.input.items.Has(st.input.index)
                 ? st.input.items[st.input.index] : "")
-        atype := ACT_CODES.Has(st.act.index) ? ACT_CODES[st.act.index] : "none"
+        atype := Atlas.ActCode(st.act)
         val := Lumi.FieldValue(st.value)
         hwnd := Lumi.HwndOf(st.dlg)
 
@@ -14435,7 +14523,7 @@ class Atlas {
             val := existing ? MGet(existing["action"], "value", "") : ""
             Lumi.Label(24, ry, 96, d[2], "dim", "left", 30)
             r := {wheel: wheel, dlg: dlg}
-            r.act := Lumi.Select(126, ry, 330, 30, ACT_LABELS, ActIndexOf(code))
+            r.act := Atlas.ActSelect(126, ry, 330, 30, code)
             r.value := Lumi.Field(464, ry, 226, 30, val, 0, "value", true)
             ; Rec cannot reuse the editor's RecValue: that one guards the
             ; write with DlgAlive, which compares against Atlas.dstate --
@@ -14548,7 +14636,7 @@ class Atlas {
         ; the user would have to work out which two landed.
         plan := []
         for r in st.rows {
-            atype := ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none"
+            atype := Atlas.ActCode(r.act)
             val := Lumi.FieldValue(r.value)
             if (atype = "none") {
                 plan.Push({wheel: r.wheel, type: "none", value: ""})
@@ -14714,7 +14802,7 @@ class Atlas {
             Lumi.Label(24, ry, 90, dir, "dim", "left", 30)
             r := {dlg: dlg}
             r.label := Lumi.Field(116, ry, 140, 30, lbl, 0, "label", true)
-            r.act := Lumi.Select(268, ry, 240, 30, ACT_LABELS, ActIndexOf(code))
+            r.act := Atlas.ActSelect(268, ry, 240, 30, code)
             r.value := Lumi.Field(520, ry, 144, 30, val, 0, "value", true)
             r.icon := Lumi.Select(670, ry, 70, 30, icons,
                 Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
@@ -14762,7 +14850,7 @@ class Atlas {
             if kept.Has(i)
                 continue
             if (Trim(Lumi.FieldValue(r.label)) != ""
-                || (ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none") != "none")
+                || Atlas.ActCode(r.act) != "none")
                 occupied := true
         }
         if (occupied && MsgBox("Switch to " count " slots?`n`nCommands in the "
@@ -14777,7 +14865,7 @@ class Atlas {
         slices := []
         for r in st.rows
             slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none",
+                Atlas.ActCode(r.act),
                 Lumi.FieldValue(r.value),
                 RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
         app := AppCodeFromDisp(st.app.items[st.app.index])
@@ -14831,7 +14919,7 @@ class Atlas {
         for r in st.rows {
             if (i > count)
                 break
-            atype := ACT_CODES.Has(r.act.index) ? ACT_CODES[r.act.index] : "none"
+            atype := Atlas.ActCode(r.act)
             val := Lumi.FieldValue(r.value)
             lbl := Trim(Lumi.FieldValue(r.label))
             if (atype != "none") {
