@@ -13789,17 +13789,20 @@ class Calib {
         LayerStack.ActiveLayer := lyr
         lyr.Center()
         lyr.TopMost(true)          ; it is asking for keystrokes; it must be seen
-        Atlas.Own(lyr)
-        lyr.Drag()
-        Calib.wasEnabled := g_Enabled
-        if g_Enabled
-            ToggleEnabled()        ; measure the hand, not the bindings
-        Calib.phase := 1
-        Calib.StartHook()
-        Calib.Paint()
-        lyr.Activate()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
+        try {
+            Atlas.Own(lyr)
+            lyr.Drag()
+            Calib.wasEnabled := g_Enabled
+            if g_Enabled
+                ToggleEnabled()        ; measure the hand, not the bindings
+            Calib.phase := 1
+            Calib.StartHook()
+            Calib.Paint()
+            lyr.Activate()
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
     }
 
     static Close(*) {
@@ -14019,6 +14022,15 @@ class Calib {
             return
         prev := LayerStack.ActiveLayer
         LayerStack.ActiveLayer := lyr
+        try {
+            Calib.__Paint(lyr, prev)
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
+    }
+
+    static __Paint(lyr, prev) {
         lyr.Clear()
         w := Calib.W
         h := Calib.H
@@ -14072,8 +14084,6 @@ class Calib {
 
         Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
         lyr.Draw()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
     }
 
     /** Progress squares -- filled once that repetition is in the sample. */
@@ -14224,15 +14234,18 @@ class Shelf {
         lyr := Layer(Shelf.W, h, "RadMapperShelf")
         Shelf.lyr := lyr
         LayerStack.ActiveLayer := lyr
-        try Atlas.Own(lyr)
-        lyr.TopMost(true)
-        lyr.Drag()
-        Shelf.Place(lyr)
-        Shelf.BindEsc()
-        Shelf.Paint()
-        lyr.Activate()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
+        try {
+            Atlas.Own(lyr)
+            lyr.TopMost(true)
+            lyr.Drag()
+            Shelf.Place(lyr)
+            Shelf.BindEsc()
+            Shelf.Paint()
+            lyr.Activate()
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
     }
 
     static Close(*) {
@@ -14311,6 +14324,15 @@ class Shelf {
             return
         prev := LayerStack.ActiveLayer
         LayerStack.ActiveLayer := lyr
+        try {
+            Shelf.__Paint(lyr)
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
+    }
+
+    static __Paint(lyr) {
         Shelf.Load()
         lyr.Clear()
         w := Shelf.W
@@ -14403,8 +14425,6 @@ class Shelf {
 
         Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
         lyr.Draw()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
     }
 
     /** One line, no tabs or newlines, trimmed to something that fits. */
@@ -14453,6 +14473,8 @@ class Shelf {
             return
         Shelf.busy := true
         moved := false
+        ex := 0
+        ey := 0
         try {
             CoordMode("Mouse", "Screen")
             MouseGetPos(&sx, &sy)
@@ -14463,8 +14485,9 @@ class Shelf {
                 Sleep(15)
             }
             MouseGetPos(&ex, &ey)
+        } finally {
+            Shelf.busy := false
         }
-        Shelf.busy := false
         if (i < 1 || i > Shelf.items.Length)
             return
         if moved
@@ -14668,15 +14691,18 @@ class Chooser {
         lyr := Layer(Chooser.W, Chooser.Height(), "RadMapperChooser")
         Chooser.lyr := lyr
         LayerStack.ActiveLayer := lyr
-        try Atlas.Own(lyr)
-        lyr.TopMost(true)
-        lyr.Drag()
-        PlaceAtCursor(lyr)
-        Chooser.BindEsc()
-        Chooser.Paint()
-        lyr.Activate()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
+        try {
+            Atlas.Own(lyr)
+            lyr.TopMost(true)
+            lyr.Drag()
+            PlaceAtCursor(lyr)
+            Chooser.BindEsc()
+            Chooser.Paint()
+            lyr.Activate()
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
     }
 
     static Close(*) {
@@ -14727,9 +14753,18 @@ class Chooser {
             return
         prev := LayerStack.ActiveLayer
         LayerStack.ActiveLayer := lyr
-        lyr.Clear()
+        try {
+            Chooser.__Paint(lyr)
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
+    }
+
+    static __Paint(lyr) {
         w := Chooser.W
         h := Chooser.Height()
+        lyr.Clear()
         Lumi.Card(0, 0, w, h, "surface", 0)
         Rectangle(0, 0, w, 3, Lumi.C["magenta"], true)
         Lumi.Label(18, 10, w - 60, Chooser.title, "title")
@@ -14769,8 +14804,6 @@ class Chooser {
 
         Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
         lyr.Draw()
-        if (IsObject(prev) && !Lumi.Same(prev, lyr))
-            LayerStack.ActiveLayer := prev
     }
 
     static Scroll(d, *) {
