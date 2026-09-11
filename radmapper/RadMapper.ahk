@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.0.1a  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.0.2-preview --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,29 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.0.2-preview (Codex second pass; Windows verification pending):
+;    Guided radial setup, four/eight-way direction preservation, reference-safe
+;    rename, explicit shortcut validation, foreground cancellation, reliable
+;    preview return timer, retained failed-save state and transactional import.
+;    F1 quick help, clearer Home defaults, readable hints and softer pink.
+;
+;  v0.6.0.2-preview review pass (on top of the Codex second pass):
+;    * Radial menus cancel when the foreground moves to another PROCESS,
+;      not another window handle. syngo.via, PACS viewers and browsers hand
+;      the foreground between their own top-level windows unprompted (the
+;      v0.4.9 follow-focus lesson), and a handle compare cancelled gestures
+;      exactly where the menu is wanted. Our own layers never count.
+;    * "Not saved" in the header now means a save FAILED (or is blocked),
+;      not that a 400 ms slider debounce is pending -- g_CfgSaveFailed.
+;    * Placeholder / helper ink is 9A9FBE: >= 4.5:1 on every ground and
+;      still dimmer than secondary text, so the hierarchy reads.
+;    * JSON numbers are matched in place (\G at the position) instead of
+;      copying the rest of the document per number.
+;    * Home's "Test my mouse" lands on the classic Diagnostics tab, which
+;      is where the live input monitor is; the config path has its label.
+;    * The UTF-8 byte-order mark that the second pass introduced at byte 0
+;      is removed again, so the file diffs cleanly.
 ;
 ;  v0.3 was a DELIBERATE SIMPLIFICATION of v0.2. Everything that made the
 ;  engine hard to reason about -- the free-spin scroll engine (smoothing,
@@ -597,12 +620,15 @@ A_HotkeyInterval := 1000
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
-DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
+if !IsSet(RM_TEST)
+    DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
 
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.0.1a"
+global RM_VERSION := "0.6.0.2-preview"
+global g_CfgRecoveryBlocked := false
+global g_CfgSaveFailed := false   ; last SaveCfg() threw or was blocked
 ; -- WHERE THE CONFIG LIVES (v0.4.1) -----------------------------------------
 ;
 ; It used to live next to the script: A_ScriptDir "\RadMapperConfig.json".
@@ -700,7 +726,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Run macro", "Run program",
     "Open RadMapper settings", "Toggle engine pause", "Disabled"]
 global ACT_HINTS := Map(
-    "keys", "AHK Send syntax, e.g.  r   ^z   {F5}   {Enter}",
+    "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
     "keysrepeat", "AHK Send syntax; fires once on press, repeats while held",
     "text", "Literal text typed as-is",
     "native", "Input to press (blank = this input), e.g. RButton",
@@ -713,7 +739,7 @@ global ACT_HINTS := Map(
     "ps_dictate", "No value needed (uses the dictate key from Settings)",
     "ps_next", "No value needed",
     "ps_prev", "No value needed",
-    "ps_keys", "AHK Send syntax delivered to PowerScribe, e.g. {F6}",
+    "ps_keys", "Use Rec or Keys. This shortcut is sent to PowerScribe; typed function keys need braces, e.g. {F6}.",
     "tele_prev", "No value needed (monitors are ordered left to right)",
     "tele_next", "No value needed (monitors are ordered left to right)",
     "parkgo", "No value needed (set the spot in the Apps tab)",
@@ -967,6 +993,8 @@ JsonLoad(s) {
     p := 1
     v := _JVal(s, &p)
     _JWs(s, &p)
+    if (p <= StrLen(s))
+        throw Error("JSON: unexpected content at " p)
     return v
 }
 
@@ -1046,15 +1074,12 @@ _JVal(s, &p) {
         p += 4
         return ""
     }
-    ; number
-    st := p
-    if (SubStr(s, p, 1) = "-")
-        p += 1
-    while (p <= StrLen(s) && InStr("0123456789.eE+-", SubStr(s, p, 1)))
-        p += 1
-    if (p = st)
+    ; \G anchors at the start position, so no per-number SubStr copy of the
+    ; rest of the document (that was O(n^2) on a large config).
+    if !RegExMatch(s, "\G-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?", &num, p)
         throw Error("JSON: unexpected char at " p)
-    return Number(SubStr(s, st, p - st))
+    p += StrLen(num[0])
+    return Number(num[0])
 }
 
 _JStr(s, &p) {
@@ -1087,6 +1112,8 @@ _JStr(s, &p) {
             }
             continue
         }
+        if (Ord(c) < 32)
+            throw Error("JSON: unescaped control character at " p)
         out .= c
         p += 1
     }
@@ -1152,7 +1179,7 @@ _JQuote(s) {
 ; ── §3  CONFIG (defaults / load / save / helpers) ───────────────────────────
 
 MGet(m, k, d := "") {
-    return (IsObject(m) && m.Has(k)) ? m[k] : d
+    return (m is Map && m.Has(k)) ? m[k] : d
 }
 
 ; Case-insensitive: hand-edited configs may carry e.g. "xbutton1".
@@ -1925,7 +1952,8 @@ AdoptCfg() {
 }
 
 LoadCfg() {
-    global g_Cfg, g_CfgDirty
+    global g_Cfg, g_CfgDirty, g_CfgRecoveryBlocked
+    g_CfgRecoveryBlocked := false
     g_CfgDirty := false                      ; disk wins over any pending
     SetTimer(CfgFlush, 0)                    ; debounced in-memory save
     if (CFG_PATH = "")
@@ -1934,6 +1962,7 @@ LoadCfg() {
         try {
             txt := FileRead(CFG_PATH, "UTF-8")
             loaded := JsonLoad(txt)
+            ValidateCfgShape(loaded)
             if (IsObject(loaded) && loaded.Has("bindings")) {
                 BackupCfg()                  ; pre-migration snapshot (v1.3)
                 g_Cfg := loaded
@@ -1949,13 +1978,19 @@ LoadCfg() {
             ; there is almost always a good file one step back.
             if RestoreNewestBackup(e.Message)
                 return
+            preserved := CFG_PATH ".corrupt-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
+            try FileCopy(CFG_PATH, preserved, 0)
+            catch
+                g_CfgRecoveryBlocked := true
             MsgBox(CFG_NAME " could not be parsed (" e.Message ")"
-                . " and no usable backup was found.`n`nLoading defaults. The"
-                . " bad file is kept untouched until you Save.`n`n" CFG_PATH,
+                . " and no usable backup was found.`n`n"
+                . (g_CfgRecoveryBlocked
+                    ? "The original could not be copied. Saving is blocked to protect it. Copy it to a safe folder, then restart RadMapper."
+                    : "Loading defaults. The original has been preserved here:`n" preserved),
                 "RadMapper", "Iconx")
-            g_Cfg := DefaultCfg()            ; honor the promise above: the
-            RebuildIndex()                   ; bad file stays on disk until
-            return                           ; an explicit save replaces it
+            g_Cfg := DefaultCfg()
+            RebuildIndex()
+            return
         }
     }
     g_Cfg := DefaultCfg()
@@ -1983,6 +2018,7 @@ RestoreNewestBackup(why) {
         path := BACKUP_DIR "\" nm
         try {
             loaded := JsonLoad(FileRead(path, "UTF-8"))
+            ValidateCfgShape(loaded)
             if (!IsObject(loaded) || !loaded.Has("bindings"))
                 continue
             try FileMove(CFG_PATH, CFG_PATH ".corrupt-"
@@ -2006,6 +2042,7 @@ RestoreNewestBackup(why) {
 ; then validate rows and run migrations. Operates on g_Cfg in place.
 NormalizeCfg() {
     c := g_Cfg
+    ValidateCfgShape(c)
     if !c.Has("settings")
         c["settings"] := Map()
     for k in ["apps", "layers"] {
@@ -2029,19 +2066,42 @@ NormalizeCfg() {
     SeedNativeDefaults(c)                  ; unified button-path layer.
 }
 
+ValidateCfgShape(c) {
+    if !(c is Map) || !(MGet(c, "bindings", 0) is Array)
+        throw Error("Expected a settings object with a bindings list")
+    for key in ["apps", "layers", "layouts", "menus", "snippets", "psExes"] {
+        if (c.Has(key) && !(c[key] is Array))
+            throw Error(key " must be a list")
+    }
+    for key in ["settings", "macros"] {
+        if (c.Has(key) && !(c[key] is Map))
+            throw Error(key " must be an object")
+    }
+    for menu in MGet(c, "menus", []) {
+        if (!(menu is Map) || !(MGet(menu, "slices", 0) is Array)
+            || Type(MGet(menu, "name", 0)) != "String")
+            throw Error("Each menu needs a name and a slices list")
+        for sl in menu["slices"] {
+            if (!(sl is Map) || !(MGet(sl, "action", 0) is Map))
+                throw Error("Each menu direction needs an action object")
+        }
+    }
+}
+
 ; Drop malformed rows from a hand-edited config file so one bad row cannot
 ; raise an error on every mouse event or break a GUI refresh.
 ValidateCfg() {
     kept := []
     for row in g_Cfg["bindings"] {
-        if (IsObject(row) && row.Has("button") && row.Has("event")
-            && IsObject(MGet(row, "action")) && MGet(row, "action").Has("type"))
+        if (row is Map && row.Has("button") && row.Has("event")
+            && MGet(row, "action") is Map && MGet(row, "action").Has("type"))
             kept.Push(row)
     }
     g_Cfg["bindings"] := kept
     kept := []
     for app in g_Cfg["apps"] {
-        if (IsObject(app) && app.Has("name") && MGet(app, "match", []).Length > 0)
+        if (app is Map && app.Has("name") && MGet(app, "match", 0) is Array
+            && app["match"].Length > 0)
             kept.Push(app)
     }
     g_Cfg["apps"] := kept
@@ -2049,7 +2109,13 @@ ValidateCfg() {
 
 SaveCfg() {
     global g_CfgDirty
-    g_CfgDirty := false
+    global g_CfgSaveFailed
+    if g_CfgRecoveryBlocked {
+        g_CfgDirty := true
+        g_CfgSaveFailed := true
+        Problem("save-blocked", "Preserve the corrupt config and restart before saving")
+        return false
+    }
     SetTimer(CfgFlush, 0)                    ; cancel any pending debounce
     try {
         txt := JsonDump(g_Cfg)
@@ -2058,9 +2124,16 @@ SaveCfg() {
             FileDelete(tmp)                      ; missing/half-written moment
         FileAppend(txt, tmp, "UTF-8")
         FileMove(tmp, CFG_PATH, 1)
+        g_CfgDirty := false
+        g_CfgSaveFailed := false
+        return true
     } catch as e {
+        g_CfgDirty := true                  ; keep edits available for retry
+        g_CfgSaveFailed := true
         Problem("save-failed", "Config save failed: " e.Message)
-        TrayTip("Config save failed: " e.Message, "RadMapper", "Iconx")
+        TrayTip("Changes are not saved. Check the settings folder and retry. "
+            . e.Message, "RadMapper", "Iconx")
+        return false
     }
 }
 
@@ -2130,13 +2203,14 @@ CfgExport() {
 }
 
 CfgImport() {
-    global g_Cfg
+    global g_Cfg, g_CfgDirty
     src := FileSelect(3, , "Import RadMapper config", "JSON (*.json)")
     if (src = "")
         return
     incoming := 0
     try {
         incoming := JsonLoad(FileRead(src, "UTF-8"))
+        ValidateCfgShape(incoming)
         if (!IsObject(incoming) || !incoming.Has("bindings")
             || Type(incoming["bindings"]) != "Array")
             throw Error("not a RadMapper config (no `"bindings`" array)")
@@ -2146,9 +2220,22 @@ CfgImport() {
         return
     }
     BackupCfg()                              ; snapshot what's being replaced
-    g_Cfg := incoming
-    NormalizeCfg()
-    SaveCfg()
+    previous := g_Cfg
+    wasDirty := g_CfgDirty
+    try {
+        g_Cfg := incoming
+        NormalizeCfg()
+    } catch as e {
+        g_Cfg := previous
+        MsgBox("Import failed: " e.Message "`nYour current settings are unchanged.",
+            "RadMapper", "Iconx")
+        return
+    }
+    if !SaveCfg() {
+        g_Cfg := previous
+        g_CfgDirty := wasDirty
+        return
+    }
     AfterCfgChange()
     RefreshAll()
     if IsObject(g_UI)
@@ -5550,6 +5637,38 @@ RadialAngle(dx, dy) {
     return a
 }
 
+/** Preserve compass positions when changing between four and eight slots. */
+ResizeMenuSlices(slices, count) {
+    oldCount := slices.Length > 4 ? 8 : 4
+    out := []
+    loop count {
+        i := A_Index
+        source := oldCount = count ? i
+            : (count = 8 ? (Mod(i, 2) ? (i + 1) // 2 : 0) : i * 2 - 1)
+        out.Push(source && slices.Has(source) ? slices[source]
+            : MenuSlice("", "none", ""))
+    }
+    return out
+}
+
+RenameMenuBindings(oldName, newName) {
+    for row in g_Cfg["bindings"] {
+        action := MGet(row, "action", 0)
+        if (MGet(action, "type", "") = "radial"
+            && MGet(action, "value", "") = oldName)
+            action["value"] := newName
+    }
+    ; A radial menu may itself open another menu.
+    for menu in MGet(g_Cfg, "menus", []) {
+        for slice in MGet(menu, "slices", []) {
+            action := MGet(slice, "action", 0)
+            if (MGet(action, "type", "") = "radial"
+                && MGet(action, "value", "") = oldName)
+                action["value"] := newName
+        }
+    }
+}
+
 /** Menu by name; blank name = the best menu for the app in front. */
 RadialFind(name) {
     menus := MGet(g_Cfg, "menus", [])
@@ -5621,7 +5740,8 @@ RadialOpen(name, holder := 0, trial := false) {
                  ax: ax, ay: ay,
                  holder: IsObject(holder) ? holder : 0,
                  latched: !IsObject(holder),
-                 sel: 0, lastSel: -1, trial: trial,
+                 sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
+                 targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false,
                  t0: A_TickCount, restAt: A_TickCount}
     SetTimer(RadialTick, 16)
@@ -5640,7 +5760,8 @@ RadialTick(*) {
     }
     R := g_Radial
     now := A_TickCount
-    if (!g_Enabled || GetKeyState("Escape", "P")) {
+    if ((!g_Enabled && !R.trial) || GetKeyState("Escape", "P")
+        || (!R.trial && RadialFocusLost(R.target, R.targetPid))) {
         RadialClose(false)
         return
     }
@@ -5700,9 +5821,11 @@ RadialClose(commit) {
         ; over whatever happens to be underneath, and "close tab" or a W/L
         ; preset going into a study because you paused on a slice is not an
         ; acceptable cost of previewing a layout.
-        if (commit && R.sel >= 1 && R.sel <= R.slices.Length)
-            HUD("Would fire: " R.slices[R.sel].label, "cyan")
-        SetTimer(ObjBindMethod(Atlas, "MenuTryDone"), -1)
+        if (commit && R.sel >= 1 && R.sel <= R.slices.Length) {
+            sl := R.slices[R.sel]
+            HUD(sl.live ? "Would run: " sl.label : "Empty direction — no command", "cyan")
+        }
+        Atlas.MenuReturnAfter(-1)
         return
     }
     if (!commit || R.sel < 1 || R.sel > R.slices.Length)
@@ -5713,10 +5836,34 @@ RadialClose(commit) {
     ; Deferred out of the timer thread: an action can activate a window, send
     ; a blocking key sequence or open a shelf, and none of that belongs
     ; inside the tick that is still tearing the menu down.
-    SetTimer(RadialFireSlice.Bind(sl.act, sl.label), -1)
+    SetTimer(RadialFireSlice.Bind(sl.act, sl.label, R.target, R.targetPid), -1)
 }
 
-RadialFireSlice(act, label, *) {
+RadialPidOf(hwnd) {
+    pid := 0
+    if hwnd
+        try pid := WinGetPID("ahk_id " hwnd)
+    return pid
+}
+
+; True when the foreground has moved to a DIFFERENT APPLICATION since the
+; menu opened. Same window, or another window of the same process, is not a
+; loss: syngo.via, PACS viewers and browsers hand the foreground between
+; their own top-level windows on their own (the v0.4.9 follow-focus lesson),
+; and cancelling a gesture over that would make the menu unusable exactly
+; where it is wanted. Our own layers never take the foreground (NoActivate).
+RadialFocusLost(target, targetPid) {
+    fg := FgHwnd()
+    if (fg = target || !target)
+        return false
+    if g_OurHwnds.Has(fg)
+        return false
+    return RadialPidOf(fg) != targetPid
+}
+
+RadialFireSlice(act, label, target, targetPid := 0, *) {
+    if (!g_Enabled || RadialFocusLost(target, targetPid))
+        return
     try {
         b := Map()
         b["action"] := act
@@ -7247,8 +7394,8 @@ StatusTick(*) {
 
 RestoreDefaults() {
     global g_Cfg
-    if (MsgBox("Replace the current configuration with a clean slate"
-        . " (every input unassigned / fully native)?", "RadMapper", "YesNo Icon?") != "Yes")
+    if (MsgBox("Restore the shipped defaults?"
+        . " Your assignments will be replaced, including the dictation and monitor-switching defaults.", "RadMapper", "YesNo Icon?") != "Yes")
         return
     g_Cfg := DefaultCfg()
     SaveCfg()
@@ -7991,6 +8138,20 @@ ValidateActionValue(owner, atype, raw, &ok) {
     ok := true
     hwnd := ValueHostHwnd(owner)
     v := raw
+    if ((atype = "keys" || atype = "keysrepeat" || atype = "ps_keys") && Trim(raw) = "") {
+        ok := false
+        MsgBox("Record a shortcut or choose Disabled to leave this input empty.",
+            "RadMapper", "Icon! Owner" hwnd)
+        return ""
+    }
+    if (atype = "radial" && Trim(raw) != "" && !MenuByName(Trim(raw))) {
+        ok := false
+        MsgBox("No menu named '" Trim(raw) "'. Choose a name from Menus, or leave "
+            . "Details empty for the automatic menu.", "RadMapper", "Icon! Owner" hwnd)
+        return ""
+    }
+    if (atype = "radial")
+        return Trim(raw)
     if (atype = "native" || atype = "dblclick" || atype = "dragmove"
         || atype = "clicklock") {
         v := ResolveInputValue(raw)
@@ -8993,14 +9154,13 @@ class Lumi {
         ; ink
         "ink",      "0xFFF2F3F8",   ; primary text
         "inkDim",   "0xFFA6ACC8",   ; secondary text
-        "inkMute",  "0xFF787FA3",   ; disabled, placeholders, ticks -- lightened
-                                    ; from 6E7599 (WCAG pass: was 2.62:1 on
-                                    ; raised2, below the 3:1 floor for
-                                    ; placeholder/disabled text; now 3.0-4.7:1
-                                    ; across surface/raised/raised2/sunk)
+        "inkMute",  "0xFF9A9FBE",   ; placeholders, disabled, helper text:
+                                    ; >= 4.5:1 on every ground (4.54 on
+                                    ; raised2) and still one step dimmer
+                                    ; than inkDim, so the hierarchy holds
         ; ── NEON HOT PINK -- identity, selection, alarm ──────────────────
-        "magenta",  "0xFFFF2D95",   ; the signature hue
-        "pink",     "0xFFFF6FB5",   ; lighter tint: warnings, soft accents
+        "magenta",  "0xFFFF6FB5",   ; the signature hue
+        "pink",     "0xFFFF9BCB",   ; lighter tint: warnings, soft accents
         "violet",   "0xFFFF2D95",   ; selection accent (kept as a name so
                                     ; call sites read the same)
         "latch",    "0xFFFF2D95",   ; a click lock is pink and unmissable
@@ -10597,6 +10757,7 @@ class Atlas {
         try {
             HotIf(ObjBindMethod(Atlas, "IsFront"))
             Hotkey("Escape", ObjBindMethod(Atlas, "EscKey"), "On")
+            Hotkey("F1", (*) => Atlas.Help(), "On")
             ; Resize from the keyboard, live only while OUR window is in
             ; front, so these four combos stay completely native everywhere
             ; else. Ctrl+Alt+arrow rather than plain arrow: a settings window
@@ -11374,6 +11535,21 @@ class Atlas {
      * on a machine where nothing was actually stuck is indistinguishable
      * from a button that does nothing at all.
      */
+    static Help() {
+        MsgBox("Start with one shortcut`n`n"
+            . "Mouse / Keyboard: choose a button or key, then add an assignment. "
+            . "In program limits where it works. Only while holding adds an optional second button. "
+            . "Rec records a shortcut; Keys lets you choose it without AutoHotkey syntax.`n`n"
+            . "Radial menus: Edit commands, Assign a button, then Practice safely. "
+            . "Choose Send keys for PACS shortcuts and record the keys shown in your viewer settings. "
+            . "A disabled direction does nothing. Practice never sends a command.`n`n"
+            . "Navigation: use the left list. Escape closes the current popup or window. "
+            . "For standard Windows controls, use tray > Settings (classic).`n`n"
+            . "Recovery: " Atlas.HkWords("hkPanic") " releases held inputs. "
+            . Atlas.HkWords("hkToggle") " pauses or resumes RadMapper.",
+            "RadMapper quick help", "Owner" Lumi.HwndOf(Atlas.dlg ? Atlas.dlg : Atlas.lyr))
+    }
+
     static Unstick(*) {
         PanicRelease()
         Atlas.Build()
@@ -11524,7 +11700,8 @@ class Atlas {
         y := Atlas.H - 34
         Lumi.Rule(Atlas.NAVW, y, Atlas.W - Atlas.NAVW, Lumi.C["hair"])
         Lumi.Label(Atlas.NAVW + Lumi.SP["xl"], y, 620,
-            "Layer " CurrentLayerDisp() "   ·   Last: " LastEventText(),
+            g_CfgSaveFailed ? "Not saved to disk — your changes work but will be lost on exit. See Diagnostics."
+                : "Layer " CurrentLayerDisp() "   ·   Last: " LastEventText(),
             "mute", "left", 34)
         n := g_Problems.Length
         if (n > 0)
@@ -11547,8 +11724,8 @@ class Atlas {
     static PanelHome(x, y, w, h) {
         Lumi.Label(x, y, 420, "Start here", "title")
         Lumi.Para(x, y + 30, Min(w - 20, 720), 40,
-            "RadMapper changes what your mouse buttons and keyboard keys do "
-            . "while you work. Nothing changes until you set it up here.",
+            "Make your mouse and keyboard work the way you read. "
+            . "Start with one shortcut, then add more when you need them.",
             "mute")
 
         ; ── is it on? in words, not in a light ──────────────────────────
@@ -11573,10 +11750,10 @@ class Atlas {
         Lumi.Btn(x + bw + 16, y + 176, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
-        Lumi.Btn(x, y + 176 + bh + 12, bw, bh, "Test my mouse",
-            (*) => Atlas.Go(Atlas.PanelIndex("Diagnostics")), "accent")
-        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Fix a stuck button",
-            (*) => Atlas.Unstick(), "danger")
+        Lumi.Btn(x, y + 176 + bh + 12, bw, bh, "Set up a radial menu",
+            (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
+        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Test my mouse",
+            (*) => Atlas.Classic("test"), "ghost")
 
         ; ── the keys that work even when nothing else does ──────────────
         ky := y + 176 + (bh + 12) * 2 + 14
@@ -11590,15 +11767,15 @@ class Atlas {
             . " to switch RadMapper off, and again to switch it back on.",
             "dim", "left", 22)
         Lumi.Label(x, ky + 80, w - 20,
-            "Press " Atlas.HkWords("hkGui") " to bring this window back.",
+            "Press " Atlas.HkWords("hkGui") " to reopen settings. F1 opens quick help.",
             "dim", "left", 22)
 
         ; ── where the settings live ─────────────────────────────────────
         ; Pinned to the BOTTOM, so it is in the same place whatever size the
         ; window is, and so nothing above it has to be measured against it.
-        Lumi.Label(x, y + h - 46, w - 20, "Your settings are saved here:",
+        Lumi.Label(x, y + h - 46, w - 20, "Defaults: dictation key + thumb-button monitor switching. Edit them in Mouse / Keyboard.",
             "mute", "left", 20)
-        Lumi.Label(x, y + h - 26, w - 20, CFG_PATH, "code", "left", 22)
+        Lumi.Label(x, y + h - 26, w - 20, "Saved in  " CFG_PATH, "code", "left", 22)
     }
 
     ; ── PANEL: MOUSE ────────────────────────────────────────────────────────
@@ -12336,17 +12513,15 @@ class Atlas {
     ; ── PANEL: MENUS (radial) ───────────────────────────────────────────────
 
     static menuRefs := []          ; list row -> g_Cfg["menus"] index
+    static menuReturnTimer := 0
     static menuName := 0           ; the "new menu" name field
 
     static PanelMenus(x, y, w, h) {
         Lumi.Label(x, y, 400, "Radial menus", "title")
         Lumi.Para(x, y + 28, w, 56,
-            "Eight commands arranged around the pointer, picked by "
-            . "DIRECTION. Put one on a button you hold: flick in a direction "
-            . "and let go and it runs without anything being drawn — or hold "
-            . "still for a moment and the wheel appears so you can look. "
-            . "Letting go in the middle, or pressing Escape, does nothing.",
-            "mute")
+            "1. Edit commands.   2. Assign a button.   3. Practice safely. "
+            . "Hold the assigned button, move toward a command, then release. "
+            . "Release in the center or press Escape to cancel.", "mute")
 
         rows := []
         Atlas.menuRefs := []
@@ -12381,19 +12556,20 @@ class Atlas {
         Lumi.Btn(x + 336, by, 130, 30, "Add",
             (*) => Atlas.MenuAddNew(), "primary")
         Lumi.Label(x + 480, by, w - 480,
-            "Eight slices at one level is the limit the research supports — "
-            . "past that, picking by direction stops being reliable.",
+            "Start with 4 directions. Add diagonals when you need more commands.",
             "mute", "left", 30)
 
         by2 := y + h - 48
-        bw := Max((w - 30) // 4, 130)
-        Lumi.Btn(x, by2, bw, 34, "Edit its commands…",
+        bw := (w - 40) // 5
+        Lumi.Btn(x, by2, bw, 34, "Edit commands",
             (*) => Atlas.MenuEditSel(), "accent")
-        Lumi.Btn(x + bw + 10, by2, bw, 34, "Duplicate",
-            (*) => Atlas.MenuDuplicate(), "ghost")
-        Lumi.Btn(x + (bw + 10) * 2, by2, bw, 34, "Try it now",
+        Lumi.Btn(x + bw + 10, by2, bw, 34, "Assign a button",
+            (*) => Atlas.MenuAssign(), "accent")
+        Lumi.Btn(x + (bw + 10) * 2, by2, bw, 34, "Practice safely",
             (*) => Atlas.MenuTry(), "ghost")
-        Lumi.Btn(x + (bw + 10) * 3, by2, bw, 34, "Delete",
+        Lumi.Btn(x + (bw + 10) * 3, by2, bw, 34, "Duplicate",
+            (*) => Atlas.MenuDuplicate(), "ghost")
+        Lumi.Btn(x + (bw + 10) * 4, by2, bw, 34, "Delete",
             (*) => Atlas.MenuDelete(), "danger")
     }
 
@@ -12417,6 +12593,18 @@ class Atlas {
             out .= (out = "" ? "" : ", ") lbl
         }
         return out = "" ? "— nothing opens it yet —" : out
+    }
+
+    static MenuAssign() {
+        menu := Atlas.MenuSel()
+        if !IsObject(menu) {
+            Lumi.Toast("Select a menu first", "warn")
+            return
+        }
+        app := MGet(menu, "app", "")
+        seed := NewBinding(app = "" ? "*" : app, "*", "", "XButton1",
+            "hold", "radial", menu["name"])
+        Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
     }
 
     static MenuSelRef() {
@@ -12452,7 +12640,10 @@ class Atlas {
         if !g_Cfg.Has("menus")
             g_Cfg["menus"] := []
         g_Cfg["menus"].Push(m)
-        SaveCfg()
+        if IsObject(Atlas.list)
+            Atlas.list.sel := g_Cfg["menus"].Length
+        if !SaveCfg()
+            return
         Atlas.Build()
         Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
     }
@@ -12480,7 +12671,10 @@ class Atlas {
         }
         copy["slices"] := sl
         g_Cfg["menus"].Push(copy)
-        SaveCfg()
+        if IsObject(Atlas.list)
+            Atlas.list.sel := g_Cfg["menus"].Length
+        if !SaveCfg()
+            return
         Atlas.Build()
         Lumi.Toast("Copied to “" name "”", "jade")
     }
@@ -12493,7 +12687,7 @@ class Atlas {
         }
         name := MGet(g_Cfg["menus"][ref], "name", "")
         if !Atlas.Confirm("Delete the menu “" name "”?`n`n"
-            . "Its eight commands go with it, and anything you set to open "
+            . "Its commands go with it, and anything you set to open "
             . "it will stop opening anything. This cannot be undone.")
             return
         g_Cfg["menus"].RemoveAt(ref)
@@ -12522,11 +12716,18 @@ class Atlas {
         SetTimer(() => RadialOpen(name, 0, true), -260)
         ; Backstop only: RadialClose brings the window back the moment the
         ; trial ends, whichever way it ended.
-        SetTimer(ObjBindMethod(Atlas, "MenuTryDone"), -7200)
+        Atlas.MenuReturnAfter(-7200)
     }
 
     /** Bring the settings window back after a trial menu, whatever happened. */
+    static MenuReturnAfter(delay) {
+        if !IsObject(Atlas.menuReturnTimer)
+            Atlas.menuReturnTimer := ObjBindMethod(Atlas, "MenuTryDone")
+        SetTimer(Atlas.menuReturnTimer, delay)
+    }
+
     static MenuTryDone(*) {
+        Atlas.MenuReturnAfter(0)
         if IsObject(g_Radial)
             RadialClose(false)
         Atlas.Show()
@@ -13166,8 +13367,8 @@ class Atlas {
      * app, layer, trigger, modifiers, action, value -- is identical, because
      * in the engine it always was.
      */
-    static BindDlg(idx, keyMode := false) {
-        row := idx ? g_Cfg["bindings"][idx] : 0
+    static BindDlg(idx, keyMode := false, seed := 0) {
+        row := idx ? g_Cfg["bindings"][idx] : seed
         w := 660
         h := 486
         Lumi.CloseSelect()
@@ -13193,7 +13394,7 @@ class Atlas {
         apps := AppChoices()
         layers := LayerChoices()
         events := Atlas.EventChoices(keyMode)
-        st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg}
+        st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg, original: row}
 
         Lumi.Label(24, 70, 120, "In program", "dim", "left", 30)
         st.app := Lumi.Select(150, 70, 240, 30, apps,
@@ -13396,6 +13597,11 @@ class Atlas {
     }
 
     static DoSave(st) {
+        if (st.idx && (st.idx > g_Cfg["bindings"].Length
+            || !Lumi.Same(g_Cfg["bindings"][st.idx], st.original))) {
+            Lumi.Toast("This assignment changed elsewhere. Close the editor and reopen it.", "warn")
+            return
+        }
         ; Whatever is in the field RIGHT NOW. Clicking Save while the caret
         ; is still in Value runs this handler nested inside that field's edit
         ; loop, so st.value.value would be the text from before you typed.
@@ -13483,20 +13689,30 @@ class Atlas {
             return
 
         b := NewBinding(app, lay, mods, btn, event, atype, val)
+        if (!st.idx && FindDupBinding(b).Length > 0) {
+            if (MsgBox("Replace the existing assignment for " InputLabel(btn)
+                . " " event " in " AppDisp(app) "?", "RadMapper",
+                "YesNo Icon? Owner" hwnd) != "Yes")
+                return
+        }
         try {
-            if st.idx {
-                if UpsertRowEdit("bindings", b, FindDupBinding(b), st.idx)
-                    Lumi.Toast("Replaced the one you already had", "violet")
-            } else if UpsertBinding(b)
-                Lumi.Toast("Replaced what you already had for this program "
-                    . "and hold", "violet")
+            if st.idx
+                UpsertRowEdit("bindings", b, FindDupBinding(b), st.idx)
             else
-                Lumi.Toast("Saved", "jade")
-            SaveCfg()
+                UpsertBinding(b)
+            st.idx := FindDupBinding(b)[1]
+            st.original := b
             AfterCfgChange()
+            if !SaveCfg() {
+                Lumi.Toast("Applied in memory, but not saved. Check the settings folder and retry.",
+                    "danger", 5000)
+                return
+            }
+            Lumi.Toast("Assignment saved", "jade")
         } catch as e {
             Problem("edit-error", "Atlas save failed: " e.Message)
             Lumi.Toast("Save failed: " e.Message, "danger", 3000)
+            return
         }
         ; Follow the row you just made: scope the panel to its input, so the
         ; list you land back on is the one that now contains it.
@@ -13807,7 +14023,7 @@ class Atlas {
     static MENU_SIZES := ["4 slices — up / right / down / left",
                           "8 slices — every 45°"]
 
-    static MenuDlg() {
+    static MenuDlg(draft := 0) {
         w := 820
         h := 624
         Lumi.CloseSelect()
@@ -13817,11 +14033,12 @@ class Atlas {
             try Atlas.dlg.Dispose()
             Atlas.dlg := 0
         }
-        menu := Atlas.MenuSel()
+        menu := IsObject(draft) ? draft.menu : Atlas.MenuSel()
         if !IsObject(menu)
             return
-        ref := Atlas.MenuSelRef()
+        ref := IsObject(draft) ? draft.ref : Atlas.MenuSelRef()
         slices := MGet(menu, "slices", [])
+        count := slices.Length > 4 ? 8 : 4
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
                      Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
@@ -13832,12 +14049,12 @@ class Atlas {
         dlg.Drag()
 
         Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Menu around the pointer", "title")
+        Lumi.Label(24, 16, 520, "Set up your radial menu", "title")
         Lumi.Label(24, 42, w - 48,
-            "Slice 1 points up; the rest run clockwise.", "mute", "left", 20)
+            "Name each command, choose its action, then record its shortcut.", "mute", "left", 20)
         Lumi.Rule(24, 66, w - 48)
 
-        st := {ref: ref, dlg: dlg, rows: []}
+        st := {ref: ref, dlg: dlg, rows: [], count: count, original: g_Cfg["menus"][ref]}
 
         Lumi.Label(24, 84, 60, "Name", "dim", "left", 30)
         st.name := Lumi.Field(92, 84, 240, 30, MGet(menu, "name", ""), 0,
@@ -13851,10 +14068,10 @@ class Atlas {
 
         Lumi.Label(676, 84, 50, "Size", "dim", "left", 30)
         st.size := Lumi.Select(676, 118, 120, 30, ["4", "8"],
-            slices.Length > 4 ? 2 : 1)
+            count = 8 ? 2 : 1, (i, t) => Atlas.MenuResize(st, i))
 
         Lumi.Label(24, 122, 320,
-            "Leave the program blank and this menu is used everywhere.",
+            "Program chooses the automatic menu. A named binding opens it directly.",
             "mute", "left", 22)
         Lumi.Rule(24, 156, w - 48)
 
@@ -13864,18 +14081,14 @@ class Atlas {
         Lumi.Label(520, 164, 200, "Details", "section")
 
         i := 1
-        Loop 8 {
+        Loop count {
             ry := 186 + (i - 1) * 38
             sl := slices.Has(i) ? slices[i] : 0
             act := IsObject(sl) ? MGet(sl, "action", 0) : 0
             code := IsObject(act) ? MGet(act, "type", "none") : "none"
             val := IsObject(act) ? MGet(act, "value", "") : ""
             lbl := IsObject(sl) ? MGet(sl, "label", "") : ""
-            ; Both direction names, because the size selector above changes
-            ; which one applies and the rows do not redraw until Save.
-            dir := RADIAL_DIR8[i]
-            if (Mod(i, 2) = 1)
-                dir .= " · " RADIAL_DIR4[(i + 1) // 2]
+            dir := (count = 4 ? RADIAL_DIR4 : RADIAL_DIR8)[i]
             Lumi.Label(24, ry, 90, dir, "dim", "left", 30)
             r := {dlg: dlg}
             r.label := Lumi.Field(116, ry, 140, 30, lbl, 0, "label", true)
@@ -13887,13 +14100,12 @@ class Atlas {
         }
 
         Lumi.Para(24, 494, w - 48, 56,
-            "With 4 commands only the first four rows are used, and they "
-            . "point up / right / down / left. A row left as “Disabled” is a "
-            . "gap: flicking that way does nothing, which is what you want "
-            . "for a direction you have not decided about yet.", "mute")
+            "For a PACS shortcut, choose Send keys and use Rec to press the "
+            . "shortcut from your viewer settings. Disabled leaves a direction "
+            . "empty. Save, then Assign a button and Practice safely.", "mute")
 
         Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Chip(24, h - 52, 240, 20, "eight commands, one ring", "cyan")
+        Lumi.Chip(24, h - 52, 240, 20, count " directions · clockwise", "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
@@ -13905,6 +14117,47 @@ class Atlas {
         dlg.Activate()
     }
 
+    static MenuResize(st, index) {
+        Lumi.EndEdit()
+        count := index = 2 ? 8 : 4
+        if (count = st.count || !Atlas.DlgAlive(st))
+            return
+        if (st.ref > g_Cfg["menus"].Length
+            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
+            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
+            return
+        }
+        if (count = 4) {
+            occupied := false
+            for i in [2, 4, 6, 8] {
+                r := st.rows[i]
+                if (Trim(Lumi.FieldValue(r.label)) != ""
+                    || ACT_CODES[r.act.index] != "none")
+                    occupied := true
+            }
+            if (occupied && MsgBox("Switch to 4 directions?`n`nThe four diagonal "
+                . "commands will be removed from this draft. Up, Right, Down "
+                . "and Left stay in place. Cancel the editor to keep the saved menu.",
+                "RadMapper", "YesNo Icon? Owner" Lumi.HwndOf(st.dlg)) != "Yes") {
+                st.size.index := 2
+                Lumi.__SelectLabel(st.size)
+                Lumi.Refresh(st.dlg)
+                return
+            }
+        }
+        slices := []
+        for r in st.rows
+            slices.Push(MenuSlice(Lumi.FieldValue(r.label),
+                ACT_CODES[r.act.index], Lumi.FieldValue(r.value)))
+        app := AppCodeFromDisp(st.app.items[st.app.index])
+        menu := Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
+            "slices", ResizeMenuSlices(slices, count))
+        draft := {ref: st.ref, menu: menu}
+        ; Unwind the dropdown callback before disposing its owning layer.
+        SetTimer(() => (Atlas.DlgAlive(st)
+            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
+    }
+
     static SaveMenu(st) {
         return (*) => Atlas.DoSaveMenu(st)
     }
@@ -13914,6 +14167,10 @@ class Atlas {
         if (!st.ref || st.ref > MGet(g_Cfg, "menus", []).Length) {
             Lumi.Toast("That menu is no longer there", "warn")
             Atlas.CloseDlg()
+            return
+        }
+        if !Lumi.Same(g_Cfg["menus"][st.ref], st.original) {
+            Lumi.Toast("This menu changed elsewhere. Close this editor and reopen it.", "warn")
             return
         }
         hwnd := Lumi.HwndOf(st.dlg)
@@ -13933,7 +14190,7 @@ class Atlas {
         code := AppCodeFromDisp(apps.Has(st.app.index)
             ? apps[st.app.index] : "Global (all apps)")
         app := (code = "*") ? "" : code
-        count := (st.size.index = 2) ? 8 : 4
+        count := st.count
 
         ; Validate EVERY row before writing ANY of them, exactly as the wheel
         ; deck does: a menu half-applied because slice six had a typo is
@@ -13969,11 +14226,16 @@ class Atlas {
                 live += 1
         }
         m := g_Cfg["menus"][st.ref]
+        oldName := m["name"]
         m["name"] := name
         m["app"] := app
         m["slices"] := plan
-        SaveCfg()
+        RenameMenuBindings(oldName, name)
         AfterCfgChange()
+        if !SaveCfg() {
+            Lumi.Toast("Changes are in memory only. Check the settings folder, then Save again.", "danger", 5000)
+            return
+        }
         Atlas.CloseDlg()
         Atlas.Build()
         Lumi.Toast(live = 0
@@ -14065,7 +14327,7 @@ class Atlas {
         sig := (g_Enabled ? "1" : "0")
             . (IsObject(g_ClickLock) ? g_ClickLock.held : "")
             . (IsObject(g_ScrollPtr) ? "S" : "")
-            . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length
+            . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length "|" g_CfgSaveFailed
         if (sig = Atlas.lastSig)
             return
         Atlas.lastSig := sig
@@ -14082,6 +14344,10 @@ class Atlas {
         Lumi.EndEdit()
         try {
             ShowClassic()
+            ; "test" lands on the classic Diagnostics tab, which hosts the
+            ; live input monitor; anything else keeps the last tab.
+            if (which = "test")
+                try NavShow(8)
             Lumi.Toast("Opened the older settings window", "cyan")
         }
     }

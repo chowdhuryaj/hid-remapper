@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#15161f"><title>RadMapper · Design Preview</title>
+<style>
+:root{color-scheme:dark;--bg:#15161f;--surface:#1e1f2b;--raised:#282a36;--hover:#343746;--ink:#f2f3f8;--muted:#b0b5cc;--line:#44485d;--pink:#ff6fb5;--green:#dceb5a;--cyan:#7df3ff;font:15px/1.5 "Segoe UI",-apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink);background:var(--bg)}*{box-sizing:border-box}body{margin:0}button,input,select,summary{font:inherit}a{color:var(--cyan);text-underline-offset:4px}button,.button{display:inline-flex;justify-content:center;align-items:center;gap:8px;padding:10px 16px;min-height:44px;border:1px solid var(--line);border-radius:5px;background:var(--raised);color:var(--ink);text-decoration:none;cursor:pointer;touch-action:manipulation}button:hover,.button:hover{background:var(--hover);border-color:var(--muted)}:focus-visible{outline:3px solid var(--cyan);outline-offset:4px}input,select{width:100%;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:4px;padding:10px 12px;min-height:44px;margin-top:8px;caret-color:var(--pink)}input:read-only{color:var(--muted)}label{display:block;font-weight:600}input,select,.hint{font-weight:400}::placeholder{color:var(--muted)}::selection{background:var(--pink);color:var(--bg)}h1,h2,h3,p{margin:0}h1{font-size:30px;line-height:1.2;letter-spacing:-.025em;text-wrap:balance;font-weight:600}h2{font-size:18px;line-height:1.4;font-weight:600}h3{font-size:19px;font-weight:600}p{color:var(--muted);text-wrap:pretty;max-width:70ch}.intro{font-size:16px;margin-top:12px;max-width:65ch}.primary{background:var(--pink);border-color:var(--pink);color:var(--bg);font-weight:650}.primary:hover{background:#ff9bcb;border-color:#ff9bcb}.preview-note{min-height:42px;padding:10px 30px;background:#101117;color:var(--muted);font-size:12px;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}.shell{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:192px minmax(0,1fr);grid-template-rows:74px minmax(710px,auto);border-inline:1px solid #252733}header{grid-column:1/-1;display:flex;align-items:center;gap:18px;padding:0 28px;border-bottom:1px solid var(--line);background:var(--surface)}.brand{font-size:21px;letter-spacing:-.02em;display:flex;gap:7px;align-items:center}.brand-dot{height:6px;width:6px;background:var(--pink);border-radius:50%}.version{font-size:12px;color:var(--muted)}.engine-status{margin-left:auto;color:var(--green);font-size:13px}header button{font-size:13px;min-height:36px;padding:6px 12px}kbd{font-size:11px;border:1px solid var(--line);border-radius:3px;padding:1px 4px;color:var(--ink)}aside{background:var(--surface);padding:28px 14px;display:flex;flex-direction:column;border-right:1px solid #303342}nav{display:grid;gap:5px}nav a{padding:12px 13px;color:var(--muted);text-decoration:none;border-radius:4px;font-size:14px}nav a:hover{background:var(--raised);color:var(--ink)}nav a[aria-current]{background:#432b42;color:var(--ink)}.rail-note{font-size:12px;line-height:1.8;color:var(--muted);padding:28px 13px}.rail-bottom{margin-top:auto;border-top:1px solid var(--line);padding:20px 5px 0}.rail-bottom button{width:100%;font-size:13px}.rail-bottom p{font-size:11px;line-height:2;margin-top:16px}main{padding:40px 44px 26px;min-width:0}section[hidden]{display:none}.welcome-strip{display:flex;gap:16px;align-items:center;padding:22px 0;border-block:1px solid var(--line);margin:30px 0 34px}.welcome-strip p{margin-top:4px;font-size:14px}.state-dot{background:var(--green);height:8px;width:8px;border-radius:50%;flex:none}.home-actions{display:grid;grid-template-columns:1.45fr 1fr;margin:20px 0 36px;border-bottom:1px solid var(--line)}.feature-link,.plain-link{color:var(--ink);text-decoration:none;padding:28px 22px 34px 0}.feature-link{display:flex;align-items:center;gap:22px}.feature-link svg{width:104px;flex:none;fill:none;stroke:var(--pink);stroke-width:1.5}.feature-link p,.plain-link p{margin-top:10px;font-size:14px;max-width:30ch}.plain-link{padding-left:30px;border-left:1px solid var(--line)}.text-action{display:block;color:var(--cyan);font-size:14px;margin-top:20px}.home-actions a:hover .text-action{text-decoration:underline}.home-help p{margin:10px 0 14px;max-width:63ch}.small-note{font-size:12px;margin-top:28px;max-width:80ch}.heading-row{display:flex;justify-content:space-between;align-items:center;gap:20px}.steps{display:flex;gap:28px;color:var(--muted);padding:16px 0 16px 22px;margin:24px 0 28px;border-block:1px solid var(--line);font-size:13px}.steps li{padding-right:16px}.steps .current{color:var(--pink)}.menu-meta{display:grid;grid-template-columns:1.15fr 1fr .85fr;gap:18px;font-size:13px}.editor-grid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr);gap:38px;margin-top:30px}.direction-panel{display:flex;align-items:center;flex-direction:column;justify-content:flex-start;padding-top:12px}.wheel{width:310px;height:310px;position:relative;flex:none;border:1px solid var(--line);border-radius:50%;background:var(--surface)}.wheel:before{content:"";position:absolute;inset:36px;border:1px dashed var(--line);border-radius:50%;pointer-events:none}.wheel button{position:absolute;transform:translate(-50%,-50%);min-height:44px;width:94px;padding:7px 3px;font-size:11px;line-height:1.3;background:var(--raised);border-color:var(--line);overflow-wrap:anywhere}.wheel button.selected{border-color:var(--pink);background:#432b42}.wheel button:hover{border-color:var(--cyan)}.wheel button strong{display:block;font-size:12px;font-weight:600}.wheel .center{left:50%;top:50%;width:76px;height:76px;border-radius:50%;color:var(--muted);background:var(--bg)}.wheel-caption{text-align:center;font-size:12px;margin-top:20px}.direction-panel .small-note{text-align:center;margin-top:18px}.command-editor{padding:0 0 8px 28px;border-left:1px solid var(--line)}.command-editor h2{margin-bottom:18px;color:var(--pink)}.command-editor label{font-size:13px;margin-top:16px}.command-editor button{margin-top:12px;font-size:13px}.hint{display:block;font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}.gentle-note{border-top:1px solid var(--line);padding-top:16px;margin-top:22px;font-size:13px}.gentle-note p{margin-top:6px}.save-bar{display:flex;align-items:center;gap:12px;padding-top:22px;margin-top:30px;border-top:1px solid var(--line);flex-wrap:wrap}.save-bar>span{margin-right:auto;max-width:40ch;font-size:12px;color:var(--muted)}.save-bar button,.save-bar .button{font-size:13px}.binding-layout{display:grid;grid-template-columns:1fr 1fr;gap:60px}.binding-fields label{margin:18px 0;font-size:13px}.binding-explainer{border-left:1px solid var(--line);padding-left:48px}.binding-explainer svg{width:130px;display:block;margin:20px auto 28px;fill:none;stroke:var(--muted);stroke-width:2}.binding-explainer svg .thumb{fill:var(--pink);stroke:var(--pink)}.binding-explainer p{margin-top:12px;font-size:14px}.binding-explainer .hint{font-size:12px}details{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;font-size:13px}summary{cursor:pointer;color:var(--cyan);min-height:30px}.guide-list{max-width:70ch;margin:30px 0;padding-left:24px}.guide-list li{padding-left:12px;margin-bottom:26px}.guide-list li::marker{color:var(--pink)}.guide-list p{margin-top:8px;font-size:14px}dialog{background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:8px;max-width:min(650px,calc(100vw - 32px));padding:28px;box-shadow:0 18px 65px #0008;overscroll-behavior:contain}dialog::backdrop{background:#080911d9}dialog p{margin-top:16px;font-size:14px}dialog .wheel{margin:28px auto}.dialog-heading{display:flex;align-items:center;gap:20px}.dialog-heading button{margin-left:auto}.dialog-actions{display:flex;gap:12px;justify-content:flex-end;margin-top:24px}.skip{position:absolute;top:-100px;left:12px;z-index:5;background:var(--raised);padding:12px}.skip:focus{top:8px}
+@media(max-width:1050px){main{padding:30px 24px}.shell{grid-template-columns:165px minmax(0,1fr)}.editor-grid{gap:20px}.command-editor{padding-left:18px}.wheel{width:280px;height:280px}.binding-layout{gap:30px}.binding-explainer{padding-left:24px}.heading-row{align-items:flex-start}.heading-row h1{font-size:26px}}
+@media(max-width:760px){.shell{display:block}.preview-note{padding:10px 16px}.preview-note span{display:none}header{padding:14px 16px;flex-wrap:wrap;gap:12px}.version{display:none}.engine-status{font-size:12px}aside{padding:10px 12px;border-right:0;border-bottom:1px solid var(--line)}nav{display:flex;flex-wrap:wrap;gap:0}nav a{font-size:12px;padding:10px}.rail-note,.rail-bottom{display:none}main{padding:26px 20px}h1{font-size:26px}.home-actions{grid-template-columns:1fr}.plain-link{border-left:0;border-top:1px solid var(--line);padding:24px 0}.feature-link{padding-top:12px}.menu-meta{grid-template-columns:1fr 1fr}.menu-meta label:first-child{grid-column:1/-1}.editor-grid{grid-template-columns:1fr}.command-editor{border-left:0;border-top:1px solid var(--line);padding:22px 0 0}.heading-row{flex-direction:column}.steps{gap:12px;font-size:11px}.steps li{padding-right:0}.binding-layout{grid-template-columns:1fr}.binding-explainer{display:none}.save-bar>span{width:100%;max-width:none;margin-bottom:8px}.dialog-heading{align-items:flex-start}.dialog-heading h2{font-size:17px}.dialog-heading button{padding:8px}.home-actions .feature-link svg{width:80px}dialog{padding:20px}.dialog-actions{flex-wrap:wrap}}
+
+.wheel button{flex-direction:column;gap:2px;width:104px;height:58px}.wheel button span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-width:100%}.wheel.eight button:not(.center){width:80px;height:64px}.wheel button strong{flex:none;white-space:nowrap}.wheel .center{width:76px;height:76px}main:focus-visible{outline-offset:-3px}
+@media(max-width:360px){.wheel{width:250px;height:250px}.wheel.eight button:not(.center){width:70px;height:58px;font-size:10px}.wheel.eight button strong{font-size:10px}}
+
+@media(max-width:760px){.steps{display:block}.steps li{margin:5px 0}}
+
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="preview-note">Interactive design preview <span>Local sample data · No mouse remapping or PACS commands</span></div>
+<div class="shell">
+<header><strong class="brand">RadMapper<span class="brand-dot" aria-hidden="true"></span></strong><span class="version">0.6.0.2 · preview</span><span id="engine-status" class="engine-status">Preview active</span><button id="help-button">Quick help <kbd>?</kbd></button></header>
+<aside><nav aria-label="Main navigation"><a href="#home">Home</a><a href="#menus">Radial menus</a><a href="#binding">Button assignment</a><a href="#guide">Setup guide</a></nav><div class="rail-note">A little setup.<br>A more familiar mouse.</div><div class="rail-bottom"><button id="pause" aria-pressed="false">Pause preview</button><p>Windows recovery shortcut<br><kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Q</kbd></p></div></aside>
+<main id="main" tabindex="-1">
+<section id="home" data-page>
+<h1>Make room for your workflow.</h1><p class="intro">Start with one shortcut. Keep the commands you reach for close to your hand.</p>
+<div class="welcome-strip"><span class="state-dot" aria-hidden="true"></span><div><strong>You’re in a safe preview.</strong><p>Try the setup flow here on your Mac. Your mouse and keyboard stay unchanged.</p></div></div>
+<h2>What would you like to set up?</h2>
+<div class="home-actions"><a class="feature-link" href="#menus"><svg viewBox="0 0 120 120" aria-hidden="true"><circle cx="60" cy="60" r="46"/><circle cx="60" cy="60" r="14"/><path d="M60 14v32m0 28v32M14 60h32m28 0h32"/></svg><div><h3>A radial menu</h3><p>Four familiar directions. Your most-used commands.</p><span class="text-action">Set up your menu →</span></div></a><a class="plain-link" href="#binding"><h3>A mouse button</h3><p>Choose what happens when you hold a button.</p><span class="text-action">Assign a button →</span></a></div>
+<div class="home-help"><h2>New to RadMapper?</h2><p>A binding means “when I press this, do that.” You can limit it to one program and practice before using it.</p><a href="#guide">Read the short setup guide →</a></div>
+<p class="small-note">The Windows script ships with a dictation shortcut and thumb-button monitor switching. Review those defaults before using it.</p>
+</section>
+<section id="menus" data-page hidden>
+<div class="heading-row"><div><h1>Your commands, within reach.</h1><p class="intro">Edit a menu, assign a button, then practice.</p></div><button id="practice" class="primary">Practice safely</button></div>
+<ol class="steps"><li class="current">Edit commands</li><li>Assign a button</li><li>Practice safely</li></ol>
+<div class="menu-meta"><label>Menu name<input id="menu-name" name="menu-name" value="PACS" maxlength="48" autocomplete="off"></label><label>Program<select id="program" name="program"><option>PACS</option><option>PowerScribe</option><option>All programs</option></select></label><label>Directions<select id="size" name="size"><option value="4">4 · Start here</option><option value="8">8 · Add diagonals</option></select></label></div>
+<div class="editor-grid"><div class="direction-panel"><div id="wheel" class="wheel" aria-label="Choose a direction to edit"></div><p class="wheel-caption">Select a direction to edit its command.<br>The center always cancels.</p><p class="small-note">PACS commands below are labels only.<br>Add shortcuts from your viewer settings.</p></div><div class="command-editor"><h2 id="direction-heading">Up</h2><label>Command label<input id="command-label" name="command-label" maxlength="40" autocomplete="off"></label><label>What should it do?<select id="action" name="action"><option value="none">Disabled · Leave this direction empty</option><option value="keys">Send keys</option><option value="ps_dictate">PowerScribe: toggle dictation</option><option value="ps_next">PowerScribe: next field</option></select></label><div id="shortcut-group"><label>Shortcut<input id="shortcut" name="shortcut" autocomplete="off" spellcheck="false" placeholder="For example, Ctrl + Shift + M…" aria-describedby="shortcut-hint"></label><button id="record">Record shortcut</button><p id="shortcut-hint" class="hint">Select Record, then press your viewer’s shortcut. Escape cancels. Use Control for a Windows Ctrl shortcut.</p></div><div class="gentle-note"><strong>One command is enough to start.</strong><p>Leave the other directions disabled until you need them.</p></div></div></div>
+<div class="save-bar"><span id="menu-status" role="status">4 directions · No commands assigned</span><button id="save-menu" class="primary">Save menu in preview</button><a href="#binding" class="button">Assign a button →</a></div>
+<p class="small-note">This visual wheel editor is a proposed next UI. The patched AHK editor uses a direction table with the same setup sequence.</p>
+</section>
+<section id="binding" data-page hidden>
+<h1>Give your menu a button.</h1><p class="intro">Hold a button to open the menu. Move toward a command, then let go.</p>
+<ol class="steps"><li>Edit commands</li><li class="current">Assign a button</li><li>Practice safely</li></ol>
+<form id="binding-form"><div class="binding-layout"><div class="binding-fields"><label>In program<select name="binding-program" id="binding-program"><option>PACS</option><option>PowerScribe</option><option>All programs</option></select><span class="hint">Use one program first to avoid changing buttons elsewhere.</span></label><label>Button<select id="button-choice" name="button-choice"><option>X1 Back (thumb)</option><option>X2 Forward (thumb)</option><option>Middle button</option></select></label><label>When you<select name="trigger" id="trigger"><option value="hold">Hold</option><option value="tap">Tap</option></select><span id="trigger-hint" class="hint">Hold to open. Release to choose. Release in the center to cancel.</span></label><label>Open this menu<input id="binding-menu" name="binding-menu" value="PACS" readonly></label><details><summary>Advanced: another button must be held</summary><label>Only while holding<select name="layer" id="layer"><option>None</option><option>Left button</option><option>Right button</option></select></label><p class="hint">Leave this as None for your first assignment.</p></details></div><div class="binding-explainer"><svg viewBox="0 0 180 250" aria-hidden="true"><path d="M35 110C35 50 48 20 90 20s55 30 55 90v45c0 50-24 75-55 75s-55-25-55-75z"/><path d="M90 20v100M35 120h110"/><rect x="81" y="55" width="18" height="40" rx="9"/><rect class="thumb" x="26" y="130" width="13" height="34" rx="6"/></svg><h2>A deliberate press.</h2><p>A thumb button is a useful place to start. Keep left and right clicks familiar.</p><p class="hint">Viewer-specific hold gestures can take priority. Check your assignment in the intended program on Windows.</p></div></div><div class="save-bar"><span id="binding-status" role="status">Not assigned in this preview</span><button class="primary" type="submit">Save assignment in preview</button></div></form>
+</section>
+<section id="guide" data-page hidden><h1>From setup to muscle memory.</h1><p class="intro">A short route through RadMapper.</p><ol class="guide-list"><li><h2>Choose one real task.</h2><p>Start with a command you already use, such as moving to the next series. Find its shortcut in your viewer’s settings. Shortcut keys vary between workstations.</p></li><li><h2>Make the menu readable.</h2><p>Open Menus → Edit commands. Start with four directions. Add a short label, choose Send keys, then use Rec. Leave unused directions Disabled.</p></li><li><h2>Assign the opening button.</h2><p>Choose Assign a button. The patched script fills in the menu and Hold trigger. Choose the program and button, review any replacement warning, then save.</p></li><li><h2>Practice the movement.</h2><p>Practice safely never sends a command. Hold to look, move toward a direction, then release. Center and Escape cancel. A tap binding instead selects by resting in a direction.</p></li><li><h2>Check it on Windows.</h2><p>Test one assignment in a nonclinical window first, then verify it in your intended viewer. F1 opens help. Ctrl + Alt + Q releases held inputs. The classic settings window offers standard Windows controls.</p></li></ol><a class="button primary" href="#menus">Set up a radial menu</a></section>
+</main></div>
+<dialog id="practice-dialog" aria-labelledby="practice-heading"><div class="dialog-heading"><h2 id="practice-heading">Practice, without sending a command.</h2><button id="close-practice">Close</button></div><p>Click a direction, or use Tab then Enter. This preview demonstrates selection; the Windows menu uses pointer movement.</p><div id="practice-wheel" class="wheel"></div><p id="practice-result" role="status">Choose a direction. Escape closes practice.</p></dialog>
+<dialog id="resize-dialog" aria-labelledby="resize-heading"><h2 id="resize-heading">Remove the diagonal commands?</h2><p>Up, Right, Down and Left stay in place. Switching to four directions removes the diagonals from this draft.</p><div class="dialog-actions"><button id="cancel-resize" autofocus>Keep 8 directions</button><button id="confirm-resize">Switch to 4 directions</button></div></dialog>
+<script>
+'use strict';
+function resizeSlots(slots, count) {
+  if (![4, 8].includes(count) || ![4, 8].includes(slots.length)) throw new Error('Use 4 or 8 directions');
+  return Array.from({length: count}, (_, i) => {
+    const from = count === slots.length ? i : count === 8 ? (i % 2 === 0 ? i / 2 : -1) : i * 2;
+    return from >= 0 ? {...slots[from]} : {label: '', action: 'none', shortcut: ''};
+  });
+}
+if (typeof module !== 'undefined') module.exports = {resizeSlots};
+if (typeof document !== 'undefined') {
+  const $ = id => document.getElementById(id);
+  let slots = ['Next series', 'Measure', 'Previous series', 'Zoom fit'].map(label => ({label, action:'none', shortcut:''}));
+  let selected = 0, dirty = false, recording = false, paused = false, routed = false;
+  const directions = () => slots.length === 4 ? ['Up','Right','Down','Left'] : ['Up','Up-right','Right','Down-right','Down','Down-left','Left','Up-left'];
+  const say = text => {$('menu-status').textContent = text;};
+  const markDirty = () => {dirty = true; say('Draft changed · Save when ready');};
+  function route() {
+    recording = false;
+    $('record').textContent = 'Record shortcut';
+    const pages = ['home','menus','binding','guide'];
+    const page = pages.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'home';
+    document.querySelectorAll('[data-page]').forEach(el => {el.hidden = el.id !== page;});
+    document.querySelectorAll('nav a').forEach(a => {
+      if(a.hash === '#' + page) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
+    });
+    $('binding-menu').value = $('menu-name').value.trim() || 'Unnamed menu';
+    if(routed) $('main').focus({preventScroll:true});
+    routed = true;
+  }
+  function drawWheel(container, practice = false) {
+    container.replaceChildren();
+    container.classList.toggle("eight",slots.length === 8);
+    const center = document.createElement('button');
+    center.type = 'button'; center.className = 'center'; center.textContent = practice ? 'Cancel' : 'Center\ncancels';
+    center.setAttribute('aria-label', practice ? 'Cancel practice' : 'Center cancels a radial menu');
+    center.addEventListener('click', () => {
+      if(practice) {$('practice-result').textContent = 'Cancelled · No command sent';}
+      else say('Release in the center to cancel on Windows.');
+    });
+    container.append(center);
+    slots.forEach((slot,i) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      const a = i * 2 * Math.PI / slots.length;
+      const radius = slots.length === 8 ? 40 : 36;
+      button.style.left = (50 + radius * Math.sin(a)) + '%';
+      button.style.top = (50 - radius * Math.cos(a)) + '%';
+      const label = document.createElement('strong'); label.textContent = directions()[i];
+      const detail = document.createElement('span'); detail.textContent = slot.label || 'Add command';
+      button.append(label,detail);
+      button.title = directions()[i] + ": " + (slot.label || "Add command");
+      button.setAttribute('aria-label', directions()[i] + ': ' + (slot.label || 'Empty') + (slot.action === 'none' ? ', disabled command' : ''));
+      if(!practice){button.classList.toggle('selected',i === selected);button.setAttribute('aria-pressed',String(i === selected));}
+      button.addEventListener('click',()=>{
+        if(practice){$('practice-result').textContent = paused ? 'Preview paused · No command sent' : slot.action === 'none' ? 'Empty direction · No command sent' : 'Would run: ' + slot.label + ' · No command sent';}
+        else {selected = i; refresh(); $('command-label').focus();}
+      });
+      container.append(button);
+    });
+  }
+  function refresh() {
+    drawWheel($('wheel'));
+    const slot = slots[selected];
+    $('direction-heading').textContent = directions()[selected] + ' · Command';
+    $('command-label').value = slot.label;
+    $('action').value = slot.action;
+    $('shortcut').value = slot.shortcut;
+    $('shortcut-group').hidden = slot.action !== 'keys';
+    $('size').value = String(slots.length);
+  }
+  function update() {
+    slots[selected] = {label:$('command-label').value, action:$('action').value, shortcut:$('shortcut').value};
+    $('shortcut-group').hidden = slots[selected].action !== 'keys';
+    if(slots[selected].action !== 'keys') {recording = false; $('record').textContent = 'Record shortcut';}
+    drawWheel($('wheel')); markDirty();
+  }
+  ['command-label','action','shortcut'].forEach(id=>$(id).addEventListener('input',update));
+  ['menu-name','program'].forEach(id=>$(id).addEventListener('input',markDirty));
+  function resize(count){slots = resizeSlots(slots,count);selected = 0;refresh();markDirty();}
+  $('size').addEventListener('change',()=>{
+    const count = Number($('size').value);
+    if(count === 4 && slots.length === 8 && slots.some((s,i)=>i%2 && (s.label.trim() || s.action !== 'none'))){
+      $('size').value = '8'; $('resize-dialog').showModal();
+    } else resize(count);
+  });
+  $('cancel-resize').addEventListener('click',()=>$('resize-dialog').close());
+  $('confirm-resize').addEventListener('click',()=>{resize(4);$('resize-dialog').close();});
+  $('record').addEventListener('click',()=>{
+    recording = !recording;
+    $('record').textContent = recording ? 'Press your shortcut…' : 'Record shortcut';
+    say(recording ? 'Recording in this page · Escape cancels' : 'Recording cancelled');
+  });
+  document.addEventListener('keydown',event=>{
+    if(!recording) return;
+    event.preventDefault(); event.stopPropagation();
+    if(event.key === 'Escape'){recording = false;$('record').textContent = 'Record shortcut';say('Recording cancelled');return;}
+    if(['Control','Alt','Shift','Meta'].includes(event.key))return;
+    const key = event.key === ' ' ? 'Space' : event.key.length === 1 ? event.key.toUpperCase() : event.key;
+    $('shortcut').value = [event.ctrlKey?'Ctrl':'',event.altKey?'Alt':'',event.shiftKey?'Shift':'',event.metaKey?'Win':'',key].filter(Boolean).join(' + ');
+    recording = false;$('record').textContent = 'Record shortcut';update();
+  },true);
+  $('save-menu').addEventListener('click',()=>{
+    const name = $('menu-name').value.trim();
+    if(!name){say('Give your menu a name before saving.');$('menu-name').focus();return;}
+    const invalid = slots.findIndex(s=>s.action === 'keys' && !s.shortcut.trim());
+    if(invalid >= 0){selected = invalid;refresh();say(directions()[invalid] + ' needs a shortcut. Record one or choose Disabled.');$('shortcut').focus();return;}
+    for(const s of slots) if(s.action !== 'none' && !s.label.trim()) s.label = s.action === 'keys' ? 'Send keys' : s.action === 'ps_dictate' ? 'Dictate' : 'Next field';
+    dirty = false;refresh();$('binding-menu').value = name;
+    const live = slots.filter(s=>s.action !== 'none').length;
+    say('Saved for this preview session · ' + live + ' of ' + slots.length + ' directions assigned');
+  });
+  $('practice').addEventListener('click',()=>{drawWheel($('practice-wheel'),true);$('practice-result').textContent = 'Choose a direction. Escape closes practice.';$('practice-dialog').showModal();});
+  $('close-practice').addEventListener('click',()=>$('practice-dialog').close());
+  $('binding-form').addEventListener('submit',e=>{e.preventDefault();$('binding-status').textContent = 'Preview only: ' + $('trigger').selectedOptions[0].text + ' ' + $('button-choice').value + ' → ' + $('binding-menu').value;});
+  $('trigger').addEventListener('change',()=>{$('trigger-hint').textContent = $('trigger').value === 'hold' ? 'Hold to open. Release to choose. Release in the center to cancel.' : 'Tap opens the menu. Rest in a direction to select. Escape cancels.';});
+  $('pause').addEventListener('click',()=>{paused = !paused;$('pause').setAttribute('aria-pressed',String(paused));$('pause').textContent = paused?'Resume preview':'Pause preview';$('engine-status').textContent = paused?'Preview paused':'Preview active';});
+  $('help-button').addEventListener('click',()=>{location.hash = 'guide';});
+  window.addEventListener('hashchange',route);
+  window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+  refresh();route();
+}
+
+</script>
+</body></html>
