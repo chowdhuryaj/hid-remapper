@@ -26,6 +26,15 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1e: STARTER PACKS. Home > "Apply a starter pack" lists five named
+;  sets of ordinary bindings -- PowerScribe on the thumb buttons, the PACS
+;  wheel on button 4, Window presets on button 5, drag scroll on button 5,
+;  and the shipped monitor hopping -- and applies one in a click through
+;  the same UpsertBinding the editor uses. Anything a pack would replace is
+;  listed and confirmed first. There is no pack state: the result is rows
+;  on the Mouse page, editable and deletable like any other. "Test my
+;  mouse" moved off Home; it lives on the Diagnostics page.
+;
 ;  v0.6.1d: SIMPLE MODE, on by default. The rail shows Home, Mouse,
 ;  Keyboard, Menus, Settings and Diagnostics; the action dropdown shows the
 ;  sixteen things a radiologist actually binds (plus whatever a row already
@@ -1590,6 +1599,84 @@ MenuIsShippedPacs(m) {
     v := (i) => MGet(MGet(sl[i], "action", Map()), "value", "")
     t := (i) => MGet(MGet(sl[i], "action", Map()), "type", "")
     return (v(1) = "{F8}" && v(5) = "{F7}" && t(7) = "radial")
+}
+
+; ── STARTER PACKS ────────────────────────────────────────────────────────
+; A pack is a handful of ORDINARY bindings with a name. Applying one writes
+; those rows through the same UpsertBinding the editor uses, so what you get
+; is exactly what you could have built by hand -- editable, deletable, and
+; visible on the Mouse page. There is no pack state to unapply: delete the
+; rows. Each row: [app, layer, mods, button, event, type, value].
+StarterPacks() {
+    return [
+        {name: "PowerScribe on the thumb buttons",
+         sub:  "button 4 = previous field, button 5 = next field, everywhere",
+         rows: [["*", "*", "", "XButton1", "tap", "ps_prev", ""],
+                ["*", "*", "", "XButton2", "tap", "ps_next", ""]]},
+        {name: "PACS wheel on button 4",
+         sub:  "hold button 4 in PACS for the radial menu",
+         rows: [["PACS", "*", "", "XButton1", "hold", "radial", "PACS"]]},
+        {name: "Window presets on button 5",
+         sub:  "hold button 5 in PACS for the numbered preset ring",
+         rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
+        {name: "Drag scroll on button 5",
+         sub:  "hold button 5 and move the mouse to scroll, everywhere",
+         rows: [["*", "*", "", "XButton2", "hold", "scrollptr", ""]]},
+        {name: "Monitor hopping on the thumb buttons",
+         sub:  "the shipped default: tap 4 / 5 to jump the pointer left / right",
+         rows: [["*", "*", "", "XButton1", "tap", "tele_prev", ""],
+                ["*", "*", "", "XButton2", "tap", "tele_next", ""]]}]
+}
+
+StarterPackByName(name) {
+    for pk in StarterPacks() {
+        if (pk.name = name)
+            return pk
+    }
+    return 0
+}
+
+; Apply a pack by name. Rows that would REPLACE a real (non-inert) binding
+; are counted and confirmed first; the shipped defaults count too, because
+; "the thumb buttons stopped hopping monitors" would otherwise be a mystery.
+StarterPackApply(name) {
+    pk := StarterPackByName(name)
+    if !IsObject(pk) {
+        HUD("No starter pack called " name, "warn")
+        return
+    }
+    rows := []
+    replacing := []
+    for r in pk.rows {
+        b := NewBinding(r[1], r[2], r[3], r[4], r[5], r[6], r[7])
+        if (r[6] = "radial" && r[7] != "" && !MenuByName(r[7])) {
+            HUD("The menu " r[7] " is missing — add it on the Menus page first", "warn")
+            return
+        }
+        for d in FindDupBinding(b) {
+            old := g_Cfg["bindings"][d]
+            if !IsInertRow(old)
+                replacing.Push(InputLabel(r[4]) " " r[5] ": " DescribeAction(old["action"]))
+        }
+        rows.Push(b)
+    }
+    if (replacing.Length > 0) {
+        msg := "Apply “" name "”?`n`nThis replaces what these already do:`n"
+        for line in replacing
+            msg .= "  • " line "`n"
+        ok := IsSet(Atlas) ? Atlas.Confirm(msg)
+            : (MsgBox(msg, "RadMapper", "YesNo Icon?") = "Yes")
+        if !ok
+            return
+    }
+    for b in rows
+        UpsertBinding(b)
+    AfterCfgChange()
+    saved := IsSet(Atlas) ? Atlas.SaveOrWarn() : SaveCfg()
+    if IsSet(Atlas)
+        try Atlas.Build()
+    HUD("Applied “" name "” — " rows.Length " setting" (rows.Length = 1 ? "" : "s")
+        . " on the Mouse page", "jade")
 }
 
 ; Window presets 1-9: the slice NUMBER is the key it sends, and the label
@@ -12422,8 +12509,8 @@ class Atlas {
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
         Lumi.Btn(x, y + 176 + bh + 12, bw, bh, "Set up a radial menu",
             (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
-        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Test my mouse",
-            (*) => Atlas.Classic("test"), "ghost")
+        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Apply a starter pack",
+            (*) => Atlas.PackChoose(), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
         ky := y + 176 + (bh + 12) * 2 + 14
@@ -13293,6 +13380,16 @@ class Atlas {
         SetTimer(() => Lumi.Toast("Changed in memory only — not saved to disk. "
             . "See Diagnostics.", "danger", 5000), -350)
         return false
+    }
+
+    /** The starter-pack list at the cursor: pick one and it is applied. */
+    static PackChoose() {
+        items := []
+        for pk in StarterPacks()
+            items.Push({label: pk.name, key: pk.name, sub: pk.sub})
+        Chooser.Show("Starter packs",
+            "click one to apply it   ·   each is just ordinary settings   ·   Esc cancels",
+            items, StarterPackApply)
     }
 
     static MenuAssign() {
