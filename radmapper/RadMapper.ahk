@@ -26,6 +26,16 @@
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
 ;
+;  v0.6.1f: THE "SET A BUTTON" WIZARD. One dialog, three numbered
+;  questions -- which button (tiles: Button 4, Button 5, Middle, or record
+;  a key), when (Tap / Hold), what (the short action list, a Details field
+;  with Rec and Keys, and a program). Save writes an ordinary row through
+;  the same validator and UpsertBinding the editor uses and lands on the
+;  page that shows it. "All options…" hands the same draft to the full
+;  editor. In Simple mode it is what Home's "Change what a mouse button
+;  does" and the Mouse page's "Set a button…" open; Advanced mode keeps
+;  the full editor there.
+;
 ;  v0.6.1e: STARTER PACKS. Home > "Apply a starter pack" lists five named
 ;  sets of ordinary bindings -- PowerScribe on the thumb buttons, the PACS
 ;  wheel on button 4, Window presets on button 5, drag scroll on button 5,
@@ -12503,7 +12513,8 @@ class Atlas {
         bw := Min(380, (w - 16) // 2)
         bh := 54
         Lumi.Btn(x, y + 176, bw, bh, "Change what a mouse button does",
-            (*) => Atlas.Go(Atlas.PanelIndex("Mouse")), "primary")
+            (*) => (Atlas.Advanced() ? Atlas.Go(Atlas.PanelIndex("Mouse"))
+                : Atlas.OpenDlg(() => Atlas.WizardDlg())), "primary")
         Lumi.Btn(x + bw + 16, y + 176, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
@@ -12595,8 +12606,9 @@ class Atlas {
         ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
         b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
-        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
-            (*) => Atlas.EditRow(0), "primary")
+        Lumi.Btn(b[1].x, by, b[1].w, 34, Atlas.Advanced() ? "Add new" : "Set a button…",
+            (*) => (Atlas.Advanced() ? Atlas.EditRow(0)
+                : Atlas.OpenDlg(() => Atlas.WizardDlg({btn: Atlas.sel}))), "primary")
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit", (*) => Atlas.EditSel(), "accent")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete", (*) => Atlas.DeleteSel(), "danger")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
@@ -13380,6 +13392,225 @@ class Atlas {
         SetTimer(() => Lumi.Toast("Changed in memory only — not saved to disk. "
             . "See Diagnostics.", "danger", 5000), -350)
         return false
+    }
+
+    ; ── SET A BUTTON: the three-step wizard ─────────────────────────────
+    ; One dialog, three numbered questions, in the order a person asks them:
+    ; which button, when, what. Tiles instead of dropdowns for the first two
+    ; because there are only a handful of answers and a tile can be read at
+    ; a glance. Picking a tile reopens the dialog with the choice recorded
+    ; (the same draft pattern MenuDlg uses for a size change), so every step
+    ; always shows the current state. "All options" hands the same draft to
+    ; the full editor for modifiers, hold layers and the rest.
+    static WIZ_BUTTONS := ["XButton1", "XButton2", "MButton"]
+
+    static WizardDlg(draft := 0) {
+        d := IsObject(draft) ? draft : {}
+        for k, v in Map("btn", "", "event", "tap", "act", "keys", "value", "",
+                        "app", "*") {
+            if !d.HasProp(k)
+                d.%k% := v
+        }
+        if (d.btn != "" && !Atlas.HasCode(Atlas.WIZ_BUTTONS, d.btn)
+            && IsMouseInput(d.btn))
+            d.btn := ""                      ; L/R/wheel are not wizard fare
+        w := 660
+        h := 560
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
+                     w, h, "RadMapperWizard")
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        st := {dlg: dlg, d: d}
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, 520, "Set a button", "title")
+        Lumi.Label(24, 40, w - 48,
+            "Three questions. Nothing changes until you press Save.", "mute", "left", 20)
+        Lumi.Rule(24, 64, w - 48)
+
+        ; 1 -- which button
+        Lumi.Label(24, 76, 400, "1 · Which button?", "section")
+        tiles := [["XButton1", "Button 4"], ["XButton2", "Button 5"],
+                  ["MButton", "Middle"]]
+        tw := 118
+        tx := 24
+        for t in tiles {
+            Lumi.Btn(tx, 98, tw, 46, t[2], Atlas.WizPick(st, "btn", t[1]),
+                d.btn = t[1] ? "primary" : "ghost")
+            tx += tw + 10
+        }
+        keyLbl := (d.btn != "" && !IsMouseInput(d.btn))
+            ? "Key: " d.btn : "A keyboard key…"
+        Lumi.Btn(tx, 98, w - 24 - tx, 46, keyLbl, Atlas.WizRecKey(st),
+            (d.btn != "" && !IsMouseInput(d.btn)) ? "primary" : "ghost")
+
+        ; 2 -- when
+        Lumi.Label(24, 160, 400, "2 · When?", "section")
+        half := (w - 48 - 10) // 2
+        Lumi.Btn(24, 182, half, 46, "Tap it  (a quick press)",
+            Atlas.WizPick(st, "event", "tap"), d.event = "tap" ? "primary" : "ghost")
+        Lumi.Btn(24 + half + 10, 182, half, 46, "Hold it  (press and keep it down)",
+            Atlas.WizPick(st, "event", "hold"), d.event = "hold" ? "primary" : "ghost")
+
+        ; 3 -- what
+        Lumi.Label(24, 244, 400, "3 · What should it do?", "section")
+        st.act := Atlas.ActSelect(24, 266, 380, 32, d.act, Atlas.ActPicked(st))
+        Lumi.Label(24, 310, 120, "Details", "dim", "left", 30)
+        st.value := Lumi.Field(150, 310, 300, 30, d.value, 0,
+            "shortcut, text or menu name", true)
+        st.ed := FieldEdit(st.value)         ; the Keys picker writes here
+        Lumi.Btn(456, 310, 60, 30, "Rec", Atlas.RecValue(st), "accent")
+        Lumi.Btn(522, 310, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
+        st.hint := Lumi.Label(24, 346, w - 48,
+            ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute", "left", 22)
+
+        apps := AppChoices()
+        Lumi.Label(24, 386, 120, "In program", "dim", "left", 30)
+        st.app := Lumi.Select(150, 386, 300, 30, apps,
+            Atlas.IndexOfText(apps, AppDisp(d.app)))
+        Lumi.Label(24, 420, w - 48,
+            "Global means everywhere. Pick a program to limit it there.",
+            "mute", "left", 20)
+
+        Lumi.Rule(24, h - 78, w - 48)
+        Lumi.Btn(24, h - 60, 130, 36, "All options…",
+            Atlas.WizFull(st), "ghost")
+        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+            (*) => Atlas.CloseDlg(), "ghost")
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
+            Atlas.WizSave(st), "primary")
+
+        Atlas.dstate := st
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    /** Snapshot the editable fields into the draft before a reopen. */
+    static WizDraft(st) {
+        d := st.d
+        try d.act := Atlas.ActCode(st.act)
+        try d.value := Lumi.FieldValue(st.value)
+        try {
+            apps := AppChoices()
+            d.app := AppCodeFromDisp(apps.Has(st.app.index)
+                ? apps[st.app.index] : "Global (all apps)")
+        }
+        return d
+    }
+    static WizPick(st, key, v) {
+        return (*) => Atlas.DoWizPick(st, key, v)
+    }
+    static DoWizPick(st, key, v) {
+        if !Atlas.DlgAlive(st)
+            return
+        Lumi.EndEdit()
+        d := Atlas.WizDraft(st)
+        d.%key% := v
+        ; unwind the click before the layer it came from is disposed
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
+    }
+    static WizRecKey(st) {
+        return (*) => Atlas.DoWizRecKey(st)
+    }
+    static DoWizRecKey(st) {
+        Lumi.EndEdit()
+        name := RecordKeyName()
+        if (name = "" || !Atlas.DlgAlive(st))
+            return
+        d := Atlas.WizDraft(st)
+        d.btn := CanonicalInputName(NormalizeInputName(name))
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
+    }
+    static WizFull(st) {
+        return (*) => Atlas.DoWizFull(st)
+    }
+    static DoWizFull(st) {
+        if !Atlas.DlgAlive(st)
+            return
+        Lumi.EndEdit()
+        d := Atlas.WizDraft(st)
+        keyMode := (d.btn != "" && !IsMouseInput(d.btn))
+        seed := NewBinding(d.app, "*", "", d.btn != "" ? d.btn : "XButton1",
+            d.event, d.act, d.value)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.BindDlg(0, keyMode, seed)), -1)
+    }
+    static WizSave(st) {
+        return (*) => Atlas.DoWizSave(st)
+    }
+    static DoWizSave(st) {
+        if !Atlas.DlgAlive(st)
+            return
+        Lumi.EndEdit()
+        d := Atlas.WizDraft(st)
+        hwnd := Lumi.HwndOf(st.dlg)
+        btn := d.btn
+        if (btn = "") {
+            Lumi.Toast("Step 1: pick a button first", "warn")
+            return
+        }
+        keyMode := !IsMouseInput(btn)
+        if (keyMode && !KeyNameValid(btn)) {
+            Lumi.Toast("RadMapper cannot watch '" btn "'", "danger", 3000)
+            return
+        }
+        if (keyMode && IsBareTypingKey(btn) && d.event != "tap") {
+            if (MsgBox("'" btn "' is a key that types.`n`nSetting it on Hold makes "
+                . "RadMapper wait to tell a tap from a hold, so typing that "
+                . "character will feel delayed.`n`nSet it anyway?", "RadMapper",
+                "YesNo Icon! Owner" hwnd) != "Yes")
+                return
+        }
+        ok := true
+        val := ValidateActionValue(hwnd, d.act, d.value, &ok)
+        if !ok
+            return
+        b := NewBinding(d.app, "*", "", btn, d.event, d.act, val)
+        realDups := []
+        for i in FindDupBinding(b) {
+            old := g_Cfg["bindings"][i]
+            if !IsInertRow(old)
+                realDups.Push(DescribeAction(old["action"]))
+        }
+        if (realDups.Length > 0
+            && !Atlas.Confirm(InputLabel(btn) " on " d.event " in " AppDisp(d.app)
+                . " already does: " realDups[1] "`n`nReplace it?"))
+            return
+        try {
+            UpsertBinding(b)
+            AfterCfgChange()
+        } catch as e {
+            Problem("edit-error", "wizard save failed: " e.Message)
+            Lumi.Toast("Save failed: " e.Message, "danger", 3000)
+            return
+        }
+        ; land on the page that now shows the row, scoped to it
+        if keyMode {
+            Atlas.keySel := btn
+            Atlas.kbAppIdx := Atlas.IndexOfText(AppChoices(), AppDisp(d.app))
+            Atlas.kbLayerIdx := 1
+            Atlas.panel := Atlas.PanelIndex("Keyboard")
+        } else {
+            Atlas.sel := btn
+            Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(d.app))
+            Atlas.layerIdx := 1
+            Atlas.panel := Atlas.PanelIndex("Mouse")
+        }
+        Atlas.CloseDlg()
+        Atlas.SaveOrWarn()
+        Atlas.Build()
+        Lumi.Toast("Saved: " InputLabel(btn) " " d.event " → " ActLabelOf(d.act), "jade")
     }
 
     /** The starter-pack list at the cursor: pick one and it is applied. */
