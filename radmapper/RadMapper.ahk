@@ -13469,6 +13469,7 @@ class Atlas {
         Lumi.Label(24, 310, 120, "Details", "dim", "left", 30)
         st.value := Lumi.Field(150, 310, 300, 30, d.value, 0,
             "shortcut, text or menu name", true)
+        st.ed := FieldEdit(st.value)         ; the Keys picker writes here
         Lumi.Btn(456, 310, 60, 30, "Rec", Atlas.RecValue(st), "accent")
         Lumi.Btn(522, 310, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
         st.hint := Lumi.Label(24, 346, w - 48,
