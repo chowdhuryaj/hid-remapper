@@ -354,15 +354,29 @@ def ic_enter(ic):
     ic.label("enter")
 
 
+def curved_arrow(ic, cx, cy, r, a0, a1, fill=CYAN, width=14, head=30):
+    """Arc from a0 to a1 degrees (PIL: clockwise from +x) with a triangular head at a1."""
+    ic.arc([cx - r, cy - r, cx + r, cy + r], a0, a1, fill=fill, width=width)
+    t = math.radians(a1)
+    tip = (cx + r * math.cos(t), cy + r * math.sin(t))
+    # tangent at a1 in the direction of travel (increasing angle)
+    tx, ty = -math.sin(t), math.cos(t)
+    nx, ny = math.cos(t), math.sin(t)
+    base = (tip[0] - tx * head * 0.2, tip[1] - ty * head * 0.2)
+    p1 = (base[0] + tx * head, base[1] + ty * head)
+    p2 = (base[0] + nx * head * 0.75, base[1] + ny * head * 0.75)
+    p3 = (base[0] - nx * head * 0.75, base[1] - ny * head * 0.75)
+    ic.poly([p1, p2, p3], fill=fill)
+
+
 def ic_undo(ic, redo=False):
-    if redo:
-        ic.arc([64, 70, 224, 230], 200, 400, fill=CYAN, width=14)
-        ic.poly([(198, 62), (244, 104), (188, 118)], fill=CYAN)
-        ic.label("redo")
-    else:
-        ic.arc([64, 70, 224, 230], 140, 340, fill=CYAN, width=14)
-        ic.poly([(90, 62), (44, 104), (100, 118)], fill=CYAN)
-        ic.label("undo")
+    # redo: arc from lower-left over the top, head coming down on the right.
+    # undo is its mirror image, so both heads are drawn by the same code.
+    curved_arrow(ic, 144, 140, 76, 120, 360, fill=CYAN)
+    if not redo:
+        ic.im = ic.im.transpose(Image.FLIP_LEFT_RIGHT)
+        ic.d = ImageDraw.Draw(ic.im)
+    ic.label("redo" if redo else "undo")
 
 
 def ic_select_all(ic):
@@ -465,10 +479,28 @@ def ic_folder(ic, kind, lbl):
         ic.ell([84, 80, 204, 200], outline=CYAN, width=7)
         ic.ell([120, 80, 168, 200], outline=CYAN, width=5)
         ic.line([(84, 140), (204, 140)], fill=CYAN, width=5)
-    elif kind == "windows":
-        for x, y in ((80, 84), (150, 84), (80, 150), (150, 150)):
-            ic.rect([x, y, x + 58, y + 54], fill=BG, outline=CYAN, width=6, radius=4)
+    elif kind == "desktop":
+        # a browser window: title bar with three dots and a globe inside
+        ic.rect([64, 80, 224, 208], fill=BG, outline=CYAN, width=6, radius=6)
+        ic.line([(64, 104), (224, 104)], fill=CYAN, width=5)
+        for x in (80, 96, 112):
+            ic.dot(x, 92, 4, fill=CYAN)
+        ic.ell([116, 122, 172, 178], outline=CYAN, width=5)
+        ic.line([(116, 150), (172, 150)], fill=CYAN, width=4)
+        ic.ell([134, 122, 154, 178], outline=CYAN, width=4)
+    elif kind == "system":
+        # mouse + gear: RadMapper and the machine
+        ic.rect([104, 78, 184, 206], fill=BG, outline=INK, width=7, radius=40)
+        ic.line([(144, 78), (144, 134)], fill=INK, width=5)
+        ic.line([(104, 134), (184, 134)], fill=INK, width=5)
+        ic.rect([136, 96, 152, 122], fill=CYAN, radius=6)
     ic.label(lbl)
+
+
+def ic_home(ic):
+    ic.poly([(144, 56), (48, 140), (76, 140), (76, 224), (212, 224), (212, 140), (240, 140)], fill=BG2, outline=CYAN, width=8)
+    ic.rect([124, 168, 164, 224], fill=CYAN, radius=4)
+    ic.label("home")
 
 
 def ic_back(ic):
@@ -567,6 +599,53 @@ def ic_clipboard(ic):
     ic.label("clip history")
 
 
+def ic_field_dictate(ic):
+    # field box with a chevron, and a small mic: two steps in one press
+    ic.rect([36, 80, 168, 132], outline=CYAN, width=8, radius=8)
+    ic.line([(58, 92), (58, 120)], fill=INK, width=8)
+    ic.rect([36, 156, 168, 208], outline=DIM, width=6, radius=8)
+    ic.chevron(152, 144, 16, "down", fill=PINK)
+    ic.rect([208, 72, 248, 146], fill=PINK, radius=20)
+    ic.arc([192, 100, 264, 172], 0, 180, fill=INK, width=8)
+    ic.line([(228, 172), (228, 196)], fill=INK, width=8)
+    ic.line([(206, 196), (250, 196)], fill=INK, width=8)
+    ic.label("field + dictate")
+
+
+def ic_copy_all(ic):
+    ic.rect([56, 44, 176, 196], outline=DIM, width=7, radius=8)
+    ic.rect([104, 92, 232, 236], fill=BG, outline=INK, width=8, radius=8)
+    for y in (128, 156, 184, 212):
+        ic.line([(128, y), (208, y)], fill=CYAN, width=6)
+    ic.label("copy report")
+
+
+def ic_open_all(ic):
+    for i, (x, y) in enumerate(((60, 52), (150, 52), (60, 132), (150, 132))):
+        ic.rect([x, y, x + 78, y + 66], fill=BG2, outline=(GOLD, ORANGE, GREEN, MAROON)[i], width=6, radius=6)
+        ic.line([(x, y + 16), (x + 78, y + 16)], fill=(GOLD, ORANGE, GREEN, MAROON)[i], width=4)
+    ic.label("open all sites")
+
+
+def ic_clear_next(ic):
+    ic.rect([56, 74, 128, 190], fill=BG2, outline=RED, width=7, radius=8)
+    ic.line([(44, 74), (140, 74)], fill=RED, width=8)
+    for x in (76, 92, 108):
+        ic.line([(x, 96), (x, 170)], fill=RED, width=5)
+    for i, y in enumerate((92, 120, 148, 176)):
+        ic.ell([164, y - 14, 240, y + 14], outline=CYAN if i == 3 else DIM, width=6)
+    ic.arrow((256, 84), (256, 200), fill=PINK, width=8, head=18)
+    ic.label("clear + next")
+
+
+def ic_scratch(ic):
+    ic.rect([60, 48, 228, 236], fill=BG2, outline=INK, width=8, radius=10)
+    ic.rect([60, 48, 228, 84], fill=AMBER, radius=8)
+    for y in (120, 150, 180, 210):
+        ic.line([(84, y), (204, y)], fill=DIM, width=6)
+    ic.label("scratchpad")
+
+
 def ic_topend(ic, top=True):
     ic_doc(ic, arrow="up" if top else "down", lbl="report top" if top else "report end")
 
@@ -592,6 +671,13 @@ def hk(name, draw, key, ctrl=False, shift=False, alt=False, win=False, needs_set
     return b
 
 
+def multi(name, draw, steps, combo, note=""):
+    """A Stream Deck Multi Action: steps is a list of (uuid, settings), run in order."""
+    b = Btn(name, draw, ("multi", steps), note=note)
+    b.combo = combo
+    return b
+
+
 def site(name, draw, url):
     b = Btn(name, draw, ("com.elgato.streamdeck.system.website", {"openInBrowser": True, "path": url}))
     b.combo = url
@@ -604,20 +690,29 @@ def folder(name, kind, lbl, page_key):
     return b
 
 
-def back():
-    b = Btn("Back", ic_back, ("com.elgato.streamdeck.profile.backtoparent", {}))
-    b.combo = "back to home"
+def home():
+    b = Btn("Home", ic_home, ("com.elgato.streamdeck.profile.backtoparent", {}))
+    b.combo = "back to Home"
     return b
 
 
-# Shared buttons (same key everywhere they appear) -----------------------------
-# PowerScribe: these three keys are RadMapper's shipped GLOBAL bindings
-# (` = ps_dictate, [ = ps_next, ] = ps_prev).  RadMapper routes them to
-# PowerScribe from any window and returns focus, so they work while PACS has
-# the cursor.
-DICTATE = hk("Dictate on/off", ic_mic, "`", note="RadMapper ` -> PowerScribe F4 (psDictateKey)")
-PREV_FIELD = hk("Previous field", lambda ic: ic_field(ic, "prev"), "]", note="RadMapper ] -> Shift+Tab in PowerScribe")
-NEXT_FIELD = hk("Next field", lambda ic: ic_field(ic, "next"), "[", note="RadMapper [ -> Tab in PowerScribe")
+# ─── key routing ────────────────────────────────────────────────────────────
+# Native: the buttons send PowerScribe's own keys (F4 / Tab / Shift+Tab), so
+# they work whenever PowerScribe has focus, with no dependency on RadMapper.
+# Set ROUTE_PS_VIA_RADMAPPER = True to send RadMapper's global ` [ ] bindings
+# instead: RadMapper then brings PowerScribe forward, delivers the key and
+# returns focus, so the same buttons work while the PACS viewer has the cursor.
+ROUTE_PS_VIA_RADMAPPER = False
+
+if ROUTE_PS_VIA_RADMAPPER:
+    DICTATE = hk("Dictate on/off", ic_mic, "`", note="RadMapper ` -> PowerScribe F4 from any window")
+    PREV_FIELD = hk("Previous field", lambda ic: ic_field(ic, "prev"), "]", note="RadMapper ] -> Shift+Tab from any window")
+    NEXT_FIELD = hk("Next field", lambda ic: ic_field(ic, "next"), "[", note="RadMapper [ -> Tab from any window")
+else:
+    DICTATE = hk("Dictate on/off", ic_mic, "f4", note="PowerScribe dictation toggle (its default key; PS must be in front)")
+    PREV_FIELD = hk("Previous field", lambda ic: ic_field(ic, "prev"), "tab", shift=True, note="PowerScribe")
+    NEXT_FIELD = hk("Next field", lambda ic: ic_field(ic, "next"), "tab", note="PowerScribe")
+
 IMPRESSION = hk("Impression", lambda ic: ic_doc(ic, True, "impression"), "1", ctrl=True, shift=True,
                 note="PowerScribe menu slice in RadMapper; PowerScribe must be in front")
 PREV_SERIES = hk("Previous series", lambda ic: ic_series(ic, "prev"), "f7", note="RadMapper PACS wheel")
@@ -627,6 +722,12 @@ ROI = hk("ROI", ic_roi, "r", shift=True, note="RadMapper PACS wheel")
 MAGNIFY = hk("Magnifying glass", ic_magnify, "y", note="RadMapper PACS wheel")
 CLAHE = hk("CLAHE", ic_clahe, "c", shift=True, note="RadMapper PACS wheel")
 DELETE = hk("Delete measurement", ic_trash, "delete", note="RadMapper PACS wheel")
+INVERT = hk("Invert", ic_invert, "i", shift=True, needs_setup=True, note="Assign Shift+I to Invert in IntelliSpace preferences")
+
+SWITCH_APP = hk("Switch app", ic_alttab, "tab", alt=True)
+SHOW_DESKTOP = hk("Show desktop", ic_desktop, "d", win=True)
+TO_LEFT_SCREEN = hk("Move to left monitor", lambda ic: ic_move_monitor(ic, "left"), "left", win=True, shift=True)
+TO_RIGHT_SCREEN = hk("Move to right monitor", lambda ic: ic_move_monitor(ic, "right"), "right", win=True, shift=True)
 
 PRESETS = [("Soft tissue", "soft"), ("Bone", "bone"), ("Brain", "brain"), ("C-spine soft tissue", "cspine"),
            ("CTA", "cta"), ("Infarct", "infarct"), ("Liver", "liver"), ("Lung", "lung"), ("Lung wide", "lungwide")]
@@ -639,82 +740,111 @@ def preset_btn(i):
 
 
 def numpad(s):
-    key = {".": ".", "-": "-"}.get(s, s)
-    return hk(f"Numpad {s}", lambda ic, s=s: ic_digit(ic, s), key)
+    return hk(f"Numpad {s}", lambda ic, s=s: ic_digit(ic, s), s)
+
+
+HK = "com.elgato.streamdeck.system.hotkey"
+WEB = "com.elgato.streamdeck.system.website"
+
+SITES = [("UMN Mail", ic_mail, "https://mail.umn.edu"), ("Claude", ic_claude, "https://claude.ai"),
+         ("OpenEvidence", ic_openevidence, "https://www.openevidence.com"),
+         ("UMN Radiology", ic_umnrad, "https://umnradiology.com")]
+
+# Multi Actions (Stream Deck native, several steps per press) ------------------
+FIELD_AND_DICTATE = multi("Next field & dictate", ic_field_dictate,
+                          [(HK, NEXT_FIELD.action[1]), (HK, DICTATE.action[1])],
+                          "Next field, then Dictate", note="RadMapper's DictateThenNextField macro, done natively")
+COPY_REPORT = multi("Copy whole report", ic_copy_all,
+                    [(HK, hotkey_settings("a", ctrl=True)), (HK, hotkey_settings("c", ctrl=True))],
+                    "Ctrl+A, Ctrl+C", note="select the whole report and copy it (e.g. to paste into Claude)")
+OPEN_ALL_SITES = multi("Open all sites", ic_open_all,
+                       [(WEB, {"openInBrowser": True, "path": url}) for _, _, url in SITES],
+                       "opens all four sites", note="")
+CLEAR_AND_NEXT = multi("Clear & next series", ic_clear_next,
+                       [(HK, hotkey_settings("delete")), (HK, hotkey_settings("f8"))],
+                       "Delete, F8", note="drop the measurement, move to the next series")
+
+# ─── folder strip ───────────────────────────────────────────────────────────
+FOLDERS = {
+    "ps":   ("PowerScribe editing", "ps",      "editing"),
+    "pacs": ("PACS tools",          "pacs",    "pacs tools"),
+    "wl":   ("Windowing",           "window",  "windowing"),
+    "num":  ("Number pad",          "numpad",  "number pad"),
+    "web":  ("Desktop",             "desktop", "web & windows"),
+    "sys":  ("System",              "system",  "system"),
+}
+
+
+def go(key):
+    name, kind, lbl = FOLDERS[key]
+    return folder(name, kind, lbl, key)
+
+
+def strip(*others):
+    """Bottom-row navigation: Home first, then the listed sections."""
+    return [home()] + [go(k) for k in others]
 
 
 PAGES = {}  # key -> (name, 3x5 grid)
 
-# Shared window-navigation buttons (Home and the Windows page)
-SWITCH_APP = hk("Switch app", ic_alttab, "tab", alt=True)
-SHOW_DESKTOP = hk("Show desktop", ic_desktop, "d", win=True)
-TO_LEFT_SCREEN = hk("Move to left monitor", lambda ic: ic_move_monitor(ic, "left"), "left", win=True, shift=True)
-TO_RIGHT_SCREEN = hk("Move to right monitor", lambda ic: ic_move_monitor(ic, "right"), "right", win=True, shift=True)
-
-# Home is a launch pad: the five keys used on every case stay on it (dictate,
-# field navigation, series navigation), the most common app / monitor moves
-# fill the right side, and the bottom row is the folder strip.
+# Home: the five every-case keys, the four most common window moves, and the
+# folder strip. Every folder page ends in a strip too, so any section is one
+# press from any other.
 PAGES["home"] = ("RadMapper Radiology", [
     [DICTATE, PREV_FIELD, NEXT_FIELD, SWITCH_APP, SHOW_DESKTOP],
-    [PREV_SERIES, NEXT_SERIES, TO_LEFT_SCREEN, TO_RIGHT_SCREEN, folder("Windows", "windows", "windows", "win")],
-    [folder("PowerScribe editing", "ps", "editing", "ps"), folder("PACS tools", "pacs", "pacs tools", "pacs"),
-     folder("Windowing", "window", "windowing", "wl"), folder("Number pad", "numpad", "number pad", "num"),
-     folder("Websites", "web", "websites", "web")],
+    [PREV_SERIES, NEXT_SERIES, TO_LEFT_SCREEN, TO_RIGHT_SCREEN, go("sys")],
+    [go("ps"), go("pacs"), go("wl"), go("num"), go("web")],
 ])
 
 PAGES["ps"] = ("PowerScribe editing", [
-    [back(), DICTATE, PREV_FIELD, NEXT_FIELD, IMPRESSION],
+    [DICTATE, PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION],
     [hk("Undo", ic_undo, "z", ctrl=True), hk("Redo", lambda ic: ic_undo(ic, True), "y", ctrl=True),
-     hk("Select all", ic_select_all, "a", ctrl=True), hk("Copy", ic_copy, "c", ctrl=True), hk("Paste", ic_paste, "v", ctrl=True)],
-    [hk("Backspace", ic_backspace, "backspace"), hk("Delete forward", lambda ic: ic_backspace(ic, "delete fwd", True), "delete"),
-     hk("Top of report", ic_topend, "home", ctrl=True), hk("End of report", lambda ic: ic_topend(ic, False), "end", ctrl=True),
+     COPY_REPORT, hk("Paste", ic_paste, "v", ctrl=True),
      hk("Sign report", ic_sign, "s", ctrl=True, shift=True, needs_setup=True,
         note="Assign Ctrl+Shift+S to Sign in PowerScribe One > Settings > Quick Keys")],
+    strip("pacs", "wl", "num", "web"),
 ])
 
 PAGES["pacs"] = ("PACS tools", [
-    [back(), RULER, ROI, MAGNIFY, CLAHE],
+    [RULER, ROI, MAGNIFY, CLAHE, DELETE],
     [hk("Spine labeling", ic_spine, "s", shift=True, needs_setup=True, note="Assign Shift+S to Spine Labeling in IntelliSpace > Preferences > Keyboard shortcuts"),
      hk("Localizer mode", ic_localizer, "l", needs_setup=True, note="Assign L to Localizer Mode in IntelliSpace preferences"),
      hk("Scout line mode", ic_scout, "l", shift=True, needs_setup=True, note="Assign Shift+L to Scout Lines in IntelliSpace preferences"),
      hk("Zoom in", lambda ic: ic_magnify(ic, "+", "zoom in"), "=", needs_setup=True, note="Assign = (plus key) to Zoom In in IntelliSpace preferences"),
      hk("Zoom out", lambda ic: ic_magnify(ic, "-", "zoom out"), "-", needs_setup=True, note="Assign - to Zoom Out in IntelliSpace preferences")],
-    [PREV_SERIES, NEXT_SERIES, DELETE,
-     hk("Invert", ic_invert, "i", shift=True, needs_setup=True, note="Assign Shift+I to Invert in IntelliSpace preferences"),
-     folder("Windowing", "window", "windowing", "wl")],
+    strip("ps", "wl", "num", "web"),
 ])
 
 PAGES["wl"] = ("Windowing", [
-    [back(), preset_btn(1), preset_btn(2), preset_btn(3), preset_btn(4)],
-    [preset_btn(5), preset_btn(6), preset_btn(7), preset_btn(8), preset_btn(9)],
-    [hk("W/L 0 (spare preset)", lambda ic: (ic_digit(ic, "0", CYAN), ic.label("spare preset")), "0",
-        note="RadMapper's W/L dial ring also sends 0; assign a tenth preset in IntelliSpace if wanted"),
-     hk("Invert", ic_invert, "i", shift=True, needs_setup=True, note="Assign Shift+I to Invert in IntelliSpace preferences"),
-     MAGNIFY, CLAHE, folder("PACS tools", "pacs", "pacs tools", "pacs")],
+    [preset_btn(1), preset_btn(2), preset_btn(3), preset_btn(4), preset_btn(5)],
+    [preset_btn(6), preset_btn(7), preset_btn(8), preset_btn(9), INVERT],
+    strip("ps", "pacs", "num", "web"),
 ])
 
+# Number pad keeps a real 3x3 digit block; the right two columns hold the
+# editing keys and the two links that matter while typing numbers.
 PAGES["num"] = ("Number pad", [
-    [back(), numpad("7"), numpad("8"), numpad("9"), hk("Backspace", ic_backspace, "backspace")],
-    [numpad("-"), numpad("4"), numpad("5"), numpad("6"), numpad(".")],
-    [numpad("0"), numpad("1"), numpad("2"), numpad("3"), hk("Enter", ic_enter, "enter")],
+    [numpad("7"), numpad("8"), numpad("9"), hk("Backspace", ic_backspace, "backspace"), hk("Enter", ic_enter, "enter")],
+    [numpad("4"), numpad("5"), numpad("6"), numpad("0"), numpad(".")],
+    [numpad("1"), numpad("2"), numpad("3"), home(), go("ps")],
 ])
 
-PAGES["web"] = ("Websites", [
-    [back(), site("UMN Mail", ic_mail, "https://mail.umn.edu"), site("Claude", ic_claude, "https://claude.ai"),
-     site("OpenEvidence", ic_openevidence, "https://www.openevidence.com"), site("UMN Radiology", ic_umnrad, "https://umnradiology.com")],
-    [None, None, None, None, None],
-    [None, None, None, None, None],
+PAGES["web"] = ("Desktop", [
+    [site(n, d, u) for n, d, u in SITES] + [OPEN_ALL_SITES],
+    [hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True), hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
+     hk("Maximize", ic_maxmin, "up", win=True), hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True),
+     hk("Close window", ic_close, "f4", alt=True)],
+    strip("ps", "pacs", "wl", "num"),
 ])
 
-PAGES["win"] = ("Windows", [
-    [back(), hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True), hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
-     hk("Maximize", ic_maxmin, "up", win=True), hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True)],
-    [TO_LEFT_SCREEN, TO_RIGHT_SCREEN, hk("Task view", ic_taskview, "tab", win=True), SWITCH_APP, SHOW_DESKTOP],
-    [hk("Close window", ic_close, "f4", alt=True),
-     hk("RadMapper settings", ic_radmapper, "f9", ctrl=True, alt=True, shift=True, note="RadMapper hkGui"),
+PAGES["sys"] = ("System", [
+    [hk("RadMapper settings", ic_radmapper, "f9", ctrl=True, alt=True, shift=True, note="RadMapper hkGui"),
      hk("RadMapper pause/resume", ic_pause, "f11", ctrl=True, alt=True, shift=True, note="RadMapper hkToggle"),
      hk("Unstick buttons", ic_unstick, "q", ctrl=True, alt=True, note="RadMapper hkPanic"),
-     hk("Clipboard history", ic_clipboard, "c", ctrl=True, alt=True, note="RadMapper hkClipboard shelf")],
+     hk("Clipboard history", ic_clipboard, "c", ctrl=True, alt=True, note="RadMapper hkClipboard shelf"),
+     hk("Scratchpad", ic_scratch, "n", ctrl=True, alt=True, note="RadMapper hkScratch shelf")],
+    [hk("Task view", ic_taskview, "tab", win=True), TO_LEFT_SCREEN, TO_RIGHT_SCREEN, CLEAR_AND_NEXT, SWITCH_APP],
+    strip("ps", "pacs", "wl", "num"),
 ])
 
 
@@ -736,8 +866,27 @@ def _b32(n):
     return out
 
 
+def inner_action(uuid_, settings):
+    name = {"com.elgato.streamdeck.system.hotkey": "Hotkey", "com.elgato.streamdeck.system.website": "Website"}[uuid_]
+    return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": name, "Settings": settings,
+            "State": 0, "States": [{}], "UUID": uuid_}
+
+
 def action_json(btn, page_ids, image_rel):
     kind, payload = btn.action
+    if kind == "multi":
+        steps = [inner_action(u, st) for u, st in payload]
+        return {
+            "ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": "Multi Action",
+            # 6.x keeps the steps under Actions; older builds read Settings.Routine. Both are written.
+            "Settings": {"Routine": steps, "RoutineAlt": []},
+            "Actions": [{"Actions": [st]} for st in steps],
+            "State": 0,
+            "States": [{"FontFamily": "", "FontSize": 9, "FontStyle": "", "FontUnderline": False, "Image": image_rel,
+                        "OutlineThickness": 2, "ShowTitle": False, "Title": btn.name, "TitleAlignment": "bottom",
+                        "TitleColor": "#ffffff"}],
+            "UUID": "com.elgato.streamdeck.multiactions.routine",
+        }
     if kind == "folder":
         uuid_, settings = "com.elgato.streamdeck.profile.openchild", {"ProfileUUID": page_ids[payload]}
         name = "Create Folder"

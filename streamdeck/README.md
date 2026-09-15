@@ -11,51 +11,65 @@ so nothing has to be read from a Stream Deck title.
 |---|---|
 | `RadMapper Radiology.streamDeckProfile` | Import this: double-click it, or Stream Deck > Preferences > Profiles > ⋯ > Import. Pick your Stream Deck MK.2 when asked. |
 | `preview.png` | Every page rendered as a contact sheet |
-| `keymap.md` | Every button, the key it sends, and where that key came from |
+| `keymap.md` | Every button, the key(s) it sends, and where that key came from |
 | `build_profile.py` | Regenerates all of the above (`python3 build_profile.py`; needs Pillow) |
 
-## Layout
+## Navigation
 
-**Home** (launch pad)
+Home is the launch pad. Every other page ends in a **strip** (bottom row):
+Home first, then the other sections, so any section is one press from any
+other. The Number pad keeps its 3×3 digit block and links only to Home and
+Editing, which are the two places you go from numbers.
+
+## Pages
+
+**Home**
 
 | | | | | |
 |---|---|---|---|---|
-| Dictate (`` ` ``) | Prev field (`]`) | Next field (`[`) | Switch app (Alt+Tab) | Show desktop (Win+D) |
-| Prev series (F7) | Next series (F8) | Window to left monitor (Win+Shift+←) | Window to right monitor (Win+Shift+→) | 📁 Windows |
-| 📁 Editing (PowerScribe) | 📁 PACS tools | 📁 Windowing | 📁 Number pad | 📁 Websites |
+| Dictate (F4) | Prev field (Shift+Tab) | Next field (Tab) | Switch app (Alt+Tab) | Show desktop (Win+D) |
+| Prev series (F7) | Next series (F8) | Window to left monitor (Win+Shift+←) | Window to right monitor (Win+Shift+→) | 📁 System |
+| 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Number pad | 📁 Web & windows |
 
-**Editing (PowerScribe)**: Dictate, Prev/Next field, Impression (Ctrl+Shift+1), Undo, Redo, Select all, Copy, Paste, Backspace, Delete forward, Top of report (Ctrl+Home), End of report (Ctrl+End), Sign ⚙.
+**Editing (PowerScribe)**: Dictate, Prev/Next field, **Next field & dictate** ⛓, Impression (Ctrl+Shift+1), Undo, Redo, **Copy whole report** ⛓ (Ctrl+A then Ctrl+C, ready to paste into Claude), Paste, Sign ⚙, strip.
 
-**PACS tools**: Ruler, ROI, Magnify, CLAHE (Shift+C), Spine labeling ⚙, Localizer ⚙, Scout lines ⚙, Zoom in ⚙, Zoom out ⚙, Prev/Next series, Delete, Invert ⚙, and a door to Windowing.
+**PACS tools**: Ruler (R), ROI (Shift+R), Magnify (Y), CLAHE (Shift+C), Delete measurement, Spine labeling ⚙, Localizer ⚙, Scout lines ⚙, Zoom in ⚙, Zoom out ⚙, strip.
 
-**Windowing**: the nine RadMapper presets on digits 1–9 (Soft tissue, Bone, Brain, C-spine soft tissue, CTA, Infarct, Liver, Lung, Lung wide), 0 as a spare, Invert ⚙, Magnify, CLAHE, and a door back to PACS tools.
+**Windowing**: the nine RadMapper presets on digits 1–9 (Soft tissue, Bone, Brain, C-spine soft tissue, CTA, Infarct, Liver, Lung, Lung wide), Invert ⚙, strip.
 
-**Number pad**: 0–9, `-`, `.`, Backspace, Enter. Sends the top-row digit keys, not the numeric keypad, so it works with NumLock off (RadMapper uses NumLock as its pause key).
+**Number pad**: 7 8 9 / 4 5 6 / 1 2 3 on the left, Backspace, Enter, 0 and `.` on the right, Home and Editing in the corner. Sends the top-row digit keys, not the numeric keypad, so it works with NumLock off (RadMapper uses NumLock as its pause key).
 
-**Websites**: mail.umn.edu, claude.ai, openevidence.com, umnradiology.com.
+**Web & windows**: mail.umn.edu, claude.ai, openevidence.com, umnradiology.com, **Open all sites** ⛓, Snap left/right (Win+←/→), Maximize/Minimize (Win+↑/↓), Close window (Alt+F4), strip.
 
-**Windows**: Snap left/right (Win+←/→), Maximize/Minimize (Win+↑/↓), Move window to left/right monitor (Win+Shift+←/→), Task view (Win+Tab), Switch app (Alt+Tab), Show desktop (Win+D), Close window (Alt+F4), then RadMapper's own hotkeys: Settings (Ctrl+Alt+Shift+F9), Pause/resume engine (Ctrl+Alt+Shift+F11), Unstick buttons (Ctrl+Alt+Q), Clipboard history (Ctrl+Alt+C).
+**System**: RadMapper Settings (Ctrl+Alt+Shift+F9), Pause/resume engine (Ctrl+Alt+Shift+F11), Unstick buttons (Ctrl+Alt+Q), Clipboard history (Ctrl+Alt+C), Scratchpad (Ctrl+Alt+N), Task view (Win+Tab), window to left/right monitor, **Clear & next series** ⛓ (Delete then F8), Switch app, strip.
 
-Every folder page has **Back** in its top-left key.
+⛓ = a Stream Deck **Multi Action**: several steps in one press, run by the
+Stream Deck software itself.
 
-## How it fits with RadMapper
+## Native keys, and where RadMapper still helps
 
-The Stream Deck only sends keystrokes to whatever window is in front. RadMapper
-is what makes the PowerScribe keys work from anywhere:
+The buttons send the apps' own shortcuts, so they work with or without
+RadMapper running. The catch is that a Stream Deck keystroke goes to whatever
+window is in front:
 
-- `` ` ``, `[` and `]` are RadMapper's **shipped global bindings** (`ps_dictate`,
-  `ps_next`, `ps_prev`). RadMapper brings PowerScribe forward, delivers F4 / Tab /
-  Shift+Tab, and returns focus. So Dictate and field navigation work while the
-  PACS viewer has the cursor. If you delete those bindings on RadMapper's
-  Keyboard page, these three buttons stop working.
-- The PACS keys (R, Shift+R, Y, Shift+C, F7, F8, Delete, digits 1–9) are the
-  values in RadMapper's shipped PACS wheel and Window-preset ring. They go
-  straight to IntelliSpace, so the viewer must be the active window. If you
-  want them to work from PowerScribe too, bind the same keys on RadMapper's
-  Keyboard page to **PACS: send keys** with the same value.
-- The Windows page's last four keys are RadMapper's default hotkeys from
-  Settings. If you changed them there, change them here (or in
-  `build_profile.py`) to match.
+- **PowerScribe keys** (F4, Tab, Shift+Tab, Ctrl+Shift+1, Undo/Redo/Copy/Paste, Sign)
+  need PowerScribe to be the active window. If you want Dictate and field
+  navigation to work while the PACS viewer has the cursor, set
+  `ROUTE_PS_VIA_RADMAPPER = True` at the top of the key-routing section in
+  `build_profile.py` and rebuild: those three buttons then send RadMapper's
+  global `` ` `` `[` `]` bindings, and RadMapper brings PowerScribe forward,
+  delivers the key and returns focus. (Or bind the same keys yourself on
+  RadMapper's Keyboard page.)
+- **PACS keys** (R, Shift+R, Y, Shift+C, F7, F8, Delete, digits 1–9) are the values
+  in RadMapper's shipped PACS wheel and Window-preset ring and go straight to
+  IntelliSpace, so the viewer must be in front. To fire them from PowerScribe,
+  bind the same key on RadMapper's Keyboard page to **PACS: send keys** with
+  the same value.
+- The **System** page's RadMapper keys are its default hotkeys from Settings.
+  If you changed them there, change them here (or in `build_profile.py`).
+
+F4 is PowerScribe's default dictation toggle and is user-configurable in
+PowerScribe; if yours differs, edit the Dictate buttons in the Stream Deck app.
 
 ## Buttons marked with the gear badge ⚙
 
