@@ -645,13 +645,24 @@ def numpad(s):
 
 PAGES = {}  # key -> (name, 3x5 grid)
 
+# Shared window-navigation buttons (Home and the Windows page)
+SWITCH_APP = hk("Switch app", ic_alttab, "tab", alt=True)
+SHOW_DESKTOP = hk("Show desktop", ic_desktop, "d", win=True)
+TO_LEFT_SCREEN = hk("Move to left monitor", lambda ic: ic_move_monitor(ic, "left"), "left", win=True, shift=True)
+TO_RIGHT_SCREEN = hk("Move to right monitor", lambda ic: ic_move_monitor(ic, "right"), "right", win=True, shift=True)
+
+# Home is a launch pad: the five keys used on every case stay on it (dictate,
+# field navigation, series navigation), the most common app / monitor moves
+# fill the right side, and the bottom row is the folder strip.
 PAGES["home"] = ("RadMapper Radiology", [
-    [DICTATE, PREV_FIELD, NEXT_FIELD, folder("PowerScribe", "ps", "powerscribe", "ps"), folder("Websites", "web", "websites", "web")],
-    [PREV_SERIES, NEXT_SERIES, folder("PACS tools", "pacs", "pacs tools", "pacs"), folder("Windowing", "window", "windowing", "wl"), folder("Number pad", "numpad", "number pad", "num")],
-    [RULER, ROI, MAGNIFY, DELETE, folder("Windows", "windows", "windows", "win")],
+    [DICTATE, PREV_FIELD, NEXT_FIELD, SWITCH_APP, SHOW_DESKTOP],
+    [PREV_SERIES, NEXT_SERIES, TO_LEFT_SCREEN, TO_RIGHT_SCREEN, folder("Windows", "windows", "windows", "win")],
+    [folder("PowerScribe editing", "ps", "editing", "ps"), folder("PACS tools", "pacs", "pacs tools", "pacs"),
+     folder("Windowing", "window", "windowing", "wl"), folder("Number pad", "numpad", "number pad", "num"),
+     folder("Websites", "web", "websites", "web")],
 ])
 
-PAGES["ps"] = ("PowerScribe", [
+PAGES["ps"] = ("PowerScribe editing", [
     [back(), DICTATE, PREV_FIELD, NEXT_FIELD, IMPRESSION],
     [hk("Undo", ic_undo, "z", ctrl=True), hk("Redo", lambda ic: ic_undo(ic, True), "y", ctrl=True),
      hk("Select all", ic_select_all, "a", ctrl=True), hk("Copy", ic_copy, "c", ctrl=True), hk("Paste", ic_paste, "v", ctrl=True)],
@@ -698,9 +709,7 @@ PAGES["web"] = ("Websites", [
 PAGES["win"] = ("Windows", [
     [back(), hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True), hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
      hk("Maximize", ic_maxmin, "up", win=True), hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True)],
-    [hk("Move to left monitor", lambda ic: ic_move_monitor(ic, "left"), "left", win=True, shift=True),
-     hk("Move to right monitor", lambda ic: ic_move_monitor(ic, "right"), "right", win=True, shift=True),
-     hk("Task view", ic_taskview, "tab", win=True), hk("Switch app", ic_alttab, "tab", alt=True), hk("Show desktop", ic_desktop, "d", win=True)],
+    [TO_LEFT_SCREEN, TO_RIGHT_SCREEN, hk("Task view", ic_taskview, "tab", win=True), SWITCH_APP, SHOW_DESKTOP],
     [hk("Close window", ic_close, "f4", alt=True),
      hk("RadMapper settings", ic_radmapper, "f9", ctrl=True, alt=True, shift=True, note="RadMapper hkGui"),
      hk("RadMapper pause/resume", ic_pause, "f11", ctrl=True, alt=True, shift=True, note="RadMapper hkToggle"),

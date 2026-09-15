@@ -16,15 +16,15 @@ so nothing has to be read from a Stream Deck title.
 
 ## Layout
 
-**Home**
+**Home** (launch pad)
 
 | | | | | |
 |---|---|---|---|---|
-| Dictate (`` ` ``) | Prev field (`]`) | Next field (`[`) | 📁 PowerScribe | 📁 Websites |
-| Prev series (F7) | Next series (F8) | 📁 PACS tools | 📁 Windowing | 📁 Number pad |
-| Ruler (R) | ROI (Shift+R) | Magnify (Y) | Delete (Del) | 📁 Windows |
+| Dictate (`` ` ``) | Prev field (`]`) | Next field (`[`) | Switch app (Alt+Tab) | Show desktop (Win+D) |
+| Prev series (F7) | Next series (F8) | Window to left monitor (Win+Shift+←) | Window to right monitor (Win+Shift+→) | 📁 Windows |
+| 📁 Editing (PowerScribe) | 📁 PACS tools | 📁 Windowing | 📁 Number pad | 📁 Websites |
 
-**PowerScribe**: Dictate, Prev/Next field, Impression (Ctrl+Shift+1), Undo, Redo, Select all, Copy, Paste, Backspace, Delete forward, Top of report (Ctrl+Home), End of report (Ctrl+End), Sign ⚙.
+**Editing (PowerScribe)**: Dictate, Prev/Next field, Impression (Ctrl+Shift+1), Undo, Redo, Select all, Copy, Paste, Backspace, Delete forward, Top of report (Ctrl+Home), End of report (Ctrl+End), Sign ⚙.
 
 **PACS tools**: Ruler, ROI, Magnify, CLAHE (Shift+C), Spine labeling ⚙, Localizer ⚙, Scout lines ⚙, Zoom in ⚙, Zoom out ⚙, Prev/Next series, Delete, Invert ⚙, and a door to Windowing.
 
