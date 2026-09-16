@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.3-preview  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.4-preview  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,46 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.4 (radial menus: Kando-inspired):
+;
+;    * A DIRECTION BELONGS TO ONE SLICE, OR TO NOBODY. Selection was "the
+;      nearest slice centre", which hands every bearing to somebody: in the
+;      9-way preset ring a flick 20 degrees off north fired the NEIGHBOUR.
+;      Each slice now owns only the inner half of the gap to each neighbour
+;      (Kando's scaleWedge 0.5), it is DRAWN as that arc, hairlines mark the
+;      boundaries, and the hovered arc is washed in pink. Everything left
+;      over is nobody's: at the root it selects nothing (release = cancel),
+;      and in a second ring it -- together with the whole direction that ring
+;      was entered from -- is the way BACK, which commits nothing. Slice
+;      DIRECTIONS did not move: a root ring is the same fixed compass.
+;    * A SECOND RING OPENS WHERE THE GESTURE TURNED. Holding and flicking
+;      through a door no longer needs a pause: a sharp turn (90 px of
+;      straight stroke, then more than 20 degrees, past a 10 px jitter
+;      floor) or 100 ms of stillness opens it, re-centred on the CORNER and
+;      clamped onto the monitor with a 120 px margin. Resting on a door
+;      still works. Leaves are unchanged and still fire on release only, so
+;      no gesture can send a command mid-flight. The pointer is never
+;      warped: the button is physically down.
+;    * THE CHILD RING LEAVES THE WAY BACK A SLOT OF ITS OWN -- 360/(n+1)
+;      spacing starting one step past the parent direction (Kando
+;      computeItemAngles), with the parent drawn as a small node in its true
+;      direction and a connector line to it. The numbered preset ring is
+;      exempt: there the slot IS the number.
+;    * THE HUB SAYS WHAT IS ARMED AND WHAT IT SENDS: the hovered command's
+;      name, and under it its keys in the muted style; the menu's own name
+;      when nothing is hovered; "practice -- nothing is sent" as before.
+;    * THE WHEEL MOVES WITH THE HAND. What the pointer is near grows to
+;      1.15 over 250 ms and its neighbours ease back by angular distance,
+;      the ring fades in over 75 ms, icons sit in discs with the word
+;      outside them on the ring, a door wears one dot per command behind it,
+;      and the stroke is drawn back at you from the ring's origin, fading
+;      toward the tail. Two switches on the Menus page -- "Animate the
+;      wheel" and "Show wedges" -- turn the movement and the arcs off; with
+;      animation off the tick repaints on selection changes alone, exactly
+;      as it did before. There is no fade OUT: a closing wheel may not leave
+;      a timer behind it, and a blocking fade would sit between the release
+;      and the command.
 ;
 ;  v0.6.3 (setup by keyboard, mouse buttons as outputs):
 ;
@@ -915,7 +955,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.3-preview"
+global RM_VERSION := "0.6.4-preview"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1238,6 +1278,9 @@ global DEFAULTS := Map(
     "radialRadius", 132,       ;   fire it (a tap-opened menu has no release)
     "radialSubMs", 340,        ; rest this long on a slice that opens another
                                ;   menu and that menu takes over, still held
+    ; v0.6.4. Both are about the PICTURE, never about what a direction does.
+    "radialAnim", 1,           ; 1 = grow what the pointer is near, fade in
+    "radialWedges", 1,         ; 1 = draw each slice as the arc it answers to
     "hkClipboard", "^!c",
     "hkScratch", "^!n",
     ; v0.6.2: stations, window placement, the keyboard pointer
@@ -2825,6 +2868,18 @@ ValidateCfg() {
         kept.Push(app)
     }
     g_Cfg["apps"] := kept
+    ; The two v0.6.4 wheel flags are read from the RADIAL TIMER, where a
+    ; hand-edited "yes" or an object would throw once a frame with nothing on
+    ; screen to say so. Anything that is not plainly 0 means 1 (the default).
+    if (g_Cfg.Has("settings") && g_Cfg["settings"] is Map) {
+        for k in ["radialAnim", "radialWedges"] {
+            if g_Cfg["settings"].Has(k) {
+                v := g_Cfg["settings"][k]
+                g_Cfg["settings"][k] := (!IsObject(v) && (v = 0 || v = "0"
+                    || v = false)) ? 0 : 1
+            }
+        }
+    }
     if (g_Cfg.Has("menus") && g_Cfg["menus"] is Array) {
         kept := []
         for menu in g_Cfg["menus"] {
@@ -7794,14 +7849,19 @@ RadialSlices(mn) {
         sl := raw.Has(A_Index) ? raw[A_Index] : 0
         act := MGet(sl, "action", 0)
         live := IsObject(act) && MGet(act, "type", "none") != "none"
+        ; a slice whose action opens another menu: the wheel shows it as a
+        ; door, and resting on it -- or turning a corner on it -- walks
+        ; through. `kids` is how many commands wait behind that door, drawn
+        ; as dots on its rim; `sc` is its live hover scale (v0.6.4).
+        sub := live && MGet(act, "type", "") = "radial"
+               ? String(MGet(act, "value", "")) : ""
         out.Push({label: MGet(sl, "label", ""),
                   icon: MGet(sl, "icon", ""),
                   act: IsObject(act) ? act : 0,
                   live: live,
-                  ; a slice whose action opens another menu: the wheel shows
-                  ; it as a door, and resting on it walks through
-                  sub: live && MGet(act, "type", "") = "radial"
-                       ? String(MGet(act, "value", "")) : ""})
+                  sub: sub,
+                  kids: (sub != "") ? RadialKidCount(sub) : 0,
+                  sc: 1.0})
     }
     return out
 }
@@ -7809,6 +7869,265 @@ RadialSlices(mn) {
 /** 4, 8 or 9 slices, never anything else (see RADIAL_DIR9). */
 RadialCountFor(n) {
     return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
+}
+
+; ── WEDGES: which directions belong to which slice (v0.6.4) ──────────────
+;
+; Selection used to be "the nearest slice centre", which hands every
+; direction to somebody: in a 9-way preset ring a flick 20 degrees off
+; north fires the NEIGHBOUR, and the hand never learns that it was close.
+; Kando's pie menu answers it the other way round -- an item owns only the
+; INNER HALF of the gap to each neighbour (its scaleWedge(.., 0.5)), and
+; everything left over belongs to nobody. At the root that leftover means
+; "no slice", which releases into nothing; in a second ring it is the way
+; BACK, together with the whole direction the ring was entered from. The
+; two commonest mistakes -- "I was between two of them" and "I did not mean
+; to walk in here" -- therefore both land somewhere harmless instead of on
+; a command. Slice DIRECTIONS do not move: a root ring is the same fixed
+; compass it has always been.
+
+/** True when a bearing (degrees from north) lies in the arc start..end. */
+RadialAngleIn(a, start, end) {
+    span := Mod(Mod(end - start, 360) + 360, 360)
+    if (span <= 0.0001)
+        return false
+    d := Mod(Mod(a - start, 360) + 360, 360)
+    return d <= span
+}
+
+/**
+ * Where slice i points, in degrees clockwise from north.
+ *
+ * A root ring is the fixed compass (slice 1 north, then clockwise) that the
+ * whole feature's muscle memory is built on. A CHILD ring is spaced
+ * 360/(n+1) starting one step past the direction it was entered from, so
+ * the way back keeps a slot of its own and no command is ever stacked on
+ * top of it (Kando computeItemAngles). A numbered preset ring is exempt:
+ * there the slot IS the number, and a preset that moves is a preset nobody
+ * can learn.
+ */
+RadialSliceAngles(n, parentAngle := -1, numbered := false) {
+    out := []
+    if (parentAngle < 0 || numbered) {
+        step := 360.0 / n
+        loop n
+            out.Push(Mod((A_Index - 1) * step, 360))
+        return out
+    }
+    step := 360.0 / (n + 1)
+    loop n
+        out.Push(Mod(Mod(parentAngle + A_Index * step, 360) + 360, 360))
+    return out
+}
+
+/**
+ * The arc each slice answers to, plus the "back" arc.
+ *
+ * Returns {slices: [{center, start, end}, ...], back: 0 | {center, start,
+ * end}}. A wedge is the slice's own direction plus a quarter of the gap to
+ * each neighbour -- half the gap in total, the other half being nobody's.
+ * `back` spans from the last wedge edge before the parent direction to the
+ * first one after it, so it swallows the parent's own slot AND the dead
+ * space flanking it. A root ring has no parent and so no back arc.
+ */
+RadialWedges(n, parentAngle := -1, numbered := false) {
+    angles := RadialSliceAngles(n, parentAngle, numbered)
+    gap := (parentAngle < 0 || numbered) ? (360.0 / n) : (360.0 / (n + 1))
+    half := gap / 4
+    out := {slices: [], back: 0}
+    for a in angles
+        out.slices.Push({center: a, start: Mod(a - half + 360, 360),
+                         end: Mod(a + half, 360)})
+    if (parentAngle < 0)
+        return out
+    pa := Mod(Mod(parentAngle, 360) + 360, 360)
+    bs := pa, be := pa, bd := 400.0, ad := 400.0
+    for w in out.slices {
+        d := Mod(Mod(pa - w.end, 360) + 360, 360)
+        if (d < bd) {
+            bd := d
+            bs := w.end
+        }
+        d := Mod(Mod(w.start - pa, 360) + 360, 360)
+        if (d < ad) {
+            ad := d
+            be := w.start
+        }
+    }
+    out.back := {center: pa, start: bs, end: be}
+    return out
+}
+
+/** Slice index for a bearing: 0 = no slice (cancel), -1 = back. */
+RadialPickIn(wedges, angle) {
+    for i, w in wedges.slices {
+        if RadialAngleIn(angle, w.start, w.end)
+            return i
+    }
+    return IsObject(wedges.back) ? -1 : 0
+}
+
+/**
+ * Kando's GestureDetector, as a pure function over a list of {x, y}.
+ *
+ * A corner is the end of a straight run at least `minLen` long followed by
+ * a step of at least `jitter` that turns by more than `minAngle` degrees.
+ * Returns the INDEX of the point where the hand turned, or 0 while the
+ * stroke is still straight. That point, not the current one, is where the
+ * decision was made, so it is where the next ring belongs.
+ */
+RadialCornerAt(pts, minLen := 90, minAngle := 20, jitter := 10) {
+    static DEG := 57.29577951308232
+    if (!IsObject(pts) || pts.Length < 3)
+        return 0
+    s := pts[1]
+    i := 2
+    while (i < pts.Length) {
+        e := pts[i]
+        m := pts[i + 1]
+        ax := e.x - s.x
+        ay := e.y - s.y
+        bx := m.x - e.x
+        by := m.y - e.y
+        la := Sqrt(ax * ax + ay * ay)
+        lb := Sqrt(bx * bx + by * by)
+        if (la >= minLen && lb >= jitter) {
+            c := (ax * bx + ay * by) / (la * lb)
+            c := (c > 1) ? 1 : ((c < -1) ? -1 : c)
+            if (ACos(c) * DEG > minAngle)
+                return i
+        }
+        i += 1
+    }
+    return 0
+}
+
+/** Distance from a {x, y} point to a screen position. */
+RadialDist(p, x, y) {
+    return Sqrt((p.x - x) * (p.x - x) + (p.y - y) * (p.y - y))
+}
+
+/** One frame of an ease-out toward `target`; ms is the whole transit. */
+RadialEaseTo(cur, target, dt, ms := 250) {
+    if (ms <= 0 || dt >= ms)
+        return target
+    k := (dt * 3.0) / ms                     ; ~95% of the way in `ms`
+    if (k >= 1)
+        return target
+    v := cur + (target - cur) * k
+    return (Abs(target - v) < 0.002) ? target : v
+}
+
+/**
+ * Kando's pointer-reactive scale: 1.15 under the pointer, easing to 1.0 at
+ * the opposite side of the ring. The hovered slice is a flat 1.15 so the
+ * thing being chosen is never the second biggest.
+ */
+RadialHoverScale(center, ptrAngle, hovered := false) {
+    if hovered
+        return 1.15
+    if (ptrAngle < 0)
+        return 1.0
+    d := Mod(Mod(center - ptrAngle, 360) + 360, 360)
+    if (d > 180)
+        d := 360 - d
+    return 1.15 - (d / 180) ** 0.25 * 0.15
+}
+
+/**
+ * Keep a ring's centre on screen (Kando clampToMonitor, margin 160 for a
+ * 12-item ring; 120 here, where eight slices sit inside a smaller radius).
+ * Only a CHILD ring is clamped: a root ring must agree with the cursor that
+ * opened it, so it is still allowed to run off the edge.
+ */
+RadialClampAnchor(x, y, margin := 120) {
+    m := MonitorAt(x, y)
+    mw := Min(margin, (m.r - m.l) // 2 - 1)
+    mh := Min(margin, (m.b - m.t) // 2 - 1)
+    return {x: Min(Max(x, m.l + mw), m.r - mw),
+            y: Min(Max(y, m.t + mh), m.b - mh)}
+}
+
+/** How many live slices a menu has -- the grandchild dots on its door. */
+RadialKidCount(name) {
+    mn := RadialFind(name)
+    if !IsObject(mn)
+        return 0
+    n := 0
+    for sl in MGet(mn, "slices", []) {
+        act := MGet(sl, "action", 0)
+        if (IsObject(act) && MGet(act, "type", "none") != "none")
+            n += 1
+    }
+    return Min(n, 9)
+}
+
+/** What the hub prints under a slice's name: its keys, or what it does. */
+RadialShortcut(sl) {
+    act := IsObject(sl) ? sl.act : 0
+    if !IsObject(act)
+        return ""
+    t := String(MGet(act, "type", ""))
+    v := String(MGet(act, "value", ""))
+    switch t {
+        case "keys", "keysrepeat", "ps_keys", "pacs_keys":
+            return v
+        case "radial":
+            return "opens " (v = "" ? "another menu" : v)
+        case "text":
+            return "types text"
+    }
+    return ActLabelOf(t)
+}
+
+/** Ease every slice toward its hover scale. True when anything moved. */
+RadialAnimStep(R, now) {
+    dt := now - R.animAt
+    R.animAt := now
+    on := Cfg("radialAnim") ? true : false
+    moved := false
+    i := 1
+    for sl in R.slices {
+        t := RadialHoverScale(R.wedges.slices[i].center, R.ptrAngle, i = R.sel)
+        v := on ? RadialEaseTo(sl.sc, t, dt, 250) : t
+        if (Abs(v - sl.sc) > 0.0015)
+            moved := true
+        sl.sc := v
+        i += 1
+    }
+    return moved
+}
+
+/**
+ * Point the live menu at a ring: the slices, where it is centred, and which
+ * way its parent lies (-1 at the root). Shared by open, walk-in and back,
+ * so a ring is described in exactly one place.
+ */
+RadialRing(R, mn, slices, ax, ay, parentAngle) {
+    global g_PassThru
+    if IsObject(R.lyr) {                     ; the old wheel sat at the old
+        try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
+        try R.lyr.Dispose()                  ; fresh where the hand is
+        R.lyr := 0
+    }
+    for sl in slices
+        sl.sc := 1.0
+    R.menu := mn
+    R.name := MGet(mn, "name", "menu")
+    R.slices := slices
+    R.ax := ax
+    R.ay := ay
+    R.parentAngle := parentAngle
+    R.wedges := RadialWedges(slices.Length, parentAngle, slices.Length > 8)
+    R.sel := 0
+    R.lastSel := -1
+    R.ptrAngle := -1
+    R.pts := []
+    R.t0 := A_TickCount
+    R.restAt := A_TickCount
+    R.moveAt := A_TickCount
+    R.animAt := A_TickCount
+    R.fadeAt := 0
 }
 
 ; ── clicking out of a live menu ──────────────────────────────────────────
@@ -7898,6 +8217,10 @@ RadialOpen(name, holder := 0, trial := false) {
         return
     }
     RM_GetPos(&ax, &ay)
+    now := A_TickCount
+    ; v0.6.4 adds, to the state that was always here: which ring these slices
+    ; belong to (parentAngle, wedges, stack), the stroke that is choosing one
+    ; of them (pts, ptrAngle, moveAt) and the animation clock (animAt, fadeAt).
     g_Radial := {menu: mn,
                  name: MGet(mn, "name", "menu"),
                  slices: slices,
@@ -7907,7 +8230,11 @@ RadialOpen(name, holder := 0, trial := false) {
                  sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
                  targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false, depth: 1,
-                 t0: A_TickCount, restAt: A_TickCount}
+                 t0: now, restAt: now,
+                 parentAngle: -1,
+                 wedges: RadialWedges(slices.Length, -1, slices.Length > 8),
+                 stack: [], pts: [], ptrAngle: -1,
+                 moveAt: now, animAt: now, fadeAt: 0}
     ; ALWAYS, practice included. A practice wheel that a click could not
     ; dismiss was the one window in RadMapper you had to wait out, and the
     ; cancel keys are the thing being practised as much as the flick is.
@@ -7917,8 +8244,10 @@ RadialOpen(name, holder := 0, trial := false) {
 }
 
 /**
- * 16 ms is a frame. It costs one cursor read and, only when the highlighted
- * slice actually changes, one repaint -- the tick does NOT redraw at 60 Hz.
+ * 16 ms is a frame. It costs one cursor read, and a repaint only when the
+ * picture would actually differ: the highlighted slice changed, the stroke
+ * grew, or an animation is still running. With "Animate the wheel" off the
+ * tick repaints on selection changes alone, exactly as it did before v0.6.4.
  */
 RadialTick(*) {
     global g_Radial
@@ -7948,25 +8277,80 @@ RadialTick(*) {
     RM_GetPos(&mx, &my)
     dx := mx - R.ax
     dy := my - R.ay
-    n := R.slices.Length
     dead := Max(Cfg("radialDead"), 8)
+    ; The hub is the dead zone AND the abort: inside it nothing is selected,
+    ; whatever the hand is pointing at.
     sel := 0
+    ang := -1
     if (dx * dx + dy * dy >= dead * dead) {
-        step := 360.0 / n
-        sel := Mod(Floor((RadialAngle(dx, dy) + step / 2) / step), n) + 1
+        ang := RadialAngle(dx, dy)
+        sel := RadialPickIn(R.wedges, ang)    ; 0 = nothing, -1 = back
     }
+    R.ptrAngle := ang
     if (sel != R.sel) {
         R.sel := sel
         R.restAt := now
+    }
+    ; The stroke: kept only while the hand actually moves, so a stationary
+    ; pointer cannot fill the buffer with copies of itself -- "paused" has
+    ; to stay measurable, and the trace has to stay a line.
+    moved := false
+    if (R.pts.Length = 0 || RadialDist(R.pts[R.pts.Length], mx, my) >= 4) {
+        R.pts.Push({x: mx, y: my})
+        if (R.pts.Length > 64)
+            R.pts.RemoveAt(1)
+        moved := true
+        R.moveAt := now
     }
     ; The dwell is measured from the PRESS, not from the last movement: move
     ; fast enough and the menu is never drawn at all, which is the whole
     ; novice/expert unification. Once drawn it stays drawn.
     want := R.drawn || R.latched || (now - R.t0 >= Max(Cfg("radialDwellMs"), 0))
-    if (want && (!R.drawn || R.sel != R.lastSel)) {
-        R.drawn := true
-        R.lastSel := R.sel
-        RadialPaint()
+    if want {
+        paint := !R.drawn || (R.sel != R.lastSel)
+        if RadialAnimStep(R, now)
+            paint := true
+        if (moved && R.drawn && !R.latched)
+            paint := true                    ; the trace grew
+        if (R.fadeAt && (now - R.fadeAt < 75))
+            paint := true                    ; still fading in
+        if paint {
+            R.drawn := true
+            R.lastSel := R.sel
+            RadialPaint()
+        }
+    }
+    ; ── walking through a door without stopping (Kando's marking mode) ──
+    ;
+    ; A sharp turn, or a pause at the end of a long enough stroke, means the
+    ; hand has finished one leg of a gesture and started the next: open the
+    ; door it turned at, re-centred ON THE CORNER, and keep going. Only
+    ; DOORS open this way. A leaf still fires on release and on release only
+    ; (Kando's eSubmenuOnly), because a gesture that can fire a command
+    ; mid-flight is a gesture that will fire one into a report.
+    if (!R.latched && R.pts.Length > 1) {
+        corner := RadialCornerAt(R.pts, 90, 20, 10)
+        paused := (RadialDist(R.pts[1], mx, my) >= 90 && (now - R.moveAt >= 100))
+        if (corner || paused) {
+            px := corner ? R.pts[corner].x : mx
+            py := corner ? R.pts[corner].y : my
+            cs := RadialPickIn(R.wedges, RadialAngle(px - R.ax, py - R.ay))
+            ; a deliberate TURN into the back arc walks out; a pause does
+            ; not, or a hand resting anywhere but on a slice would leave the
+            ; ring after 100 ms
+            if (corner && cs = -1 && R.stack.Length > 0) {
+                RadialBack()
+                return
+            }
+            if (cs > 0 && R.slices[cs].sub != "" && R.depth < RADIAL_MAXDEPTH) {
+                RadialEnter(R.slices[cs].sub, px, py, R.wedges.slices[cs].center)
+                return
+            }
+            ; not a door: start a fresh stroke at the corner, so the next leg
+            ; is measured on its own rather than against the whole journey
+            if corner
+                R.pts := [{x: px, y: py}, {x: mx, y: my}]
+        }
     }
     ; A slice that opens another menu is a DOOR. Rest on it and that menu
     ; takes the wheel's place, re-centred under the cursor, still held: hold,
@@ -7976,7 +8360,13 @@ RadialTick(*) {
     ; habits work.
     if (R.sel > 0 && R.slices[R.sel].sub != "" && R.depth < RADIAL_MAXDEPTH
         && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
-        RadialEnter(R.slices[R.sel].sub)
+        RadialEnter(R.slices[R.sel].sub, , , R.wedges.slices[R.sel].center)
+        return
+    }
+    ; Resting in the back arc walks out of a nested ring the same way.
+    if (R.sel = -1 && R.stack.Length > 0
+        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
+        RadialBack()
         return
     }
     ; Latched mode commits by resting in a slice. Nothing else can commit it
@@ -7988,8 +8378,17 @@ RadialTick(*) {
         RadialClose(true)
 }
 
-/** Swap the live wheel for a nested menu, anchored where the cursor is now. */
-RadialEnter(name) {
+/**
+ * Swap the live wheel for a nested menu.
+ *
+ * The child ring is centred where the decision was made -- the cursor, or
+ * the corner the gesture turned at -- and then clamped onto the monitor
+ * (Kando openSubmenu + clampToMonitor), which is what makes a second ring
+ * usable near a screen edge. The cursor is deliberately NOT warped to
+ * follow the clamp: the button is physically down, and moving the pointer
+ * under a held button is how you drag something in the study underneath.
+ */
+RadialEnter(name, px := "", py := "", doorAngle := -1) {
     global g_Radial
     R := g_Radial
     if !IsObject(R)
@@ -8002,23 +8401,35 @@ RadialEnter(name) {
     slices := RadialSlices(mn)
     if (slices.Length < 2)
         return
-    if IsObject(R.lyr) {                     ; the old wheel sat at the old
-        try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
-        try R.lyr.Dispose()                  ; fresh where the hand is
-        R.lyr := 0
-    }
-    RM_GetPos(&ax, &ay)
-    R.menu := mn
-    R.name := MGet(mn, "name", "menu")
-    R.slices := slices
-    R.ax := ax
-    R.ay := ay
-    R.sel := 0
-    R.lastSel := -1
+    if (px = "" || py = "")
+        RM_GetPos(&px, &py)                  ; not 0: a monitor may start there
+    ; the way back, remembered exactly where it was (Kando keeps the parent's
+    ; own offset when walking back out)
+    R.stack.Push({menu: R.menu, name: R.name, slices: R.slices,
+                  ax: R.ax, ay: R.ay, parentAngle: R.parentAngle})
+    at := RadialClampAnchor(px, py, 120)
+    ; which way the ring we came from now lies. Far enough away and it is
+    ; simply the bearing back to it; on top of us (a tap-opened door, or a
+    ; hard clamp) fall back to the opposite of the door we walked through.
+    pa := (RadialDist({x: R.ax, y: R.ay}, at.x, at.y) >= 16)
+        ? RadialAngle(R.ax - at.x, R.ay - at.y)
+        : Mod((doorAngle >= 0 ? doorAngle : 0) + 180, 360)
+    RadialRing(R, mn, slices, at.x, at.y, pa)
     R.depth += 1
     R.drawn := true                          ; a nested menu is always shown:
-    R.t0 := A_TickCount                      ; you asked for it by pausing
-    R.restAt := A_TickCount
+    RadialPaint()                            ; you asked for it by walking in
+}
+
+/** Walk back out to the ring this one was opened from. Commits nothing. */
+RadialBack() {
+    global g_Radial
+    R := g_Radial
+    if (!IsObject(R) || R.stack.Length = 0)
+        return
+    p := R.stack.Pop()
+    RadialRing(R, p.menu, p.slices, p.ax, p.ay, p.parentAngle)
+    R.depth := Max(1, R.depth - 1)
+    R.drawn := true
     RadialPaint()
 }
 
@@ -8101,77 +8512,84 @@ RadialFireSlice(act, label, target, targetPid := 0, *) {
  * Every icon is built from the same six primitives the wheel already uses
  * (line, rectangle, ellipse, triangle, pie, polygon) -- no images, so they
  * scale with the ring and recolour with the state.
+ *
+ * `sc` scales the whole glyph about its centre. Every case below is written
+ * on the same 22 px grid and goes through X/Y/S, so the hover animation
+ * costs one multiply per coordinate rather than a second copy of the table.
  */
-RadialIcon(name, x, y, col) {
+RadialIcon(name, x, y, col, sc := 1.0) {
+    X(d) => Round(x + d * sc)
+    Y(d) => Round(y + d * sc)
+    S(d) => Max(1, Round(d * sc))
     try {
         switch name {
             case "next":                     ; play triangle + end bar
-                FilledTriangle(x - 8, y - 8, x + 3, y, x - 8, y + 8, col)
-                Rectangle(x + 5, y - 8, 3, 16, col, true)
+                FilledTriangle(X(-8), Y(-8), X(3), Y(0), X(-8), Y(8), col)
+                Rectangle(X(5), Y(-8), S(3), S(16), col, true)
             case "prev":
-                FilledTriangle(x + 8, y - 8, x - 3, y, x + 8, y + 8, col)
-                Rectangle(x - 8, y - 8, 3, 16, col, true)
+                FilledTriangle(X(8), Y(-8), X(-3), Y(0), X(8), Y(8), col)
+                Rectangle(X(-8), Y(-8), S(3), S(16), col, true)
             case "delete":                   ; a lidded bin
-                Rectangle(x - 6, y - 4, 12, 12, col, false)
-                Rectangle(x - 8, y - 7, 16, 2, col, true)
-                Rectangle(x - 2, y - 10, 4, 2, col, true)
-                Line(x - 2, y - 1, x - 2, y + 5, col, 1)
-                Line(x + 2, y - 1, x + 2, y + 5, col, 1)
+                Rectangle(X(-6), Y(-4), S(12), S(12), col, false)
+                Rectangle(X(-8), Y(-7), S(16), S(2), col, true)
+                Rectangle(X(-2), Y(-10), S(4), S(2), col, true)
+                Line(X(-2), Y(-1), X(-2), Y(5), col, 1)
+                Line(X(2), Y(-1), X(2), Y(5), col, 1)
             case "ruler":                    ; a rule with graduations
-                Rectangle(x - 11, y - 4, 22, 9, col, false)
+                Rectangle(X(-11), Y(-4), S(22), S(9), col, false)
                 for k in [-7, -3, 1, 5]
-                    Line(x + k, y - 4, x + k, y - 1, col, 1)
-                Line(x + 9, y - 4, x + 9, y + 1, col, 1)
+                    Line(X(k), Y(-4), X(k), Y(-1), col, 1)
+                Line(X(9), Y(-4), X(9), Y(1), col, 1)
             case "roi":                      ; dashed frame around a blob
                 for k in [-9, -3, 3]
-                    Line(x + k, y - 8, x + k + 3, y - 8, col, 1)
+                    Line(X(k), Y(-8), X(k + 3), Y(-8), col, 1)
                 for k in [-9, -3, 3]
-                    Line(x + k, y + 8, x + k + 3, y + 8, col, 1)
+                    Line(X(k), Y(8), X(k + 3), Y(8), col, 1)
                 for k in [-8, -2, 4]
-                    Line(x - 9, y + k, x - 9, y + k + 3, col, 1)
+                    Line(X(-9), Y(k), X(-9), Y(k + 3), col, 1)
                 for k in [-8, -2, 4]
-                    Line(x + 9, y + k, x + 9, y + k + 3, col, 1)
-                Ellipse(x - 5, y - 3, 10, 7, col, true)
+                    Line(X(9), Y(k), X(9), Y(k + 3), col, 1)
+                Ellipse(X(-5), Y(-3), S(10), S(7), col, true)
             case "clahe":                    ; half-filled disc: contrast
-                Ellipse(x - 9, y - 9, 18, 18, col, false)
-                FilledPie(x - 9, y - 9, 18, 18, 90.0, 180.0, col)
+                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
+                FilledPie(X(-9), Y(-9), S(18), S(18), 90.0, 180.0, col)
             case "window":                   ; a window pane: W/L
-                Rectangle(x - 9, y - 8, 18, 16, col, false)
-                Line(x, y - 8, x, y + 8, col, 1)
-                Line(x - 9, y, x + 9, y, col, 1)
+                Rectangle(X(-9), Y(-8), S(18), S(16), col, false)
+                Line(X(0), Y(-8), X(0), Y(8), col, 1)
+                Line(X(-9), Y(0), X(9), Y(0), col, 1)
             case "magnify":                  ; lens and handle
-                Ellipse(x - 10, y - 10, 14, 14, col, false)
-                Ellipse(x - 9, y - 9, 12, 12, col, false)
-                Line(x + 3, y + 3, x + 9, y + 9, col, 3)
+                Ellipse(X(-10), Y(-10), S(14), S(14), col, false)
+                Ellipse(X(-9), Y(-9), S(12), S(12), col, false)
+                Line(X(3), Y(3), X(9), Y(9), col, S(3))
             case "series":                   ; a stack of slices
-                Rectangle(x - 9, y - 3, 12, 10, col, false)
-                Rectangle(x - 6, y - 6, 12, 10, col, false)
-                Rectangle(x - 3, y - 9, 12, 10, col, false)
+                Rectangle(X(-9), Y(-3), S(12), S(10), col, false)
+                Rectangle(X(-6), Y(-6), S(12), S(10), col, false)
+                Rectangle(X(-3), Y(-9), S(12), S(10), col, false)
             case "menu":                     ; a ring with a hub: another wheel
-                Ellipse(x - 9, y - 9, 18, 18, col, false)
-                Ellipse(x - 3, y - 3, 6, 6, col, true)
-                Line(x, y - 9, x, y - 5, col, 1)
-                Line(x, y + 5, x, y + 9, col, 1)
-                Line(x - 9, y, x - 5, y, col, 1)
-                Line(x + 5, y, x + 9, y, col, 1)
+                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
+                Ellipse(X(-3), Y(-3), S(6), S(6), col, true)
+                Line(X(0), Y(-9), X(0), Y(-5), col, 1)
+                Line(X(0), Y(5), X(0), Y(9), col, 1)
+                Line(X(-9), Y(0), X(-5), Y(0), col, 1)
+                Line(X(5), Y(0), X(9), Y(0), col, 1)
             case "zoom":                     ; lens with a plus
-                Ellipse(x - 10, y - 10, 14, 14, col, false)
-                Line(x - 3, y - 6, x - 3, y, col, 1)
-                Line(x - 6, y - 3, x, y - 3, col, 1)
-                Line(x + 3, y + 3, x + 9, y + 9, col, 3)
+                Ellipse(X(-10), Y(-10), S(14), S(14), col, false)
+                Line(X(-3), Y(-6), X(-3), Y(0), col, 1)
+                Line(X(-6), Y(-3), X(0), Y(-3), col, 1)
+                Line(X(3), Y(3), X(9), Y(9), col, S(3))
             case "invert":                   ; two half discs swapped
-                Ellipse(x - 9, y - 9, 18, 18, col, false)
-                FilledPie(x - 9, y - 9, 18, 18, -90.0, 180.0, col)
+                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
+                FilledPie(X(-9), Y(-9), S(18), S(18), -90.0, 180.0, col)
             case "reset":                    ; a counter-clockwise arrow
-                Arc(x - 8, y - 8, 16, 16, col, 2, -60.0, 300.0)
-                FilledTriangle(x - 2, y - 12, x - 2, y - 4, x - 9, y - 8, col)
+                Arc(X(-8), Y(-8), S(16), S(16), col, 2, -60.0, 300.0)
+                FilledTriangle(X(-2), Y(-12), X(-2), Y(-4), X(-9), Y(-8), col)
             case "dictate":                  ; a microphone
-                Rectangle(x - 3, y - 10, 6, 11, col, true)
-                Arc(x - 6, y - 6, 12, 12, col, 1, 0.0, 180.0)
-                Line(x, y + 6, x, y + 9, col, 1)
-                Line(x - 4, y + 9, x + 4, y + 9, col, 1)
+                Rectangle(X(-3), Y(-10), S(6), S(11), col, true)
+                Arc(X(-6), Y(-6), S(12), S(12), col, 1, 0.0, 180.0)
+                Line(X(0), Y(6), X(0), Y(9), col, 1)
+                Line(X(-4), Y(9), X(4), Y(9), col, 1)
             default:
-                Ellipse(x - 3, y - 3, 6, 6, col, true)
+                Ellipse(X(-3), Y(-3), S(6), S(6), col, true)
         }
     } catch as e {
         Problem("radial", "icon '" name "' failed: " e.Message)
@@ -8181,10 +8599,15 @@ RadialIcon(name, x, y, col) {
 /**
  * Draw the wheel, centred on the anchor.
  *
- * Deliberately NOT clamped to the monitor. The geometry has to agree with
- * the cursor -- the direction you push is the slice you get -- so a menu
- * opened near an edge is allowed to run off it rather than shift under your
- * hand and change what every direction means.
+ * A ROOT ring is deliberately NOT clamped to the monitor. The geometry has
+ * to agree with the cursor -- the direction you push is the slice you get
+ * -- so a menu opened near an edge is allowed to run off it rather than
+ * shift under your hand and change what every direction means. A CHILD ring
+ * is clamped, because it is re-centred on the corner of a gesture and its
+ * directions are being read, not remembered (RadialEnter).
+ *
+ * Everything here is arithmetic over R plus GDI+ calls: the tick decides
+ * WHEN to paint, this decides only what the frame looks like.
  */
 RadialPaint() {
     global g_Radial, g_PassThru
@@ -8193,8 +8616,21 @@ RadialPaint() {
     R := g_Radial
     ro := ClampInt(Cfg("radialRadius"), 90, 260, 132)
     ri := Max(38, ro // 3)
-    pad := 4
+    ; The layer is wider than the ring by a whole label: words sit OUTSIDE
+    ; their icon now (Kando draws the name past the item), and the gesture
+    ; trace needs somewhere to live.
+    pad := 46
     size := ro * 2 + pad * 2
+    wedgy := Cfg("radialWedges") ? true : false
+    ; GDI+ measures from 3 o'clock; our bearings are from north. Kept FLOAT
+    ; deliberately: GpGFX's Pie constructor decides which overload it was
+    ; handed by asking isColourParam() about the start angle, and that returns
+    ; TRUE for any negative INTEGER -- so an integer -135 would be read as a
+    ; colour and the wedge drawn as something else entirely. The `+ 0.0` says
+    ; so out loud.
+    gd(a) => (a - 90) + 0.0
+    arcOf(w) => Mod(Mod(w.end - w.start, 360) + 360, 360) + 0.0
+    rad(a) => (a - 90) * 0.017453292519943295
     prev := LayerStack.ActiveLayer
     try {
         if !IsObject(R.lyr) {
@@ -8214,6 +8650,7 @@ RadialPaint() {
             lyr.NoActivate()
             lyr.TopMost(true)
             lyr.alwaysFullErase := true      ; text may outgrow its box
+            R.fadeAt := A_TickCount          ; fade in over 75 ms
         }
         lyr := R.lyr
         LayerStack.ActiveLayer := lyr
@@ -8222,39 +8659,92 @@ RadialPaint() {
         cy := ro + pad
         n := R.slices.Length
         step := 360.0 / n
+        W := R.wedges
+        ; The way back, under everything: it is the largest target on the
+        ; ring and it must never look like a command.
+        if IsObject(W.back)
+            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(W.back.start),
+                arcOf(W.back), (R.sel = -1)
+                    ? Lumi.Mix(Lumi.C["surface"], Lumi.C["cyan"], 0.30)
+                    : Lumi.C["raised"])
         i := 1
         for sl in R.slices {
-            ; GDI+ measures from 3 o'clock, clockwise. Slice 1 points north,
-            ; so its centre is -90 and its leading edge half a step before.
-            ;
-            ; Kept a FLOAT deliberately: GpGFX's Pie constructor decides which
-            ; overload it was handed by asking isColourParam() about the start
-            ; angle, and that returns TRUE for any negative INTEGER -- so an
-            ; integer -135 would be read as a colour and the wedge would be
-            ; drawn as something else entirely. step is 360.0/n, which keeps
-            ; the whole expression floating; the + 0.0 says so out loud.
-            start := (-90 - step / 2 + (i - 1) * step) + 0.0
+            w := W.slices[i]
+            ; With wedges on, the slice is DRAWN as the arc it answers to,
+            ; so what you see is exactly what you can hit; with them off it
+            ; fills its whole share of the circle, as it did before v0.6.4.
+            start := wedgy ? gd(w.start) : (gd(w.center) - step / 2)
+            sweep := wedgy ? arcOf(w) : (step - 1.4)
             active := (i = R.sel)
             col := !sl.live ? Lumi.C["raised"]
                  : active   ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.55)
                             : Lumi.C["raised2"]
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, start, step - 1.4, col)
+            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, start, sweep, col)
             i += 1
+        }
+        ; Kando's selection wedge: a translucent sector over the hovered
+        ; slice, which is the one thing a solid ring cannot say -- WHICH
+        ; directions still count as this slice.
+        if (wedgy && R.sel > 0) {
+            w := W.slices[R.sel]
+            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(w.start), arcOf(w),
+                Lumi.Alpha(Lumi.C["magenta"], 0x38))
         }
         ; The hub, punched over the wedges: it is also the dead zone, so it
         ; has to look like the place where nothing happens.
         FilledCircle(cx, cy, ri, Lumi.C["surface"])
         Circle(cx, cy, ri, Lumi.C["hair"], false)
         Circle(cx, cy, ro, Lumi.C["hair"], false)
-
+        ; A hairline at every wedge boundary: the edges of the dead space
+        ; are the whole point of having any.
+        if wedgy {
+            edges := []
+            for w in W.slices {
+                edges.Push(w.start)
+                edges.Push(w.end)
+            }
+            if IsObject(W.back) {
+                edges.Push(W.back.start)
+                edges.Push(W.back.end)
+            }
+            for a in edges {
+                t := rad(a)
+                Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)),
+                     Round(cx + ro * Cos(t)), Round(cy + ro * Sin(t)),
+                     Lumi.C["hairSoft"], 1)
+            }
+        }
+        ; The parent ring, as a node in the direction it actually lies in,
+        ; with the line that leads back to it (Kando's connector).
+        if IsObject(W.back) {
+            t := rad(W.back.center)
+            bx := Round(cx + (ro - 24) * Cos(t))
+            by := Round(cy + (ro - 24) * Sin(t))
+            bcol := (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["hair"]
+            Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)), bx, by,
+                bcol, 2)
+            FilledCircle(bx, by, 13, Lumi.C["raised"])
+            Circle(bx, by, 13, bcol, false)
+            RadialIcon("prev", bx, by,
+                (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["inkDim"], 0.62)
+        }
+        ; ── the slices themselves ───────────────────────────────────────
         i := 1
-        mid := (ri + ro) / 2
         numbered := (n > 8)                  ; the preset ring: numbers first
+        ; The disc, then the word outside it, then the rim of the ring: at
+        ; the smallest allowed radius (90) the annulus is 52 px wide, so the
+        ; disc is sized from the annulus rather than fixed at 19.
+        disc := Min(19, (ro - ri) * 0.28)
+        ; a numbered ring has no disc: the number itself is the target, and
+        ; it keeps the mid-annulus place it has always had
+        micon := numbered ? ((ri + ro) / 2) : (ri + disc + 6)
         for sl in R.slices {
-            ang := (-90 + (i - 1) * step) * 0.017453292519943295
-            lx := cx + mid * Cos(ang)
-            ly := cy + mid * Sin(ang)
+            w := W.slices[i]
+            t := rad(w.center)
+            lx := cx + micon * Cos(t)
+            ly := cy + micon * Sin(t)
             active := (i = R.sel)
+            sc := (sl.sc > 0.2) ? sl.sc : 1.0
             txt := (sl.label != "") ? sl.label : (sl.live ? "?" : "—")
             inkCol := !sl.live ? Lumi.C["inkMute"]
                     : active   ? Lumi.C["ink"] : Lumi.C["inkDim"]
@@ -8263,44 +8753,107 @@ RadialPaint() {
                 ; reminder of what it means
                 Text(Round(lx - 30), Round(ly - 24), 60, 26, String(i),
                     active ? Lumi.C["ink"] : Lumi.C["cyanSoft"],
-                    Lumi.Size["hero"], Lumi.Face, "Bold")
+                    Round(Lumi.Size["hero"] * sc), Lumi.Face, "Bold")
                     .TextAlign("center", "middle")
                 Text(Round(lx - 52), Round(ly + 2), 104, 18, txt, inkCol,
                     Lumi.Size["small"], Lumi.Face).TextAlign("center", "middle")
-            } else if (sl.icon != "" || sl.sub != "") {
-                ; icon above, word below -- a glyph is recognised faster than
-                ; a word is read, and the word confirms it
-                RadialIcon(sl.icon != "" ? sl.icon : "menu",
-                    Round(lx), Round(ly - 12),
-                    !sl.live ? Lumi.C["inkMute"]
-                    : active ? Lumi.C["ink"] : Lumi.C["cyan"])
-                Text(Round(lx - 58), Round(ly + 4), 116, 20,
-                    txt (sl.sub != "" ? " ›" : ""), inkCol,
-                    Lumi.Size["small"], Lumi.Face, active ? "Bold" : "Regular")
-                    .TextAlign("center", "middle")
             } else {
-                Lumi.Label(Round(lx - 58), Round(ly - 11), 116, txt,
-                    sl.live ? (active ? "body" : "dim") : "mute",
-                    "center", 22)
+                ; A glyph in a disc, the word outside it on the ring: the
+                ; disc is what the eye lands on and what the hover grows.
+                rr := Round(disc * sc)
+                FilledCircle(Round(lx), Round(ly), rr,
+                    sl.live ? Lumi.C["raised"] : Lumi.C["surface"])
+                Circle(Round(lx), Round(ly), rr,
+                    active ? Lumi.C["magenta"] : Lumi.C["hair"], false)
+                RadialIcon(sl.icon != "" ? sl.icon
+                    : (sl.sub != "" ? "menu" : "dot"), Round(lx), Round(ly),
+                    !sl.live ? Lumi.C["inkMute"]
+                    : active ? Lumi.C["ink"] : Lumi.C["cyan"], sc * 0.8)
+                ; Grandchild dots: one per command in the ring behind this
+                ; door, so a door LOOKS like a door before you open it.
+                if (sl.kids > 0) {
+                    k := sl.kids
+                    j := 1
+                    loop k {
+                        dt := rad(w.center + (j - (k + 1) / 2) * 6.5)
+                        FilledCircle(Round(lx + (rr + 7) * Cos(dt)),
+                            Round(ly + (rr + 7) * Sin(dt)), 2,
+                            active ? Lumi.C["cyanSoft"] : Lumi.C["inkMute"])
+                        j += 1
+                    }
+                }
+                tx := cx + (ro - 11) * Cos(t)
+                ty := cy + (ro - 11) * Sin(t)
+                Text(Round(tx - 58), Round(ty - 10), 116, 20,
+                    txt (sl.sub != "" ? " ›" : ""), inkCol,
+                    Round(Lumi.Size["small"] * sc), Lumi.Face,
+                    active ? "Bold" : "Regular").TextAlign("center", "middle")
             }
             i += 1
         }
-        ; The hub says what is armed, so a glance answers "what will this do
-        ; if I let go now" without reading the ring.
+        ; ── the stroke that is choosing ─────────────────────────────────
+        ; The gesture drawn back at you, fading toward the tail: it is the
+        ; only feedback a marking menu can give about the SHAPE you made,
+        ; and in practice mode it is the whole lesson.
+        if (!R.latched && R.pts.Length > 1) {
+            first := Max(1, R.pts.Length - 11)
+            span := R.pts.Length - first
+            j := first
+            while (j < R.pts.Length) {
+                a := R.pts[j]
+                b := R.pts[j + 1]
+                f := (j - first + 1) / span
+                Line(Round(a.x - R.ax + cx), Round(a.y - R.ay + cy),
+                     Round(b.x - R.ax + cx), Round(b.y - R.ay + cy),
+                     Lumi.Alpha(Lumi.C["cyan"], Round(40 + 170 * f)), 3)
+                j += 1
+            }
+        }
+        ; ── the hub says what is armed ──────────────────────────────────
+        ; A glance answers "what happens if I let go now" without reading
+        ; the ring: the hovered command, and under it the keys it sends.
+        inner := ri * 2 - 8
         pick := (R.sel > 0) ? R.slices[R.sel] : 0
-        Lumi.Label(cx - ri + 4, cy - 20, ri * 2 - 8, R.name, "section",
-            "center", 16)
-        Lumi.Label(cx - ri + 4, cy - 2, ri * 2 - 8,
-            IsObject(pick) ? (pick.live ? pick.label : "—") : "cancel",
-            IsObject(pick) && pick.live ? "accent" : "mute", "center", 20)
+        if IsObject(pick) {
+            Lumi.Label(cx - ri + 4, cy - 26, inner,
+                Lumi.Elide(pick.live ? (pick.label != "" ? pick.label : "?")
+                                     : "—", inner, "body"),
+                pick.live ? "accent" : "mute", "center", 20)
+            hint := pick.live ? RadialShortcut(pick) : "nothing here"
+            if (hint != "")
+                Lumi.Label(cx - ri + 4, cy - 4, inner,
+                    Lumi.Elide(hint, inner, "small"), "mute", "center", 18)
+        } else if (R.sel = -1) {
+            Lumi.Label(cx - ri + 4, cy - 26, inner, "back", "accent",
+                "center", 20)
+            Lumi.Label(cx - ri + 4, cy - 4, inner,
+                Lumi.Elide(R.stack.Length > 0
+                    ? R.stack[R.stack.Length].name : "", inner, "small"),
+                "mute", "center", 18)
+        } else {
+            Lumi.Label(cx - ri + 4, cy - 26, inner,
+                Lumi.Elide(R.name, inner, "body"), "section", "center", 20)
+            Lumi.Label(cx - ri + 4, cy - 4, inner, "cancel", "mute",
+                "center", 18)
+        }
         ; Practice looks exactly like the real thing, which is the point --
         ; so the hub has to say, on the wheel itself, that it is not.
         if R.trial
-            Text(cx - ri + 4, cy + 18, ri * 2 - 8, 16,
+            Text(cx - ri + 4, cy + 16, inner, 16,
                 "practice — nothing is sent", Lumi.C["warn"],
                 Lumi.Size["tiny"], Lumi.Face, "Bold")
                 .TextAlign("center", "middle")
-
+        ; Kando fades a menu in over 75 ms. There is no matching fade OUT:
+        ; a closing wheel may not leave a timer behind it, and a blocking
+        ; fade would sit between the release and the command.
+        if R.fadeAt {
+            el := A_TickCount - R.fadeAt
+            if (!Cfg("radialAnim") || el >= 75) {
+                lyr.alpha := 255
+                R.fadeAt := 0
+            } else
+                lyr.alpha := Max(40, Round(255 * el / 75))
+        }
         lyr.Draw()
     } catch as e {
         Problem("radial", "menu paint failed: " e.Message
@@ -14740,8 +15293,13 @@ class Atlas {
             . "Radial menus`n"
             . "Edit commands, Assign a button, then Practice safely. Choose "
             . "Send keys for PACS shortcuts and record the keys shown in "
-            . "your viewer settings. A disabled direction does nothing, and "
-            . "practice never sends a command.`n`n"
+            . "your viewer settings. Each command owns its own slice of the "
+            . "circle and the middle says what will run; between two of them, "
+            . "or in the middle, nothing is chosen. A command that opens a "
+            . "second ring opens it when you turn a corner on it or pause on "
+            . "it, and in that second ring the direction you came from goes "
+            . "back. A disabled direction does nothing, and practice never "
+            . "sends a command.`n`n"
             . "Getting around`n"
             . "Use the list on the left, or set the whole thing up from the "
             . "keyboard: Tab and Shift+Tab move between controls and ring "
@@ -15787,7 +16345,9 @@ class Atlas {
         Lumi.Para(x, y + 28, w, 56,
             "1. Edit commands.   2. Assign a button.   3. Practice safely. "
             . "Hold the assigned button, move toward a command, then release. "
-            . "Release in the center or press Escape to cancel.", "mute")
+            . "Each command answers to its own arc; between two of them "
+            . "nothing is chosen. Release in the center or press Escape to "
+            . "cancel.", "mute")
 
         rows := []
         Atlas.menuRefs := []
@@ -15806,7 +16366,7 @@ class Atlas {
                 live " filled", Atlas.MenuBoundTo(nm)]})
             Atlas.menuRefs.Push(i)
         }
-        Atlas.list := Lumi.List(x, y + 96, w, h - 210, rows,
+        Atlas.list := Lumi.List(x, y + 96, w, h - 248, rows,
             [{w: 210}, {w: 150, kind: "mute"}, {w: 110, kind: "mono"},
              {w: 110, kind: "mono"}, {w: w - 620, kind: "mono"}],
             (i, dbl) => (dbl ? Atlas.MenuEditSel() : 0), 30,
@@ -15814,6 +16374,15 @@ class Atlas {
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
                 "No menus yet — type a name below and click Add.", "mute")
+
+        ; How the wheel LOOKS, never what a direction does. Both are on by
+        ; default; both are here rather than on Settings because they are
+        ; about this page's one object.
+        ty := y + h - 140
+        Lumi.Toggle(x, ty, "Animate the wheel", Cfg("radialAnim"),
+            (v) => Atlas.SetCfg("radialAnim", v ? 1 : 0))
+        Lumi.Toggle(x + 300, ty, "Show wedges", Cfg("radialWedges"),
+            (v) => Atlas.SetCfg("radialWedges", v ? 1 : 0))
 
         by := y + h - 96
         Lumi.Label(x, by, 90, "New menu", "dim", "left", 30)

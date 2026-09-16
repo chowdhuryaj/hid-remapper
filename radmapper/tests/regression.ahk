@@ -36,6 +36,81 @@ try {
     for i, delta in [[0,-100], [100,0], [0,100], [-100,0]]
         Check(Abs(RadialAngle(delta[1], delta[2]) - (i - 1) * 90) < 0.01, "Compass angle")
 
+    ; ── wedges (v0.6.4) ─────────────────────────────────────────────────
+    ; A slice owns its own direction plus a quarter of the gap on each side;
+    ; the rest of the circle is nobody's. Pure arithmetic -- no cursor, no
+    ; layer, no config.
+    w4 := RadialWedges(4)
+    Check(w4.slices.Length = 4 && !IsObject(w4.back),
+        "A root ring has four wedges and no way back")
+    for i, want in [0, 90, 180, 270] {
+        Check(Abs(w4.slices[i].center - want) < 0.01, "4-way slice " i " moved")
+        Check(RadialPickIn(w4, want) = i, "4-way centre picks its own slice")
+        Check(RadialPickIn(w4, want + 22.4) = i, "4-way wedge stops short")
+        Check(RadialPickIn(w4, Mod(want + 30 + 360, 360)) = 0,
+            "Between two 4-way slices nothing is chosen")
+    }
+    w8 := RadialWedges(8)
+    for i, want in [0, 45, 90, 135, 180, 225, 270, 315] {
+        Check(Abs(w8.slices[i].center - want) < 0.01, "8-way slice " i " moved")
+        Check(RadialPickIn(w8, want) = i, "8-way centre picks its own slice")
+        Check(RadialPickIn(w8, Mod(want + 22.5 + 360, 360)) = 0,
+            "Halfway between two 8-way slices is nobody's")
+    }
+    ; A CHILD ring is spaced 360/(n+1) from one step past the parent, so the
+    ; way back keeps a slot and every leftover bearing selects it.
+    wc := RadialWedges(8, 180)
+    Check(IsObject(wc.back), "A child ring must have a way back")
+    for i, sl in wc.slices {
+        d := Mod(Mod(sl.center - 180, 360) + 360, 360)
+        if (d > 180)
+            d := 360 - d
+        Check(d > 39.9, "A child slice sits on the parent direction")
+    }
+    Check(RadialPickIn(wc, 180) = -1, "The parent direction must go back")
+    Check(RadialPickIn(wc, 220) = 1, "The first child slice is one step past")
+    Check(RadialPickIn(wc, 200) = -1, "Dead space beside the parent goes back")
+    Check(RadialAngleIn(180, wc.back.start, wc.back.end),
+        "The back arc must contain the parent direction")
+    Check(Abs(Mod(Mod(wc.back.end - wc.back.start, 360) + 360, 360) - 60) < 0.01,
+        "The back arc is the parent slot plus the dead space flanking it")
+    ; The numbered preset ring keeps its numbers where they are, parent or no
+    ; parent: the slot IS the number.
+    for i, a in RadialSliceAngles(9, 180, true)
+        Check(Abs(a - (i - 1) * 40) < 0.01, "A preset number moved")
+    Check(RadialAngleIn(5, 355, 15) && !RadialAngleIn(20, 355, 15),
+        "An arc that wraps past north")
+
+    ; ── the corner detector (v0.6.4) ────────────────────────────────────
+    ; Kando's GestureDetector over a synthetic stroke: 120 px east, then
+    ; south. The corner is the point where the hand turned, not where it is.
+    straight := []
+    loop 13
+        straight.Push({x: (A_Index - 1) * 10, y: 0})
+    Check(RadialCornerAt(straight) = 0, "A straight stroke has no corner")
+    turned := straight.Clone()
+    turned.Push({x: 120, y: 12})
+    turned.Push({x: 120, y: 24})
+    Check(RadialCornerAt(turned) = 13, "The corner is the point that turned")
+    wobble := straight.Clone()
+    wobble.Push({x: 126, y: 6})
+    wobble.Push({x: 132, y: 12})
+    Check(RadialCornerAt(wobble) = 0, "A wobble under the jitter floor is not a corner")
+    short := []
+    loop 6
+        short.Push({x: (A_Index - 1) * 10, y: 0})
+    short.Push({x: 50, y: 20})
+    short.Push({x: 50, y: 40})
+    Check(RadialCornerAt(short) = 0, "A turn before 90 px is not a corner")
+    Check(RadialHoverScale(0, 0, true) = 1.15
+        && Abs(RadialHoverScale(180, 0) - 1.0) < 0.001
+        && RadialHoverScale(90, -1) = 1.0,
+        "Hover scale peaks at the pointer and rests opposite it")
+    Check(RadialEaseTo(1.0, 1.15, 999, 250) = 1.15
+        && RadialEaseTo(1.0, 1.15, 16, 250) > 1.0
+        && RadialEaseTo(1.0, 1.15, 16, 250) < 1.15,
+        "The ease must move toward the target and land on it")
+
     g_Cfg := Map("bindings", [NewBinding("*", "*", "", "XButton1", "hold", "radial", "Old"),
         NewBinding("*", "*", "", "XButton2", "hold", "radial", "")],
         "menus", [Map("name", "Nested", "slices", [MenuSlice("Open", "radial", "Old")])])
@@ -374,7 +449,7 @@ try {
     Check(Lumi.Elide(long, 4, "body") = long,
         "A width with no room for two characters is left alone")
 
-    FileAppend("PASS: JSON, config shape, radial geometry, rename, pause, persistence, "
+    FileAppend("PASS: JSON, config shape, radial geometry, wedges, corners, rename, pause, persistence, "
         . "stations, adaptive layouts, imaging fallbacks, layout validation, "
         . "float round-trip, window placement, keyboard pointer geometry, "
         . "clamped thresholds, hold/repeat action classes, event labels, elision, "
