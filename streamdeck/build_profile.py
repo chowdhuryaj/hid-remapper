@@ -34,12 +34,15 @@ KEYS = {  # name: (VKeyCode, QTKeyCode)
     "`": (192, 96), "[": (219, 91), "]": (221, 93), "=": (187, 61), "-": (189, 45),
     ".": (190, 46),
 }
-for i in range(1, 13):
+for i in range(1, 25):  # F13-F24 exist as key codes but on no keyboard: see README
     KEYS[f"f{i}"] = (111 + i, QT_F1 + i - 1)
 for c in "abcdefghijklmnopqrstuvwxyz0123456789":
     KEYS[c] = (ord(c.upper()), ord(c.upper()))
 
-MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_WIN = 1, 2, 4, 8
+# Bit order verified against a real Stream Deck export: AngelCruzL/.dotfiles
+# config/streamdeck/*.sdProfile -- Shift alone 1, Ctrl alone 2, Option/Alt alone
+# 4, Cmd/Win alone 8 (and Cmd+Shift 9, Ctrl+Shift 3, Ctrl+Alt 6).
+MOD_SHIFT, MOD_CTRL, MOD_ALT, MOD_WIN = 1, 2, 4, 8
 
 
 def hotkey_settings(key, ctrl=False, shift=False, alt=False, win=False):
@@ -146,10 +149,8 @@ class Icon:
 
     def label(self, s, fill=DIM, size=30):
         """Small caption along the bottom edge (baked in, so no Stream Deck title is needed)."""
-        s = s.upper()
-        while size > 28 and self.d.textlength(s, font=font(size)) / S > 248:
-            size -= 1  # "dictate + next" is the only caption wide enough to need this
-        self.text((144, 262), s, size=size, fill=fill)
+        # every caption fits the 248 px key width at size 30 (checked with textlength)
+        self.text((144, 262), s.upper(), size=size, fill=fill)
 
     def arrow(self, p0, p1, fill=CYAN, width=12, head=26):
         (x0, y0), (x1, y1) = p0, p1
@@ -200,14 +201,14 @@ def ic_mic(ic, color=PINK, lbl="dictate"):
 def ic_field(ic, direction):
     # two form fields: the highlighted one is where the caret ends up
     prev = direction == "prev"
-    ic.rect([44, 72, 204, 128], outline=CYAN if prev else DIM, width=8 if prev else 6, radius=8)
-    ic.rect([44, 150, 204, 206], outline=DIM if prev else CYAN, width=6 if prev else 8, radius=8)
+    ic.rect([44, 72, 198, 128], outline=CYAN if prev else DIM, width=8 if prev else 6, radius=8)
+    ic.rect([44, 150, 198, 206], outline=DIM if prev else CYAN, width=6 if prev else 8, radius=8)
     cy = 100 if prev else 178
     ic.line([(68, cy - 16), (68, cy + 16)], fill=INK, width=8)
     if prev:
-        ic.arrow((236, 200), (236, 72), fill=PINK, width=14, head=30)
+        ic.arrow((226, 200), (226, 72), fill=PINK, width=14, head=30)
     else:
-        ic.arrow((236, 72), (236, 200), fill=PINK, width=14, head=30)
+        ic.arrow((226, 72), (226, 200), fill=PINK, width=14, head=30)
     ic.label("prev field" if prev else "next field")
 
 
@@ -231,23 +232,23 @@ def ic_series(ic, direction):
     # a stack of axial slices, arrow shows direction through the stack
     for i, y in enumerate((70, 100, 130, 160)):
         col = CYAN if (i == 0 and direction == "prev") or (i == 3 and direction == "next") else DIM
-        ic.ell([80, y - 18, 208, y + 18], outline=col, width=7)
+        ic.ell([80, y - 18, 200, y + 18], outline=col, width=7)
     if direction == "next":
-        ic.arrow((240, 60), (240, 200), fill=PINK)
+        ic.arrow((226, 60), (226, 200), fill=PINK)
         ic.label("next series")
     else:
-        ic.arrow((240, 200), (240, 60), fill=PINK)
+        ic.arrow((226, 200), (226, 60), fill=PINK)
         ic.label("prev series")
 
 
 def ic_ruler(ic):
-    pts = [(48, 208), (208, 48), (240, 80), (80, 240)]
-    ic.poly(pts, fill=BG2, outline=AMBER, width=8)
+    pts = [(48, 200), (208, 40), (240, 72), (80, 232)]
+    ic.poly(pts, fill=BG2, outline=OLIVE, width=8)
     for t in range(1, 7):
         f = t / 7
-        x, y = 48 + (208 - 48) * f, 208 + (48 - 208) * f
+        x, y = 48 + (208 - 48) * f, 200 + (40 - 200) * f
         ln = 18 if t % 2 else 30
-        ic.line([(x, y), (x + ln * 0.7, y + ln * 0.7)], fill=AMBER, width=6)
+        ic.line([(x, y), (x + ln * 0.7, y + ln * 0.7)], fill=OLIVE, width=6)
     ic.label("ruler")
 
 
@@ -268,18 +269,13 @@ def ic_magnify(ic):
 
 
 def ic_zoom(ic, sign):
-    # a big +/- with one diagonal pair of corner arrows, pulling out or in
-    cx, cy, h = 144, 130, 60
-    ic.line([(cx - h, cy), (cx + h, cy)], fill=INK, width=22)
+    # the same lens language as ic_magnify, with a + or - where the image would be
+    ic.ell([88, 60, 232, 204], outline=CYAN, width=12)
+    cx, cy, h = 160, 132, 34
+    ic.line([(cx - h, cy), (cx + h, cy)], fill=INK, width=14)
     if sign == "+":
-        ic.line([(cx, cy - h), (cx, cy + h)], fill=INK, width=22)
-    for dx, dy in ((-1, -1), (1, 1)):
-        near = (cx + dx * 86, cy + dy * 74)
-        far = (cx + dx * 118, cy + dy * 100)
-        if sign == "+":
-            ic.arrow(near, far, fill=CYAN, width=10, head=22)
-        else:
-            ic.arrow(far, near, fill=CYAN, width=10, head=22)
+        ic.line([(cx, cy - h), (cx, cy + h)], fill=INK, width=14)
+    ic.line([(216, 188), (246, 218)], fill=CYAN, width=18)  # ends at x 252, the safe edge
     ic.label("zoom in" if sign == "+" else "zoom out")
 
 
@@ -300,17 +296,17 @@ def ic_trash(ic):
 
 def ic_spine(ic):
     # three vertebral bodies with a disc between each: big enough to read at 72 px
-    for y in (52, 116, 180):
-        ic.rect([106, y, 182, y + 44], fill=BG2, outline=INK, width=7, radius=8)
-        ic.ell([118, y + 44, 170, y + 64], fill=DIM)
+    for y in (44, 104, 164):
+        ic.rect([106, y, 182, y + 40], fill=BG2, outline=INK, width=7, radius=8)
+        ic.ell([118, y + 40, 170, y + 58], fill=DIM)
     ic.label("spine label")
 
 
 def ic_localizer(ic):
-    ic.rect([48, 48, 240, 240], outline=DIM, width=6)
-    ic.line([(144, 40), (144, 248)], fill=CYAN, width=6)
-    ic.line([(40, 144), (248, 144)], fill=CYAN, width=6)
-    ic.ell([116, 116, 172, 172], outline=PINK, width=8)
+    ic.rect([56, 44, 232, 220], outline=DIM, width=6)
+    ic.line([(144, 38), (144, 226)], fill=CYAN, width=6)
+    ic.line([(44, 132), (244, 132)], fill=CYAN, width=6)
+    ic.ell([116, 104, 172, 160], outline=OLIVE, width=8)
     ic.label("localizer")
 
 
@@ -330,7 +326,7 @@ def ic_invert(ic):
 
 def ic_preset(ic, n, organ, name):
     """Window preset: the digit anchors the key, an organ glyph sits beside it."""
-    ic.text((66, 120), str(n), size=80, fill=CYAN)
+    ic.text((66, 120), str(n), size=80, fill=INK)
     # every organ is drawn in the same ~96 px optical box with the same stroke
     gx, gy, w = 190, 128, 7
     if organ == "soft":     # torso oval with a softer inner oval
@@ -366,15 +362,15 @@ def ic_preset(ic, n, organ, name):
             ic.ell([gx + sx * 24 - 19, gy - 46, gx + sx * 24 + 19, gy + 34], outline=INK, width=w)
         ic.line([(gx, gy - 56), (gx, gy - 26)], fill=INK, width=w)
         if organ == "lungwide":  # the same lungs, opened out by a wide double arrow
-            ic.line([(gx - 62, gy + 54), (gx + 62, gy + 54)], fill=CYAN, width=w)
-            ic.chevron(gx - 56, gy + 54, 12, "left", width=w)
-            ic.chevron(gx + 56, gy + 54, 12, "right", width=w)
+            ic.line([(gx - 54, gy + 54), (gx + 54, gy + 54)], fill=CYAN, width=w)
+            ic.chevron(gx - 48, gy + 54, 10, "left", width=w)
+            ic.chevron(gx + 48, gy + 54, 10, "right", width=w)
     ic.label(name)
 
 
 def ic_digit(ic, s, color=INK):
     if s == ".":
-        ic.dot(144, 170, 30, fill=color)
+        ic.text((144, 128), ".", size=150, fill=color)
         ic.label("point")
     else:
         ic.text((144, 128), s, size=150 if len(s) == 1 else 90, fill=color)
@@ -420,7 +416,7 @@ def ic_undo(ic, redo=False):
     if redo:
         curved_arrow(ic, 144, 144, 76, 200, 360, fill=OLIVE, width=16, head=36)
     else:
-        curved_arrow(ic, 144, 144, 76, 20, 180, fill=CYAN, width=16, head=36)
+        curved_arrow(ic, 144, 144, 76, 20, 180, fill=OLIVE, width=16, head=36)
     ic.label("redo" if redo else "undo")
 
 
@@ -454,13 +450,17 @@ def ic_mail(ic):
     ic.label("umn mail", fill=GOLD)
 
 
-def ic_claude(ic):
-    # eight-spoke spark, Claude's terracotta colour
+def spark(ic, cx, cy, r, width, color=ORANGE):
+    """Claude's eight-spoke spark, at any scale."""
     for i in range(8):
         a = i * math.pi / 4
-        ic.line([(144 + 26 * math.cos(a), 132 + 26 * math.sin(a)), (144 + 86 * math.cos(a), 132 + 86 * math.sin(a))],
-                fill=ORANGE, width=18)
-    ic.dot(144, 132, 22, fill=ORANGE)
+        ic.line([(cx + r * 0.30 * math.cos(a), cy + r * 0.30 * math.sin(a)),
+                 (cx + r * math.cos(a), cy + r * math.sin(a))], fill=color, width=width)
+    ic.dot(cx, cy, r * 0.26, fill=color)
+
+
+def ic_claude(ic):
+    spark(ic, 144, 132, 86, 18)
     ic.label("claude", fill=ORANGE)
 
 
@@ -501,7 +501,7 @@ def ic_folder(ic, kind, lbl):
         ic.ell([70, 70, 218, 218], outline=DIM, width=4)
     elif kind == "window":
         for i in range(10):
-            g = int(30 + i * 22)
+            g = int(30 + i * (150 - 30) / 9)  # capped at 150: a DIM-ish tint ramp
             ic.rect([72 + i * 14, 84, 88 + i * 14, 204], fill=(g, g, g))
         ic.rect([72, 84, 216, 204], outline=DIM, width=5)
     elif kind == "numpad":
@@ -523,8 +523,8 @@ def ic_folder(ic, kind, lbl):
         for i in range(8):
             a = i * math.pi / 8 * 2
             ic.line([(cx + (r - 6) * math.cos(a), cy + (r - 6) * math.sin(a)),
-                     (cx + (r + 18) * math.cos(a), cy + (r + 18) * math.sin(a))], fill=DIM, width=13)
-        ic.ell([cx - r, cy - r, cx + r, cy + r], outline=DIM, width=11)
+                     (cx + (r + 18) * math.cos(a), cy + (r + 18) * math.sin(a))], fill=DIM, width=8)
+        ic.ell([cx - r, cy - r, cx + r, cy + r], outline=DIM, width=7)
         ic.ell([cx - 16, cy - 16, cx + 16, cy + 16], outline=DIM, width=8)
     ic.label(lbl)
 
@@ -553,17 +553,17 @@ def ic_maxmin(ic, maximize=True):
 
 
 def ic_move_monitor(ic, direction):
-    for x in (28, 156):
-        ic.rect([x, 76, x + 104, 152], outline=DIM, width=6, radius=6)
-        ic.line([(x + 52, 152), (x + 52, 176)], fill=DIM, width=6)
-        ic.line([(x + 24, 176), (x + 80, 176)], fill=DIM, width=6)
+    for x in (36, 164):
+        ic.rect([x, 76, x + 88, 152], outline=DIM, width=6, radius=6)
+        ic.line([(x + 44, 152), (x + 44, 176)], fill=DIM, width=6)
+        ic.line([(x + 20, 176), (x + 68, 176)], fill=DIM, width=6)
     if direction == "right":
-        ic.rect([40, 88, 84, 140], fill=CYAN, radius=4)
-        ic.arrow((100, 114), (200, 114), fill=PINK)
+        ic.rect([48, 88, 88, 140], fill=CYAN, radius=4)
+        ic.arrow((104, 114), (196, 114), fill=PINK)
         ic.label("screen right")
     else:
-        ic.rect([204, 88, 248, 140], fill=CYAN, radius=4)
-        ic.arrow((188, 114), (88, 114), fill=PINK)
+        ic.rect([200, 88, 240, 140], fill=CYAN, radius=4)
+        ic.arrow((184, 114), (92, 114), fill=PINK)
         ic.label("screen left")
 
 
@@ -574,9 +574,9 @@ def ic_taskview(ic):
 
 
 def ic_alttab(ic):
-    ic.rect([44, 96, 176, 196], fill=BG2, outline=DIM, width=6, radius=6)
-    ic.rect([100, 64, 240, 164], fill=BG2, outline=CYAN, width=8, radius=6)
-    ic.chevron(72, 224, 14, "left"); ic.chevron(216, 224, 14, "right")
+    ic.rect([44, 88, 176, 188], fill=BG2, outline=DIM, width=6, radius=6)
+    ic.rect([100, 56, 240, 156], fill=BG2, outline=CYAN, width=8, radius=6)
+    ic.chevron(72, 216, 14, "left"); ic.chevron(216, 216, 14, "right")
     ic.label("switch app")
 
 
@@ -587,15 +587,8 @@ def ic_desktop(ic):
     ic.label("desktop")
 
 
-def ic_close(ic):
-    ic.rect([44, 56, 244, 216], outline=DIM, width=6, radius=8)
-    ic.line([(96, 92), (192, 180)], fill=RED, width=16)
-    ic.line([(192, 92), (96, 180)], fill=RED, width=16)
-    ic.label("close")
-
-
 def ic_radmapper(ic):
-    # a mouse with a cyan wheel and a gear: RadMapper settings
+    # a mouse with a cyan scroll wheel: RadMapper settings
     ic.rect([84, 52, 204, 232], fill=BG2, outline=INK, width=8, radius=60)
     ic.line([(144, 52), (144, 132)], fill=INK, width=6)
     ic.line([(84, 132), (204, 132)], fill=INK, width=6)
@@ -631,23 +624,26 @@ def ic_clipboard(ic):
 
 def ic_field_dictate(ic):
     # the same field grammar as ic_field, plus a mic: two steps in one press
-    ic.rect([28, 76, 140, 128], outline=DIM, width=6, radius=8)
-    ic.rect([28, 150, 140, 202], outline=CYAN, width=8, radius=8)
-    ic.line([(50, 160), (50, 192)], fill=INK, width=8)
-    ic.arrow((236, 72), (236, 200), fill=PINK, width=14, head=30)
+    ic.rect([36, 76, 144, 128], outline=DIM, width=6, radius=8)
+    ic.rect([36, 150, 144, 202], outline=CYAN, width=8, radius=8)
+    ic.line([(58, 160), (58, 192)], fill=INK, width=8)
+    ic.arrow((226, 72), (226, 200), fill=PINK, width=14, head=30)
     ic.rect([173, 60, 199, 110], fill=PINK, radius=13)
     ic.arc([159, 70, 213, 124], 0, 180, fill=INK, width=7)
     ic.line([(186, 124), (186, 146)], fill=INK, width=7)
     ic.line([(169, 146), (203, 146)], fill=INK, width=7)
-    ic.label("dictate + next")
+    ic.label("dict + next")
 
 
-def ic_copy_all(ic):
+def ic_copy_all(ic, to_claude=False, lbl="copy all"):
     ic.rect([56, 44, 176, 196], outline=DIM, width=7, radius=8)
     ic.rect([104, 92, 232, 236], fill=BG, outline=INK, width=8, radius=8)
     for y in (128, 156, 184, 212):
         ic.line([(128, y), (208, y)], fill=CYAN, width=6)
-    ic.label("copy all")
+    if to_claude:  # the copy lands in Claude: the spark, small, bottom-right
+        ic.dot(218, 206, 32, fill=BG)
+        spark(ic, 218, 206, 24, 6)
+    ic.label(lbl)
 
 
 def ic_open_all(ic):
@@ -732,8 +728,8 @@ else:
     PREV_FIELD = hk("Previous field", lambda ic: ic_field(ic, "prev"), "tab", shift=True, note="PowerScribe")
     NEXT_FIELD = hk("Next field", lambda ic: ic_field(ic, "next"), "tab", note="PowerScribe")
 
-IMPRESSION = hk("Impression", lambda ic: ic_doc(ic, True, "impression"), "1", ctrl=True, shift=True,
-                note="PowerScribe menu slice in RadMapper; PowerScribe must be in front")
+IMPRESSION = hk("Impression", lambda ic: ic_doc(ic, True, "impression"), "f20", needs_setup=True,
+                note="Assign F20 to Impression in PowerScribe One > Settings > Quick Keys")
 PREV_SERIES = hk("Previous series", lambda ic: ic_series(ic, "prev"), "f7", note="RadMapper PACS wheel")
 NEXT_SERIES = hk("Next series", lambda ic: ic_series(ic, "next"), "f8", note="RadMapper PACS wheel")
 RULER = hk("Ruler", ic_ruler, "r", note="RadMapper PACS wheel")
@@ -743,7 +739,23 @@ UNDO = hk("Undo", ic_undo, "z", ctrl=True)
 REDO = hk("Redo", lambda ic: ic_undo(ic, True), "y", ctrl=True)
 CLAHE = hk("CLAHE", ic_clahe, "c", shift=True, note="RadMapper PACS wheel")
 DELETE = hk("Delete measurement", ic_trash, "delete", note="RadMapper PACS wheel")
-INVERT = hk("Invert", ic_invert, "i", shift=True, needs_setup=True, note="Assign Shift+I to Invert in IntelliSpace preferences")
+INVERT = hk("Invert", ic_invert, "f18", needs_setup=True,
+            note="Assign F18 to Invert in IntelliSpace > Preferences > Keyboard shortcuts")
+ZOOM_IN = hk("Zoom in", lambda ic: ic_zoom(ic, "+"), "f16", needs_setup=True,
+             note="Assign F16 to Zoom In in IntelliSpace > Preferences > Keyboard shortcuts")
+ZOOM_OUT = hk("Zoom out", lambda ic: ic_zoom(ic, "-"), "f17", needs_setup=True,
+              note="Assign F17 to Zoom Out in IntelliSpace > Preferences > Keyboard shortcuts")
+SPINE = hk("Spine labeling", ic_spine, "f13", needs_setup=True,
+           note="Assign F13 to Spine Labeling in IntelliSpace > Preferences > Keyboard shortcuts")
+LOCALIZER = hk("Localizer mode", ic_localizer, "f14", needs_setup=True,
+               note="Assign F14 to Localizer Mode in IntelliSpace > Preferences > Keyboard shortcuts")
+SCOUT = hk("Scout line mode", ic_scout, "f15", needs_setup=True,
+           note="Assign F15 to Scout Lines in IntelliSpace > Preferences > Keyboard shortcuts")
+SIGN = hk("Sign report", ic_sign, "f19", needs_setup=True,
+          note="Assign F19 to Sign in PowerScribe One > Settings > Quick Keys")
+PASTE = hk("Paste", ic_paste, "v", ctrl=True)
+MAXIMIZE = hk("Maximize", ic_maxmin, "up", win=True)
+MINIMIZE = hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True)
 
 SWITCH_APP = hk("Switch app", ic_alttab, "tab", alt=True)
 SHOW_DESKTOP = hk("Show desktop", ic_desktop, "d", win=True)
@@ -768,6 +780,7 @@ def numpad(s):
 
 HK = "com.elgato.streamdeck.system.hotkey"
 WEB = "com.elgato.streamdeck.system.website"
+DELAY = "delay"   # Multi Action pause; only ever an inner step, never a key on its own
 
 SITES = [("UMN Mail", ic_mail, "https://mail.umn.edu"), ("Claude", ic_claude, "https://claude.ai"),
          ("OpenEvidence", ic_openevidence, "https://www.openevidence.com"),
@@ -775,19 +788,20 @@ SITES = [("UMN Mail", ic_mail, "https://mail.umn.edu"), ("Claude", ic_claude, "h
 
 # Multi Actions (Stream Deck native, several steps per press) ------------------
 FIELD_AND_DICTATE = multi("Dictate + next field", ic_field_dictate,
-                          [(HK, DICTATE.action[1]), (HK, NEXT_FIELD.action[1])],
-                          "Dictate, then Next field",
-                          note="stop dictation, then jump to the next field; RadMapper's macro adds a 150 ms pause "
-                               "between the two, which a Stream Deck Multi Action does not")
-COPY_REPORT = multi("Copy whole report", ic_copy_all,
+                          [(HK, DICTATE.action[1]), (DELAY, 150), (HK, NEXT_FIELD.action[1])],
+                          f"{DICTATE.combo}, 150 ms, {NEXT_FIELD.combo}",
+                          note="F4 toggles dictation, so this starts or stops it, then moves to the next "
+                               "field after RadMapper's 150 ms settle")
+COPY_REPORT = multi("Report → Claude", lambda ic: ic_copy_all(ic, True, "rpt→claude"),  # "report→claude" is 292 px, wider than a key
                     [(HK, hotkey_settings("a", ctrl=True)), (HK, hotkey_settings("c", ctrl=True)),
-                     (HK, hotkey_settings("end", ctrl=True))],
-                    "Ctrl+A, Ctrl+C, Ctrl+End",
-                    note="select the whole report, copy it (e.g. to paste into Claude), then drop the "
-                         "selection so the next keystroke cannot overwrite the report")
+                     (HK, hotkey_settings("left")),
+                     (WEB, {"openInBrowser": True, "path": "https://claude.ai"})],
+                    "Ctrl+A, Ctrl+C, Left, open claude.ai",
+                    note="select the whole report, copy it, collapse the selection to the start of the "
+                         "report so nothing can be overtyped, then open claude.ai")
 OPEN_ALL_SITES = multi("Open all sites", ic_open_all,
                        [(WEB, {"openInBrowser": True, "path": url}) for _, _, url in SITES],
-                       "opens all four sites", note="")
+                       ", ".join(url for _, _, url in SITES), note="")
 
 # ─── folder strip ───────────────────────────────────────────────────────────
 FOLDERS = {
@@ -811,9 +825,14 @@ def go(key):
 STRIP_SLOTS = ["ps", "pacs", "wl", "web"]
 
 
-def strip(page_key):
-    """Bottom-row navigation: Home, Editing, PACS tools, Windowing, Web & windows."""
-    return [home()] + [go("num" if k == page_key else k) for k in STRIP_SLOTS]
+def strip(page_key, own="num"):
+    """Bottom-row navigation: Home, Editing, PACS tools, Windowing, Web & windows.
+
+    On a page that is itself one of the strip sections, that column holds
+    ``own`` instead (Number pad, except on PACS tools where it is the only way
+    through to PACS more).
+    """
+    return [home()] + [go(own if k == page_key else k) for k in STRIP_SLOTS]
 
 
 PAGES = {}  # key -> (name, 3x5 grid)
@@ -827,36 +846,29 @@ PAGES["home"] = ("RadMapper Radiology", [
     [go("sys"), go("ps"), go("pacs"), go("wl"), go("web")],
 ])
 
+# Every page below Home keeps Dictate on the last key of the middle row (4,1),
+# so the one key you always need is under the same finger everywhere.
 PAGES["ps"] = ("PowerScribe editing", [
-    [DICTATE, PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION],
-    [UNDO, REDO, COPY_REPORT,
-     hk("Sign report", ic_sign, "s", ctrl=True, shift=True, needs_setup=True,
-        note="Assign Ctrl+Shift+S to Sign in PowerScribe One > Settings > Quick Keys"),
-     hk("Paste", ic_paste, "v", ctrl=True)],
+    [PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION, PASTE],
+    [UNDO, REDO, COPY_REPORT, SIGN, DICTATE],
     strip("ps"),
 ])
 
 PAGES["pacs"] = ("PACS tools", [
     [RULER, ROI, MAGNIFY, CLAHE, DELETE],
-    [PREV_SERIES, NEXT_SERIES,
-     hk("Zoom in", lambda ic: ic_zoom(ic, "+"), "=", needs_setup=True, note="Assign = (plus key) to Zoom In in IntelliSpace preferences"),
-     hk("Zoom out", lambda ic: ic_zoom(ic, "-"), "-", needs_setup=True, note="Assign - to Zoom Out in IntelliSpace preferences"),
-     go("pacs2")],
-    strip("pacs"),
+    [PREV_SERIES, NEXT_SERIES, preset_btn(8), preset_btn(1), DICTATE],
+    strip("pacs", "pacs2"),
 ])
 
 PAGES["pacs2"] = ("PACS more", [
-    [hk("Spine labeling", ic_spine, "s", shift=True, needs_setup=True, note="Assign Shift+S to Spine Labeling in IntelliSpace > Preferences > Keyboard shortcuts"),
-     hk("Localizer mode", ic_localizer, "l", needs_setup=True, note="Assign L to Localizer Mode in IntelliSpace preferences"),
-     hk("Scout line mode", ic_scout, "l", shift=True, needs_setup=True, note="Assign Shift+L to Scout Lines in IntelliSpace preferences"),
-     INVERT, preset_btn(8)],
-    [preset_btn(1), preset_btn(2), preset_btn(3), PREV_SERIES, NEXT_SERIES],
-    strip("pacs"),
+    [SPINE, LOCALIZER, SCOUT, INVERT, ZOOM_IN],
+    [ZOOM_OUT, preset_btn(2), preset_btn(3), NEXT_SERIES, DICTATE],
+    strip("pacs2"),
 ])
 
 PAGES["wl"] = ("Windowing", [
     [preset_btn(1), preset_btn(2), preset_btn(3), preset_btn(4), preset_btn(5)],
-    [preset_btn(6), preset_btn(7), preset_btn(8), preset_btn(9), INVERT],
+    [preset_btn(6), preset_btn(7), preset_btn(8), preset_btn(9), DICTATE],
     strip("wl"),
 ])
 
@@ -865,14 +877,14 @@ PAGES["wl"] = ("Windowing", [
 PAGES["num"] = ("Number pad", [
     [hk("Backspace", ic_backspace, "backspace"), numpad("7"), numpad("8"), numpad("9"), hk("Enter", ic_enter, "enter")],
     [numpad("."), numpad("4"), numpad("5"), numpad("6"), numpad("0")],
-    [home(), numpad("1"), numpad("2"), numpad("3"), go("ps")],
+    [home(), numpad("1"), numpad("2"), numpad("3"), go("web")],
 ])
 
 PAGES["web"] = ("Web & windows", [
-    [site(n, d, u) for n, d, u in SITES] + [hk("Close window", ic_close, "f4", alt=True)],
-    [hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True), hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
-     hk("Maximize", ic_maxmin, "up", win=True), hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True),
-     OPEN_ALL_SITES],
+    [site(n, d, u) for n, d, u in SITES] + [OPEN_ALL_SITES],
+    [hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True),
+     hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
+     TO_LEFT_SCREEN, TO_RIGHT_SCREEN, DICTATE],
     strip("web"),
 ])
 
@@ -882,7 +894,7 @@ PAGES["sys"] = ("System", [
      hk("Unstick buttons", ic_unstick, "q", ctrl=True, alt=True, note="RadMapper hkPanic"),
      hk("Clipboard history", ic_clipboard, "c", ctrl=True, alt=True, note="RadMapper hkClipboard shelf"),
      hk("Scratchpad", ic_scratch, "n", ctrl=True, alt=True, note="RadMapper hkScratch shelf")],
-    [hk("Task view", ic_taskview, "tab", win=True), TO_LEFT_SCREEN, TO_RIGHT_SCREEN, SHOW_DESKTOP, SWITCH_APP],
+    [hk("Task view", ic_taskview, "tab", win=True), SHOW_DESKTOP, MAXIMIZE, MINIMIZE, DICTATE],
     strip("sys"),
 ])
 
@@ -906,9 +918,18 @@ def _b32(n):
 
 
 def inner_action(uuid_, settings, title=""):
-    name = {"com.elgato.streamdeck.system.hotkey": "Hotkey", "com.elgato.streamdeck.system.website": "Website"}[uuid_]
-    return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": name,
-            "Plugin": {"Name": name, "UUID": uuid_, "Version": "1.0"},
+    """One step of a Multi Action: a hotkey, a website, or a DELAY of N ms."""
+    if uuid_ == DELAY:
+        return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": "Delay", "OverrideState": 0,
+                "Plugin": {"Name": "Delay", "UUID": "com.elgato.streamdeck.multiactions", "Version": "1.0"},
+                "Resources": None, "Settings": {"duration": settings},
+                "State": 0, "States": [{"Title": ""}],
+                "UUID": "com.elgato.streamdeck.multiactions.delay"}
+    name = {HK: "Hotkey", WEB: "Website"}[uuid_]
+    # inside a Multi Action the hotkey plugin is listed under its display name
+    plugin = "Activate a Key Command" if uuid_ == HK else "Website"
+    return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": name, "OverrideState": 0,
+            "Plugin": {"Name": plugin, "UUID": uuid_, "Version": "1.0"},
             "Resources": None, "Settings": settings,
             "State": 0, "States": [{"Title": title}], "UUID": uuid_}
 
