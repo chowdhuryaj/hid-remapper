@@ -368,6 +368,12 @@ Check for them by reading, or with a scanner like `radmapper/tests/check_source.
   `X(d) => Round(x + d)` fails to load: "This function declaration conflicts
   with an existing parameter". Same for a nested name matching any local.
   Prefix nested helpers (`gX`, `gY`).
+- **Locals vs classes and functions.** `line := 0x58…` then `Line(x, y, …)`
+  in the same function: `Line` is a GpGFX *class*, i.e. a variable holding
+  a Class object, so the call goes through the local integer and throws
+  "This value of type Integer is not callable". Never name a local or
+  parameter after a class or function the body calls (`Line`, `Text`,
+  `Rectangle`, `Picture`, `Layer`, `HUD`, …).
 - **Class members.** `static grab := false` beside `static Grab()` in the same
   class either refuses to load ("Duplicate declaration") or the static
   initialiser clobbers the method. Scan every class, not just the big ones.
@@ -380,8 +386,10 @@ if cond
 else                 ; -> "Unexpected Else" at load
     Bar()
 ```
-Brace the try body (`try {` … `}`) whenever an `else` follows. A one-line
-`try` followed by `catch` on the next line is fine.
+A braced `try { … }` takes the `else` too (v2 `try` has its own `else`
+clause). Put the braces on the `if`/`else` and the one-line `try` inside:
+`if cond {` / `    try Foo()` / `} else {` / `    Bar()` / `}`. A one-line `try`
+followed by `catch` on the next line is fine.
 
 ### Timers, hooks, contexts
 
