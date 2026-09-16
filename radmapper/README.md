@@ -1,4 +1,4 @@
-# RadMapper 0.6.3-preview
+# RadMapper 0.6.4-preview
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -93,27 +93,35 @@ tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA, 6 Infarct, 7 Liver,
 1. **Menus → select PACS → Assign a button.** The Hold trigger is prefilled;
    pick the button, then save.
 2. **Hold** that button, **move** toward a command, **release**. Release in
-   the centre hub, or press Escape, and nothing fires.
+   the centre hub, press Escape, or **click** — any of the three fires
+   nothing.
 3. For a preset: hold, **flick** to **Windowing** and **turn a corner** toward
    the number you want — the preset ring opens at the corner, still held, and
    the number fires when you release. Pausing on **Windowing** opens it too,
    and so does releasing on it (the ring then stays open).
-4. In that second ring, the direction you came from — and any direction that
-   is not a command — is **back**: turn or pause there and the first ring
-   returns, having sent nothing.
+4. In that second ring, the direction you came from — and the space either
+   side of it — is **back**: turn or pause there and the first ring returns,
+   having sent nothing.
 5. If the menu is bound to a **tap** instead, it stays open: rest on a command
    to fire it, or **tap the button again to close it**.
 6. **Practice safely** on the Menus page shows the wheel without sending anything.
 
-**What you are looking at.** Each command answers to its own arc of the
-circle, drawn as that arc with a hairline at each edge; between two of them
-nothing is chosen, so a flick that lands in the gap fires nothing rather than
-the neighbour. The hub prints the command that is armed and the keys it will
-send — or the menu's name when nothing is. The stroke you are making is drawn
-back at you, a door wears one dot per command behind it, and the wheel grows
-whatever the pointer is near. **Animate the wheel** and **Show wedges** on the
-Menus page turn the movement and the arcs off; neither changes what a
-direction does.
+**What you are looking at.** On the first wheel **every direction belongs to a
+command**: each one owns its whole slice of the circle, drawn as that arc with
+a hairline at each edge, so a flick that is a little off centre still picks the
+one you aimed at rather than nothing. The numbered **preset ring** is the same
+— all nine numbers have to be reachable, so it has no gaps either, and you
+leave it with Escape or a click. Only a **second ring opened from a command**
+has gaps, and there they mean one thing: **back**. The direction you walked in
+from and the space flanking it return you to the first wheel, sending nothing.
+
+**A click cancels a live menu**, wherever you are and whatever it is over —
+**practice included** — and sends nothing. The hub prints the command that is
+armed and the keys it will send, or the menu's name when nothing is. The stroke
+you are making is drawn back at you, a door wears one dot per command behind
+it, and the wheel grows whatever the pointer is near. **Animate the wheel** and
+**Show wedges** on the Menus page turn the movement and the drawn arcs off;
+neither changes what a direction does.
 
 **Sending keys to PACS from anywhere:** the action **PACS: send keys** works
 like the PowerScribe actions. Bind it to any button in any program and the

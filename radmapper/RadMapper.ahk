@@ -20,6 +20,93 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.6.4a (review pass 4) -- every item here is a fix to code that has
+;  still never run on Windows:
+;
+;    * THE SCRIPT DID NOT LOAD. `class Warp` declared `static grab` beside
+;      `static Grab()` and `static SUB` beside `static Sub()`. AHK property
+;      names are case-INSENSITIVE, so each pair is ONE member declared
+;      twice: a duplicate-declaration error at load time, before a single
+;      hotkey is registered. Renamed to `grabbing` and `NINTH` (the methods
+;      keep their names -- they are what the rest of the code calls), and
+;      check_source.py now runs its case-insensitive collision check over
+;      EVERY top-level class this file declares, not just Lumi and Atlas,
+;      finding each class body by brace depth with comments and string
+;      literals stripped first. regression.ahk asserts the two members exist
+;      so a rename back shows up as a test failure rather than as a script
+;      that will not start.
+;    * A DIRECTION BELONGS TO ONE SLICE WENT TOO FAR. v0.6.4 gave every
+;      ring Kando's half-gap wedges, so at the ROOT a flick 30 degrees off
+;      north in a 4-way menu selected nothing and the press was simply
+;      lost -- and in the 9-way preset ring, where the whole circle is
+;      numbers, 20 degrees of the 40 belonged to nobody. Dead space is only
+;      worth having where a bearing that lands in it MEANS something, and
+;      the only ring where it does is a child ring, where it means back.
+;      So: a root ring and a numbered preset ring are PARTITIONS -- every
+;      slice owns its whole sector, a bearing on a shared edge going to the
+;      lower-numbered slice -- and only a child ring keeps half the gap and
+;      hands the rest to `back`. A numbered child ring keeps a zero-span
+;      `back` marker, purely so the parent node and its connector are still
+;      drawn; no bearing selects it. Cancelling is still the hub, Escape,
+;      or a click. The hairline loop now draws each boundary ONCE (on a
+;      full ring every edge is shared, and a 1 px line drawn twice is 2 px).
+;    * A WHEEL CANNOT BE LEFT BEHIND. Layer() creates a window and Draw()
+;      blits one, and both pump messages, so a hotkey thread could close or
+;      replace the menu while a paint was inside the constructor -- leaving
+;      a click-through, top-most layer over the study with nothing holding a
+;      reference to it. RadialPaint and RadialRing are Critical, the paint
+;      checks that the menu it started on is still the live one and disposes
+;      the layer if not, and every layer is registered in g_RadialLayers,
+;      which RadialClose, PanicRelease and Cleanup sweep.
+;    * A CLICK CANCELS A PRACTICE WHEEL. The trial exemption in the
+;      click-cancel gate, in RadialCancelActive and in RadialCancelHit meant
+;      a practice wheel could only be closed by Escape or by waiting out its
+;      20 s floor -- the one window in RadMapper you had to sit through.
+;      Cancelling is as much a part of the gesture as the flick is, so it is
+;      a thing to practise. It returns to the settings window through
+;      RadialClose's trial branch, exactly as Escape already did.
+;    * THE FOCUS KEYS AND THE KEYBOARD POINTER STOP FIGHTING. Warp owns Tab,
+;      Space, Enter and the arrows while it is up -- they are how it is
+;      driven -- so Atlas.DoFocusKey stands down while it is active, the way
+;      it already does for a Rec capture and a live Field. And Warp refuses
+;      to open over the settings window, which is the fourth thing (after a
+;      menu, the switcher and the calibrator) that drives itself from those
+;      same keys.
+;    * TAB SURVIVES A WIZARD ANSWER. Every wizard tile rebuilds the dialog
+;      on a new layer, and a new layer meant a new focus ring: Tab, Tab, Tab,
+;      Space and the ring jumped back to control 1. The position and whether
+;      the ring is showing at all now travel on the draft (Atlas.WizRefocus
+;      -> Lumi.Focus.Reset's new idx), clamped to whatever ring the rebuild
+;      produced. Closing a dialog that was being driven from the keyboard
+;      re-arms the page behind it. A mouse user still never sees a ring.
+;    * STEPPING THE ACTION DROPDOWN WITH THE ARROWS REOPENS THE WIZARD ONCE.
+;      Left/Right fire onChange on every press, so walking the sixteen
+;      actions crossed the Details-widget family line four or five times and
+;      tried to rebuild the dialog each time -- each rebuild disposing the
+;      dropdown the next arrow press was aimed at. Lumi.SelectNudge marks
+;      itself while it calls onChange and the rebuild is debounced 400 ms
+;      behind a cached BoundFunc; the hint still follows every press.
+;    * Atlas.IsFront IS THE #HotIf CONTEXT FOR ESCAPE, F1, FOUR RESIZE
+;      COMBOS AND ALL EIGHT FOCUS KEYS, so it is asked on every press of
+;      Tab, Space, Enter and the arrows anywhere in Windows -- while
+;      dictating, while typing a report. It answers 0 without a WinActive
+;      call when there is no settings window or it is hidden.
+;    * THE RADIAL SAFETY FLOORS MEASURE THE WHOLE MENU. The 15 s held floor
+;      and the 6 s / 20 s latched floors were measured from R.t0, which
+;      RadialRing restarts on every walk-in and walk-back -- so a gesture
+;      that kept opening rings never aged. R.openedAt is set once, in
+;      RadialOpen; t0 stays the per-ring dwell clock.
+;    * A CORNER INSIDE THE HUB OPENS NOTHING. The marking-mode corner path
+;      read a bearing from the turn point without checking it was outside
+;      the dead zone, so a stroke that curled back through the centre could
+;      open whichever door lay that way, or walk back out of the ring.
+;    * F1's MsgBox is wrapped in StopTick/StartTick, as Atlas.Confirm
+;      already was: the 700 ms status tick does not stop for a blocking box,
+;      and a Build() landing while it is up disposes the layer that owns it.
+;      Its radial paragraph, and the README's, are rewritten to say what the
+;      wedges now do; the wizard's hint moves up into the Details row's
+;      place when question 4 hides it.
+;
 ;  v0.6.4 (radial menus: Kando-inspired):
 ;
 ;    * A DIRECTION BELONGS TO ONE SLICE, OR TO NOBODY. Selection was "the
@@ -4039,12 +4126,16 @@ OnPressHK(btn, *) {
     ; a scroll through the series you were about to pick a preset for. A
     ; click is the universal "not this" gesture: cancel, fire nothing, and
     ; swallow the click. The holder's own button is exempt (its release is
-    ; the commit), wheels are exempt (a notch is not a click), and a TRIAL
-    ; menu is exempt -- it is being looked at from the settings window, where
-    ; clicking is how you leave it. RadialBindCancel hooks the three mouse
+    ; the commit) and wheels are exempt (a notch is not a click). PRACTICE
+    ; is NOT exempt any more (v0.6.4a): a practice wheel that a click could
+    ; not dismiss was the one window in RadMapper you had to wait out, and
+    ; cancelling is as much a part of the gesture as the flick is -- so it
+    ; is a thing to practise, not a thing to suppress. A cancelled trial
+    ; goes back to the settings window through RadialClose's trial branch,
+    ; exactly as Escape already did. RadialBindCancel hooks the three mouse
     ; buttons the config does not, so this is reached even when LButton is
     ; otherwise fully native.
-    if (IsObject(g_Radial) && !g_Radial.trial && IsMouseInput(btn)
+    if (IsObject(g_Radial) && IsMouseInput(btn)
         && !IsWheel(btn)
         && !(IsObject(g_Radial.holder) && g_Radial.holder.btn = btn)) {
         RadialClose(false)
@@ -7729,6 +7820,16 @@ WinPlace(v) {
 
 global g_Radial := 0       ; live menu {menu, slices, ax, ay, holder, latched,
                            ;   sel, lyr, t0, drawn, restAt, name}
+; Every wheel layer this process has created and not yet disposed.
+;
+; g_Radial.lyr is the ONE the live menu draws on, and the ordinary paths
+; (RadialRing, RadialClose) dispose it themselves. This list is the floor
+; under them: Layer() creates a window and therefore pumps messages, so a
+; hotkey thread can close or replace the menu while a paint is still inside
+; the constructor, and the layer it hands back would belong to nobody --
+; a click-through wheel left on top of the study with no timer and no
+; reference to tear it down. RadialClose, PanicRelease and Cleanup sweep it.
+global g_RadialLayers := []
 
 ; Slice 1 points NORTH and they run clockwise, for 4 and for 8 alike, so the
 ; same menu keeps its directions if it grows.
@@ -7871,20 +7972,32 @@ RadialCountFor(n) {
     return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
 }
 
-; ── WEDGES: which directions belong to which slice (v0.6.4) ──────────────
+; ── WEDGES: which directions belong to which slice (v0.6.4a) ─────────────
 ;
-; Selection used to be "the nearest slice centre", which hands every
-; direction to somebody: in a 9-way preset ring a flick 20 degrees off
-; north fires the NEIGHBOUR, and the hand never learns that it was close.
-; Kando's pie menu answers it the other way round -- an item owns only the
-; INNER HALF of the gap to each neighbour (its scaleWedge(.., 0.5)), and
-; everything left over belongs to nobody. At the root that leftover means
-; "no slice", which releases into nothing; in a second ring it is the way
-; BACK, together with the whole direction the ring was entered from. The
-; two commonest mistakes -- "I was between two of them" and "I did not mean
-; to walk in here" -- therefore both land somewhere harmless instead of on
-; a command. Slice DIRECTIONS do not move: a root ring is the same fixed
-; compass it has always been.
+; Selection used to be "the nearest slice centre". v0.6.4 replaced it with
+; Kando's scaleWedge(.., 0.5) EVERYWHERE -- an item owning only the inner
+; half of the gap to each neighbour -- and that was one step too far. Dead
+; space is only worth having where a bearing that lands in it MEANS
+; something, and the only ring where it does is a child ring, where it
+; means back.
+;
+;   * A ROOT ring: every slice owns its whole sector. A flick 30 degrees
+;     off north in a 4-way ring is unambiguously north, and 46 degrees is
+;     unambiguously east. There is nothing else it could be: the root has
+;     no way back, so a leftover bearing would fire nothing and read as a
+;     dropped button press. Release in the HUB, or press Escape, or click:
+;     those are the ways to cancel, and they are deliberate acts.
+;   * A CHILD ring: half the gap, as v0.6.4 made it. What is left over --
+;     including the whole direction the ring was entered from -- is BACK,
+;     which commits nothing. "I did not mean to walk in here" lands
+;     somewhere harmless.
+;   * A NUMBERED child ring (the 9-way preset ring): full sectors again,
+;     because there the slot IS the number and all nine have to be
+;     reachable. It keeps a zero-span `back` marker so the parent node and
+;     its connector are still drawn, but no bearing selects it.
+;
+; Slice DIRECTIONS do not move in any of this: a root ring is the same
+; fixed compass it has always been.
 
 /** True when a bearing (degrees from north) lies in the arc start..end. */
 RadialAngleIn(a, start, end) {
@@ -7924,22 +8037,44 @@ RadialSliceAngles(n, parentAngle := -1, numbered := false) {
  * The arc each slice answers to, plus the "back" arc.
  *
  * Returns {slices: [{center, start, end}, ...], back: 0 | {center, start,
- * end}}. A wedge is the slice's own direction plus a quarter of the gap to
- * each neighbour -- half the gap in total, the other half being nobody's.
- * `back` spans from the last wedge edge before the parent direction to the
- * first one after it, so it swallows the parent's own slot AND the dead
- * space flanking it. A root ring has no parent and so no back arc.
+ * end}}.
+ *
+ * A FULL ring -- the root, and the numbered preset ring at any depth --
+ * gives every slice its WHOLE sector, gap/2 to each side. There is nothing
+ * to be gained by leaving dead space there: the root has no way back for a
+ * leftover bearing to mean, so a flick 30 degrees off north would simply do
+ * nothing and read as a dropped press, and the preset ring is nine numbers
+ * that must each be reachable. A CHILD ring is the one that keeps dead
+ * space: a wedge is the slice's own direction plus a quarter of the gap to
+ * each neighbour -- half the gap in total -- and everything left over,
+ * including the parent's own slot, is `back`, which commits nothing. That
+ * is where "I did not mean to walk in here" needs somewhere harmless to
+ * land.
+ *
+ * A numbered CHILD ring is the exception to the exception: its slices are
+ * full sectors, so nothing is left over, and `back` is a zero-span marker
+ * at the parent direction. It exists only so the parent node and its
+ * connector are still drawn -- RadialPickIn never returns -1 there.
  */
 RadialWedges(n, parentAngle := -1, numbered := false) {
     angles := RadialSliceAngles(n, parentAngle, numbered)
-    gap := (parentAngle < 0 || numbered) ? (360.0 / n) : (360.0 / (n + 1))
-    half := gap / 4
+    full := (parentAngle < 0 || numbered)
+    gap := full ? (360.0 / n) : (360.0 / (n + 1))
+    half := full ? (gap / 2) : (gap / 4)
     out := {slices: [], back: 0}
     for a in angles
         out.slices.Push({center: a, start: Mod(a - half + 360, 360),
                          end: Mod(a + half, 360)})
-    if (parentAngle < 0)
+    ; A full ring's wedges MEET, so a bearing exactly on a shared edge is in
+    ; both: RadialPickIn scans in order, so it goes to the lower-numbered
+    ; slice. Deliberate -- a boundary has to belong to somebody.
+    if full {
+        if (numbered && parentAngle >= 0) {
+            pa := Mod(Mod(parentAngle, 360) + 360, 360)
+            out.back := {center: pa, start: pa, end: pa}
+        }
         return out
+    }
     pa := Mod(Mod(parentAngle, 360) + 360, 360)
     bs := pa, be := pa, bd := 400.0, ad := 400.0
     for w in out.slices {
@@ -8105,11 +8240,21 @@ RadialAnimStep(R, now) {
  */
 RadialRing(R, mn, slices, ax, ay, parentAngle) {
     global g_PassThru
+    ; Uninterruptible: this swaps the layer AND the geometry that the paint
+    ; reads. A hotkey thread landing between the two paints the new ring
+    ; with the old wedges, or draws onto a layer that has just been
+    ; disposed.
+    Critical "On"
     if IsObject(R.lyr) {                     ; the old wheel sat at the old
         try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
         try R.lyr.Dispose()                  ; fresh where the hand is
         R.lyr := 0
     }
+    ; Nothing is live between here and the paint that follows, so the whole
+    ; register is stale: take the disposed layer out of it (and anything an
+    ; interrupted paint left behind) rather than letting it grow one entry
+    ; per ring for the length of the gesture.
+    RadialSweepLayers()
     for sl in slices
         sl.sc := 1.0
     R.menu := mn
@@ -8138,16 +8283,18 @@ RadialRing(R, mn, slices, ax, ay, parentAngle) {
 ; already hooks; these hotkeys cover the rest -- LButton, RButton and MButton
 ; when nothing references them -- and exist only while a non-trial menu is
 ; open, so the three buttons are byte-for-byte native at every other moment.
+; Practice menus included (v0.6.4a): the trial exemption meant a practice
+; wheel could only be closed by Escape or by waiting out its 20 s floor.
 ; Registered on open, removed on close: nothing outlives the menu.
 global g_RadialCancelKeys := []   ; buttons hooked for the current menu
 
 RadialCancelActive(*) {
-    return (IsObject(g_Radial) && !g_Radial.trial) ? 1 : 0
+    return IsObject(g_Radial) ? 1 : 0
 }
 
 RadialCancelHit(btn, *) {
     Critical "On"
-    if (!IsObject(g_Radial) || g_Radial.trial)
+    if !IsObject(g_Radial)
         return
     RadialClose(false)                       ; cancel: a menu never commits
     HUD("Menu cancelled", "mute")            ; on a click
@@ -8230,7 +8377,13 @@ RadialOpen(name, holder := 0, trial := false) {
                  sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
                  targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false, depth: 1,
-                 t0: now, restAt: now,
+                 ; t0 is the PER-RING clock (the dwell before a ring is
+                 ; drawn, and RadialRing restarts it on every walk-in and
+                 ; walk-back). openedAt is the whole menu's age, and it is
+                 ; what the safety floors below measure, so a gesture that
+                 ; walks in and out of three rings cannot keep resetting the
+                 ; timer that is meant to be a ceiling on the whole thing.
+                 t0: now, openedAt: now, restAt: now,
                  parentAngle: -1,
                  wedges: RadialWedges(slices.Length, -1, slices.Length > 8),
                  stack: [], pts: [], ptrAngle: -1,
@@ -8264,13 +8417,15 @@ RadialTick(*) {
     }
     ; A held menu whose holder never reports a release is a stuck menu over
     ; the image. ActionUp is the real commit; this is the floor under it.
-    if (!R.latched && (now - R.t0 > 15000)) {
+    ; Measured from openedAt, not t0: t0 restarts on every ring change, so
+    ; a gesture that kept walking in and out of submenus never aged.
+    if (!R.latched && (now - R.openedAt > 15000)) {
         RadialClose(false)
         return
     }
     ; Practice is a thing you look at, so it gets a longer leash than a
     ; latched menu sitting over a live study.
-    if (R.latched && (now - R.t0 > (R.trial ? 20000 : 6000))) {
+    if (R.latched && (now - R.openedAt > (R.trial ? 20000 : 6000))) {
         RadialClose(false)
         return
     }
@@ -8334,7 +8489,15 @@ RadialTick(*) {
         if (corner || paused) {
             px := corner ? R.pts[corner].x : mx
             py := corner ? R.pts[corner].y : my
-            cs := RadialPickIn(R.wedges, RadialAngle(px - R.ax, py - R.ay))
+            ; A corner INSIDE THE HUB has no bearing worth reading: over a
+            ; few pixels a direction is noise, which is what the dead zone
+            ; says everywhere else. A flick that curls back through the
+            ; centre on its way out would otherwise open whichever door
+            ; happened to lie that way -- or walk back out of the ring. 0 is
+            ; "nothing", the same answer the selection gives in the hub, and
+            ; it falls through to the fresh-stroke reset below.
+            cs := (RadialDist({x: R.ax, y: R.ay}, px, py) < dead) ? 0
+                : RadialPickIn(R.wedges, RadialAngle(px - R.ax, py - R.ay))
             ; a deliberate TURN into the back arc walks out; a pause does
             ; not, or a hand resting anywhere but on a slice would leave the
             ; ring after 100 ms
@@ -8420,6 +8583,30 @@ RadialEnter(name, px := "", py := "", doorAngle := -1) {
     RadialPaint()                            ; you asked for it by walking in
 }
 
+/**
+ * Dispose every wheel layer except the one the live menu is using.
+ *
+ * `keep` is that layer (0 when no menu is open). Anything else in the list
+ * is an orphan -- disposed already, or created by a paint that lost its
+ * menu mid-constructor -- and Dispose is wrapped in try for exactly that
+ * reason. The pass-thru registration goes with it: a stale hwnd in
+ * g_PassThru would gate the engine's own input handling on a window that
+ * no longer exists (Windows recycles handles).
+ */
+RadialSweepLayers(keep := 0) {
+    global g_RadialLayers, g_PassThru
+    kept := []
+    for lyr in g_RadialLayers {
+        if (IsObject(keep) && IsObject(lyr) && ObjPtr(lyr) = ObjPtr(keep)) {
+            kept.Push(lyr)
+            continue
+        }
+        try g_PassThru.Delete(lyr.hwnd)
+        try lyr.Dispose()
+    }
+    g_RadialLayers := kept
+}
+
 /** Walk back out to the ring this one was opened from. Commits nothing. */
 RadialBack() {
     global g_Radial
@@ -8446,6 +8633,8 @@ RadialClose(commit) {
         try g_PassThru.Delete(R.lyr.hwnd)
         try R.lyr.Dispose()
     }
+    RadialSweepLayers()                      ; nothing is live now: take any
+                                             ; orphan with it
     if (R.trial) {
         ; A menu opened from "Try it now" NEVER fires. It is being looked at,
         ; over whatever happens to be underneath, and "close tab" or a W/L
@@ -8610,7 +8799,11 @@ RadialIcon(name, x, y, col, sc := 1.0) {
  * WHEN to paint, this decides only what the frame looks like.
  */
 RadialPaint() {
-    global g_Radial, g_PassThru
+    global g_Radial, g_PassThru, g_RadialLayers
+    ; Uninterruptible: Layer() creates a window and Draw() blits one, and
+    ; both pump messages. A hotkey thread that closes the menu in the middle
+    ; of either would leave this one drawing onto a disposed layer.
+    Critical "On"
     if (!IsObject(g_Radial) || !IsSet(Lumi) || !IsSet(Layer))
         return
     R := g_Radial
@@ -8636,6 +8829,17 @@ RadialPaint() {
         if !IsObject(R.lyr) {
             lyr := Layer(R.ax - ro - pad, R.ay - ro - pad, size, size,
                 "RadMapperRadial")
+            ; Creating a window pumps messages even under Critical, so the
+            ; menu we started painting may be gone -- or replaced -- by the
+            ; time the constructor returns. Its layer would then be an
+            ; orphan: click-through, top-most, over the study, with nothing
+            ; holding a reference to it.
+            if (!IsObject(g_Radial) || !Lumi.Same(g_Radial, R)) {
+                try g_PassThru.Delete(lyr.hwnd)
+                try lyr.Dispose()
+                return
+            }
+            g_RadialLayers.Push(lyr)         ; the sweep's safety net
             R.lyr := lyr
             ; Click-through and sitting under the cursor by design, so the
             ; engine must never claim it positionally -- that would gate the
@@ -8661,8 +8865,10 @@ RadialPaint() {
         step := 360.0 / n
         W := R.wedges
         ; The way back, under everything: it is the largest target on the
-        ; ring and it must never look like a command.
-        if IsObject(W.back)
+        ; ring and it must never look like a command. A numbered child ring
+        ; has a zero-span `back` -- a marker for the node below, with no arc
+        ; to fill.
+        if (IsObject(W.back) && arcOf(W.back) > 0.01)
             FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(W.back.start),
                 arcOf(W.back), (R.sel = -1)
                     ? Lumi.Mix(Lumi.C["surface"], Lumi.C["cyan"], 0.30)
@@ -8695,17 +8901,32 @@ RadialPaint() {
         FilledCircle(cx, cy, ri, Lumi.C["surface"])
         Circle(cx, cy, ri, Lumi.C["hair"], false)
         Circle(cx, cy, ro, Lumi.C["hair"], false)
-        ; A hairline at every wedge boundary: the edges of the dead space
-        ; are the whole point of having any.
+        ; A hairline at every wedge boundary, ONCE. On a full ring the
+        ; wedges meet, so every boundary is one slice's end and the next
+        ; one's start; drawing the list raw painted each of them twice, and
+        ; a 1 px anti-aliased line drawn twice is a 2 px line. Deduped on
+        ; the angle rounded to a hundredth of a degree, which is finer than
+        ; any ring this code can build.
         if wedgy {
-            edges := []
+            raw := []
             for w in W.slices {
-                edges.Push(w.start)
-                edges.Push(w.end)
+                raw.Push(w.start)
+                raw.Push(w.end)
             }
-            if IsObject(W.back) {
-                edges.Push(W.back.start)
-                edges.Push(W.back.end)
+            ; a zero-span back (the numbered child ring) is a marker for the
+            ; parent node, not an arc: it has no edges of its own
+            if (IsObject(W.back) && arcOf(W.back) > 0.01) {
+                raw.Push(W.back.start)
+                raw.Push(W.back.end)
+            }
+            edges := []
+            seen := Map()
+            for a in raw {
+                k := String(Round(Mod(Mod(a, 360) + 360, 360), 2))
+                if seen.Has(k)
+                    continue
+                seen[k] := 1
+                edges.Push(a)
             }
             for a in edges {
                 t := rad(a)
@@ -9706,6 +9927,9 @@ PanicRelease() {
     try Warp.Close(true)                     ; the keyboard comes back, too
     RadialClose(false)                       ; a menu over the image, firing
                                              ; nothing: panic never commits
+    RadialSweepLayers()                      ; and any wheel layer that lost
+                                             ; its menu (this is what panic
+                                             ; is for)
     g_Layer := "Base"
     g_LayerStack := []
     if (g_SpeedSaved != "") {
@@ -12162,6 +12386,7 @@ Cleanup(*) {
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     RadialClose(false)
+    RadialSweepLayers()                      ; no wheel layer outlives us
     TeleportSignalStop()
     try ScrollPtrStop()                      ; restores a hidden pointer too
     try SysCursorShow()
@@ -12432,6 +12657,12 @@ class Lumi {
     ; top-level window with live handlers, and it outlived the state it
     ; wrote into.
     static openSel := 0
+    ; True only for the duration of a SelectNudge's onChange call. A
+    ; dropdown stepped with Left/Right fires onChange on EVERY press, and a
+    ; handler that rebuilds its whole dialog in response would tear the
+    ; control out from under a run of arrow keys. Anything that expensive
+    ; asks this and debounces instead (Atlas.DoWizActPicked).
+    static nudging := false
     static selWatch := 0
     static selKeyDown := false     ; edge detector for the list's arrow keys
     static editing := 0            ; >0 while a Field owns the keyboard
@@ -12487,15 +12718,26 @@ class Lumi {
          * repaints itself from a 700 ms tick whenever the engine's status
          * line changes, and losing the focused control every time the layer
          * name changed would make Tab useless on the page that shows it.
+         *
+         * `idx` is for a rebuild onto a DIFFERENT layer that is still the
+         * same page to the person using it -- the wizard, which reopens its
+         * whole dialog every time a tile is pressed. Without it, Tab, Tab,
+         * Tab, Space put focus back on control 1 and the next Tab started
+         * the walk again. 0 means "the first control", which is what a
+         * dialog opening for the first time wants. Restore() clamps it to
+         * the list that actually got built.
          */
-        static Reset(lyr := 0, startFocused := false) {
+        static Reset(lyr := 0, startFocused := false, idx := 0) {
             same := (IsObject(lyr) && Lumi.Same(this.layer, lyr))
             this.items := []
             this.ring := []          ; the layer's Clear() disposed them
             this.layer := IsObject(lyr) ? lyr : 0
             if startFocused {
                 this.armed := true
-                this.idx := 1
+                this.idx := (idx > 0) ? idx : 1
+            } else if (idx > 0 && !same) {
+                this.armed := false  ; remembered, but not shown until Tab
+                this.idx := idx
             } else if !same {
                 this.armed := false
                 this.idx := 0
@@ -12509,9 +12751,10 @@ class Lumi {
                 this.idx := 0
                 return
             }
+            this.idx := (this.idx > 0) ? Min(this.idx, n) : 0
             if !this.armed
-                return
-            this.idx := Min(Max(this.idx, 1), n)
+                return                       ; remembered, not drawn
+            this.idx := Max(this.idx, 1)
             this.Paint()
         }
 
@@ -13337,9 +13580,17 @@ class Lumi {
         Lumi.__SelectLabel(state)
         Lumi.FullErase(state.owner)
         Lumi.Refresh(state.owner)
-        if (state.onChange != 0)
+        if (state.onChange = 0)
+            return
+        ; try/finally, not a plain reset: an onChange that throws must not
+        ; leave the flag set, or the next MOUSE pick would be debounced too.
+        Lumi.nudging := true
+        try {
             (state.onChange)(state.index,
                 state.items.Has(state.index) ? state.items[state.index] : "")
+        } finally {
+            Lumi.nudging := false
+        }
     }
 
     /** Factory: one closure per direction, capturing the step by VALUE. */
@@ -14234,6 +14485,8 @@ class Atlas {
     static savedSel := 0           ; list selection, preserved across rebuilds
     static parkRef := 0            ; app row awaiting a park-spot capture
     static escBound := false
+    static wizReopenFn := 0        ; the debounced wizard reopen (BoundFunc,
+    static wizReopenSt := 0        ;   kept so SetTimer can cancel it)
     static pending := false        ; a rebuild deferred past a live edit
     static pendAt := 0             ; ... since this tick; deferral is capped
     static resizeMode := "both"   ; right | bottom | both
@@ -14455,6 +14708,13 @@ class Atlas {
      * Escape is not here at all: it still unwinds one level (EscKey).
      */
     static DoFocusKey(what) {
+        ; The keyboard pointer owns every key while it is up -- including
+        ; Tab, Space, Enter and the arrows, which are how it is DRIVEN.
+        ; Walking the settings window's focus ring underneath it means one
+        ; press doing two jobs: Space clicks the study AND presses whatever
+        ; the ring happens to be on.
+        if (IsSet(Warp) && Warp.active)
+            return
         if (IsObject(g_RecHook) || IsObject(Lumi.openSel))
             return
         if (Lumi.editing > 0) {
@@ -14483,14 +14743,31 @@ class Atlas {
         Lumi.Focus.Do(what)
     }
 
+    /**
+     * True while the settings window (or its dialog) is the foreground one.
+     *
+     * This is the #HotIf context for Escape, F1, four resize combos and all
+     * eight focus-ring keys, so it is evaluated on EVERY press of Tab,
+     * Enter, Space and the four arrows anywhere in Windows -- while
+     * dictating, while typing a report. The cheap answer comes first: no
+     * window, or a hidden one, and there is nothing to be in front. Only
+     * then does it pay for WinActive.
+     */
     static IsFront(*) {
+        lyr := Atlas.lyr
+        if !IsObject(lyr)
+            return 0
+        try {
+            if !DllCall("user32\IsWindowVisible", "ptr", lyr.hwnd)
+                return 0
+        } catch {
+            return 0
+        }
         try {
             if (IsObject(Atlas.dlg) && WinActive("ahk_id " Atlas.dlg.hwnd))
                 return 1
         }
-        if !IsObject(Atlas.lyr)
-            return 0
-        return WinActive("ahk_id " Atlas.lyr.hwnd) ? 1 : 0
+        return WinActive("ahk_id " lyr.hwnd) ? 1 : 0
     }
 
     static Hide(*) {
@@ -15269,8 +15546,21 @@ class Atlas {
             "Unstick my buttons", (*) => Atlas.Unstick(), "danger")
     }
 
-    /** F1: the whole setup path in one box, in plain words. */
+    /**
+     * F1: the whole setup path in one box, in plain words.
+     *
+     * StopTick around the MsgBox, for the same reason Atlas.Confirm does
+     * it: MsgBox blocks this thread, the 700 ms status tick does not stop
+     * for it, and a Build() landing while the box is up disposes the very
+     * layer the box is owned by.
+     */
     static Help() {
+        Atlas.StopTick()
+        try Atlas.HelpBox()
+        Atlas.StartTick()
+    }
+
+    static HelpBox() {
         MsgBox("Home is the whole map.`n`n"
             . "It offers four jobs -- change what a mouse button does, "
             . "change what a keyboard key does, set up a radial menu, apply "
@@ -15293,13 +15583,26 @@ class Atlas {
             . "Radial menus`n"
             . "Edit commands, Assign a button, then Practice safely. Choose "
             . "Send keys for PACS shortcuts and record the keys shown in "
-            . "your viewer settings. Each command owns its own slice of the "
-            . "circle and the middle says what will run; between two of them, "
-            . "or in the middle, nothing is chosen. A command that opens a "
-            . "second ring opens it when you turn a corner on it or pause on "
-            . "it, and in that second ring the direction you came from goes "
-            . "back. A disabled direction does nothing, and practice never "
-            . "sends a command.`n`n"
+            . "your viewer settings.`n`n"
+            . "Every direction on the first wheel belongs to a command: "
+            . "each one owns its whole slice of the circle, so being a bit "
+            . "off centre still picks the one you aimed at. The numbered "
+            . "preset ring works the same way — all nine numbers are "
+            . "reachable. To fire nothing, let go in the middle, press "
+            . "Escape, or click.`n`n"
+            . "A command that opens a SECOND ring opens it when you turn a "
+            . "corner on it or pause on it. That second ring is the one "
+            . "place with gaps: the direction you came from, and the space "
+            . "either side of it, mean back — turn or pause there and the "
+            . "first wheel returns, having sent nothing. A preset ring has "
+            . "no gaps, so leave it with Escape or a click.`n`n"
+            . "A click cancels a live menu wherever you are, practice "
+            . "included, and sends nothing. The middle of the wheel says "
+            . "what is armed and which keys it will send. Two switches on "
+            . "the Menus page — Animate the wheel and Show wedges — turn "
+            . "the movement and the drawn arcs off; neither changes what a "
+            . "direction does. A disabled direction does nothing, and "
+            . "practice never sends a command.`n`n"
             . "Getting around`n"
             . "Use the list on the left, or set the whole thing up from the "
             . "keyboard: Tab and Shift+Tab move between controls and ring "
@@ -16499,7 +16802,19 @@ class Atlas {
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
         ; pressed. A page is not, which is why Build() does not do this.
-        Lumi.Focus.Reset(dlg, true)
+        ;
+        ; A REOPEN is not a new dialog, though -- pressing a tile rebuilds
+        ; the whole layer, and this is the same page to the person in front
+        ; of it. WizRefocus stamped the draft with where focus was and
+        ; whether it was showing at all, so Tab, Tab, Space does not throw
+        ; the walk back to control 1, and a mouse user still never sees a
+        ; ring. Restore() clamps the index to the ring this build produced,
+        ; which may be shorter (question 4 comes and goes).
+        fArmed := d.HasProp("focusArmed") ? (d.focusArmed ? true : false) : true
+        fIdx := d.HasProp("focusIdx") ? d.focusIdx : 0
+        try d.DeleteProp("focusArmed")
+        try d.DeleteProp("focusIdx")
+        Lumi.Focus.Reset(dlg, fArmed, fIdx)
         Atlas.Own(dlg)
         dlg.Drag()
 
@@ -16580,8 +16895,11 @@ class Atlas {
             }
         }
         ; WRAPPED, not clipped: several of these hints are a sentence and a
-        ; half, and a Label is one line that paints past its own box.
-        st.hint := Lumi.Para(24, 384, w - 48, 36,
+        ; half, and a Label is one line that paints past its own box. With
+        ; question 4 showing there is no Details row above it, so the hint
+        ; moves up into its place rather than leaving a 34 px hole between
+        ; the action dropdown and a sentence about it.
+        st.hint := Lumi.Para(24, askLock ? 350 : 384, w - 48, 36,
             ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute")
 
         progY := 428
@@ -16671,6 +16989,22 @@ class Atlas {
         return ""
     }
 
+    /**
+     * Carry the keyboard position across a reopen.
+     *
+     * Every wizard answer rebuilds the dialog on a NEW layer, and a new
+     * layer means a new focus ring: without this, Tab three times and press
+     * Space and the ring jumps back to control 1. `armed` travels too, so a
+     * dialog driven entirely by the mouse still shows no ring at all.
+     * Written onto the draft rather than kept in a static because the draft
+     * is the only thing that survives the deferred reopen.
+     */
+    static WizRefocus(d) {
+        d.focusArmed := Lumi.Focus.armed
+        d.focusIdx := Lumi.Focus.idx
+        return d
+    }
+
     /** Snapshot the editable fields into the draft before a reopen. */
     static WizDraft(st) {
         d := st.d
@@ -16690,7 +17024,7 @@ class Atlas {
         if !Atlas.DlgAlive(st)
             return
         Lumi.EndEdit()
-        d := Atlas.WizDraft(st)
+        d := Atlas.WizRefocus(Atlas.WizDraft(st))
         d.%key% := v
         ; unwind the click before the layer it came from is disposed
         SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
@@ -16704,7 +17038,7 @@ class Atlas {
         if !Atlas.DlgAlive(st)
             return
         Lumi.EndEdit()
-        d := Atlas.WizDraft(st)
+        d := Atlas.WizRefocus(Atlas.WizDraft(st))
         d.act := act
         d.value := value
         ; unwind the click before the layer it came from is disposed
@@ -16732,11 +17066,60 @@ class Atlas {
             Atlas.ActHint(st, 0)
             return
         }
+        ; STEPPED WITH AN ARROW KEY, not picked with the mouse. Left and
+        ; Right fire onChange on every press, so walking the sixteen actions
+        ; from "Send keys" to "Click lock" crossed the family line four or
+        ; five times and tried to rebuild the whole dialog each time -- each
+        ; rebuild disposing the very dropdown the next arrow press was aimed
+        ; at. Wait until the run stops. The hint still follows every press,
+        ; so the list is readable while it is being walked.
+        if Lumi.nudging {
+            ; the hint by hand, NOT through Atlas.ActHint: that one reopens
+            ; the BINDING dialog when the family changes, and the family has
+            ; just changed. It is the binding editor's handler; the wizard
+            ; only ever borrowed its matching-family tail.
+            try {
+                st.hint.str := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
+                Lumi.FullErase(st.dlg)
+                Lumi.Refresh(st.dlg)
+            }
+            if !Atlas.wizReopenFn
+                Atlas.wizReopenFn := ObjBindMethod(Atlas, "WizReopenDue")
+            Atlas.wizReopenSt := st
+            SetTimer(Atlas.wizReopenFn, -400)
+            return
+        }
+        Atlas.WizReopenNow(st)
+    }
+
+    /** The debounce expired: rebuild around whatever the arrows settled on. */
+    static WizReopenDue() {
+        st := Atlas.wizReopenSt
+        Atlas.wizReopenSt := 0
+        if (!IsObject(st) || !Atlas.DlgAlive(st))
+            return                           ; closed, or replaced, meanwhile
+        if (Atlas.ValueFamily(Atlas.ActCode(st.act))
+            = Atlas.ValueFamily(st.d.act))
+            return                           ; walked back where it started
+        Atlas.WizReopenNow(st)
+    }
+
+    /** Reopen the wizard around the action the dropdown is now showing. */
+    static WizReopenNow(st) {
+        Atlas.WizReopenCancel()
         Lumi.EndEdit()
-        d := Atlas.WizDraft(st)
+        code := Atlas.ActCode(st.act)
+        d := Atlas.WizRefocus(Atlas.WizDraft(st))
         d.act := code
         d.value := Atlas.DefaultValueFor(code)
         SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
+    }
+
+    /** Drop a pending debounced reopen -- the dialog is going away. */
+    static WizReopenCancel() {
+        Atlas.wizReopenSt := 0
+        if Atlas.wizReopenFn
+            SetTimer(Atlas.wizReopenFn, 0)
     }
 
     /** The Details dropdown changed: re-say the sentence at the bottom. */
@@ -16765,7 +17148,7 @@ class Atlas {
         name := RecordKeyName()
         if (name = "" || !Atlas.DlgAlive(st))
             return
-        d := Atlas.WizDraft(st)
+        d := Atlas.WizRefocus(Atlas.WizDraft(st))
         d.btn := CanonicalInputName(NormalizeInputName(name))
         SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
     }
@@ -18671,6 +19054,7 @@ class Atlas {
     static CloseDlg() {
         Lumi.CloseSelect()               ; its lists die with it
         Lumi.EndEdit()
+        Atlas.WizReopenCancel()          ; nothing may reopen a closed wizard
         ; Never leave a Rec capture running headless -- the same rule
         ; ModalClose applies to the classic dialogs. Without it, closing the
         ; dialog mid-record left an InputHook swallowing keys until its
@@ -18687,13 +19071,32 @@ class Atlas {
         ; disposed. Drop them, and rebuild the window so it registers its own
         ; again -- deferred, because this runs inside the click handler of a
         ; button on the layer being torn down.
+        ;
+        ; If the dialog was being driven from the KEYBOARD, the page behind
+        ; it has to come back with a ring on it: closing a dialog with Enter
+        ; and landing on a window that answers no key until Tab is pressed
+        ; again reads as the keyboard having stopped working. Index 1, not
+        ; the position the page had before the dialog opened -- the page was
+        ; rebuilt, and the control that opened the dialog may not be on it
+        ; any more.
+        rearm := Lumi.Focus.armed
         Lumi.Focus.Reset(0)
         Atlas.lastSig := ""
         if IsObject(Atlas.lyr) {
             LayerStack.ActiveLayer := Atlas.lyr
             try Atlas.lyr.Activate()
-            SetTimer(() => Atlas.Build(), -1)
+            SetTimer(() => Atlas.RebuildAfterDlg(rearm), -1)
         }
+    }
+
+    /** Rebuild the page a dialog was closed over, re-arming the ring. */
+    static RebuildAfterDlg(rearm) {
+        Atlas.Build()
+        if (!rearm || Lumi.Focus.items.Length < 1)
+            return
+        Lumi.Focus.armed := true
+        Lumi.Focus.idx := 1
+        Lumi.Focus.Paint()
     }
 
     ; ── RADIAL MENU EDITOR ──────────────────────────────────────────────────
@@ -20296,7 +20699,7 @@ class Warp {
     ; over). OnReleaseHK consumes the claim so the matching Up is swallowed
     ; even though the overlay has closed by then -- see OnReleaseHK.
     static claimed := Map()
-    static grab := false            ; left button held by us (dragging)
+    static grabbing := false        ; left button held by us (dragging)
     static zoom := 4
     static loupeOn := true
     ; SetWindowDisplayAffinity accepted. Whether this build of Windows and
@@ -20313,7 +20716,7 @@ class Warp {
     static uia := 0
     static IDLE_MS := 45000
     static LOUPE := 320             ; magnified square, px
-    static SUB := Map("Q", [1, 1], "W", [2, 1], "E", [3, 1],
+    static NINTH := Map("Q", [1, 1], "W", [2, 1], "E", [3, 1],
                       "A", [1, 2], "S", [2, 2], "D", [3, 2],
                       "Z", [1, 3], "X", [2, 3], "C", [3, 3])
     static SUBKEY := ["Q", "W", "E", "A", "S", "D", "Z", "X", "C"]
@@ -20400,6 +20803,12 @@ class Warp {
             busy := "window switcher"
         else if (IsSet(Calib) && Calib.IsOpen())
             busy := "calibrator"
+        ; The settings window is the fourth: it drives itself from Tab,
+        ; Space, Enter and the arrows (Lumi.Focus), and an InputHook that
+        ; swallows all of them on top of it leaves the window looking
+        ; focused and answering nothing.
+        else if (IsSet(Atlas) && IsObject(Atlas.lyr) && Atlas.IsFront())
+            busy := "settings window"
         if (busy != "") {
             HUD("Close the " busy " first", "warn")
             return
@@ -20410,7 +20819,7 @@ class Warp {
                 return
             Warp.zoom := Min(Max(Cfg("warpZoom"), 2), 12)
             Warp.loupeOn := Cfg("warpLoupe") ? true : false
-            Warp.grab := false
+            Warp.grabbing := false
             Warp.first := ""
             RM_GetPos(&x, &y)
             Warp.cx := x
@@ -20446,8 +20855,8 @@ class Warp {
             if !held
                 Warp.claimed.Delete(name)
         }
-        if Warp.grab {
-            Warp.grab := false
+        if Warp.grabbing {
+            Warp.grabbing := false
             try SendNativeUp("LButton")
         }
         for name, lyr in Warp.L.Clone()
@@ -20557,7 +20966,7 @@ class Warp {
             Warp.Label(ch)
             return
         }
-        if Warp.SUB.Has(ch) {
+        if Warp.NINTH.Has(ch) {
             Warp.Sub(ch)
             return
         }
@@ -20628,7 +21037,7 @@ class Warp {
     }
 
     static Sub(ch) {
-        cr := Warp.SUB[ch]
+        cr := Warp.NINTH[ch]
         rg := Warp.region
         sub := Warp.SubRect(rg, cr[1], cr[2])
         if (rg.w <= 3 && rg.h <= 3) {       ; nothing left to divide
@@ -20723,7 +21132,7 @@ class Warp {
     static MoveTo(x, y) {
         Warp.cx := x
         Warp.cy := y
-        if Warp.grab {
+        if Warp.grabbing {
             prevMode := A_SendMode
             try {
                 SendMode("Input")
@@ -20753,7 +21162,7 @@ class Warp {
     }
 
     static Click(btn, n) {
-        if Warp.grab {
+        if Warp.grabbing {
             Warp.Release()
             return
         }
@@ -20763,19 +21172,19 @@ class Warp {
     }
 
     static Grab() {
-        if Warp.grab {
+        if Warp.grabbing {
             Warp.Release()
             return
         }
         Warp.ClearMods()                     ; a Ctrl+drag is a different gesture
         SendNativeDown("LButton")
-        Warp.grab := true
+        Warp.grabbing := true
         Warp.DrawLegend()
         Warp.DrawFine()
     }
 
     static Release() {
-        Warp.grab := false
+        Warp.grabbing := false
         Warp.ClearMods()
         try SendNativeUp("LButton")
         Warp.Close(false)
@@ -21055,7 +21464,7 @@ class Warp {
      * zoom. letters = whether to draw them at all.
      */
     static __Region(x, y, w, h, z, letters) {
-        mag := Warp.grab ? Lumi.C["jade"] : Lumi.C["magenta"]
+        mag := Warp.grabbing ? Lumi.C["jade"] : Lumi.C["magenta"]
         box := Rectangle(x, y, w, h, mag, false)
         box.penwidth := 2
         if (w < 12 && h < 12)
@@ -21154,7 +21563,7 @@ class Warp {
         lyr := Warp.Surface("loupe", p.x, p.y, size, size + cap)
         lyr.alwaysFullErase := true
         cx := Warp.cx, cy := Warp.cy
-        grab := Warp.grab
+        grab := Warp.grabbing
         Warp.Paint(lyr, () => Warp.__Loupe(bmp, sx, sy, sw, z, LW, frame, cap,
             rg, cx, cy, grab))
     }
@@ -21212,7 +21621,7 @@ class Warp {
         lyr.alwaysFullErase := true
         stage := Warp.stage
         first := Warp.first
-        grab := Warp.grab
+        grab := Warp.grabbing
         n := Warp.mons.Length
         mi := Warp.mi
         Warp.Paint(lyr, () => Warp.__Legend(w, h, stage, first, grab, n, mi))

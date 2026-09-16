@@ -36,26 +36,39 @@ try {
     for i, delta in [[0,-100], [100,0], [0,100], [-100,0]]
         Check(Abs(RadialAngle(delta[1], delta[2]) - (i - 1) * 90) < 0.01, "Compass angle")
 
-    ; ── wedges (v0.6.4) ─────────────────────────────────────────────────
-    ; A slice owns its own direction plus a quarter of the gap on each side;
-    ; the rest of the circle is nobody's. Pure arithmetic -- no cursor, no
-    ; layer, no config.
+    ; ── wedges (v0.6.4, tolerance fixed in v0.6.4a) ─────────────────────
+    ; A ROOT ring gives every slice its whole sector -- there is no way back
+    ; for a leftover bearing to mean, so leaving one would only lose the
+    ; press. A CHILD ring keeps half the gap and hands the rest to `back`.
+    ; Pure arithmetic -- no cursor, no layer, no config.
     w4 := RadialWedges(4)
     Check(w4.slices.Length = 4 && !IsObject(w4.back),
         "A root ring has four wedges and no way back")
     for i, want in [0, 90, 180, 270] {
+        nxt := Mod(i, 4) + 1
         Check(Abs(w4.slices[i].center - want) < 0.01, "4-way slice " i " moved")
         Check(RadialPickIn(w4, want) = i, "4-way centre picks its own slice")
-        Check(RadialPickIn(w4, want + 22.4) = i, "4-way wedge stops short")
-        Check(RadialPickIn(w4, Mod(want + 30 + 360, 360)) = 0,
-            "Between two 4-way slices nothing is chosen")
+        Check(RadialPickIn(w4, Mod(want + 30 + 360, 360)) = i,
+            "A 4-way slice owns its whole sector")
+        Check(RadialPickIn(w4, Mod(want + 46 + 360, 360)) = nxt,
+            "Past the boundary is the next 4-way slice")
+        Check(RadialPickIn(w4, Mod(want - 22.4 + 360, 360)) = i,
+            "A 4-way slice owns its whole sector on the other side too")
     }
     w8 := RadialWedges(8)
     for i, want in [0, 45, 90, 135, 180, 225, 270, 315] {
+        nxt := Mod(i, 8) + 1
         Check(Abs(w8.slices[i].center - want) < 0.01, "8-way slice " i " moved")
         Check(RadialPickIn(w8, want) = i, "8-way centre picks its own slice")
-        Check(RadialPickIn(w8, Mod(want + 22.5 + 360, 360)) = 0,
-            "Halfway between two 8-way slices is nobody's")
+        Check(RadialPickIn(w8, Mod(want + 22.4 + 360, 360)) = i,
+            "An 8-way slice owns everything up to the boundary")
+        Check(RadialPickIn(w8, Mod(want + 22.6 + 360, 360)) = nxt,
+            "Just past the boundary is the next 8-way slice")
+    }
+    ; No bearing at the root may select nothing: a root ring is a partition.
+    loop 360 {
+        Check(RadialPickIn(w4, A_Index - 1) > 0, "A 4-way root bearing chose nothing")
+        Check(RadialPickIn(w8, A_Index - 1) > 0, "An 8-way root bearing chose nothing")
     }
     ; A CHILD ring is spaced 360/(n+1) from one step past the parent, so the
     ; way back keeps a slot and every leftover bearing selects it.
@@ -75,9 +88,21 @@ try {
     Check(Abs(Mod(Mod(wc.back.end - wc.back.start, 360) + 360, 360) - 60) < 0.01,
         "The back arc is the parent slot plus the dead space flanking it")
     ; The numbered preset ring keeps its numbers where they are, parent or no
-    ; parent: the slot IS the number.
+    ; parent: the slot IS the number. It is a FULL ring even as a child --
+    ; all nine numbers have to be reachable -- so its `back` is a zero-span
+    ; marker that only exists so the parent node and connector are drawn.
     for i, a in RadialSliceAngles(9, 180, true)
         Check(Abs(a - (i - 1) * 40) < 0.01, "A preset number moved")
+    wn := RadialWedges(9, 180, true)
+    Check(IsObject(wn.back), "A numbered child ring keeps a parent marker")
+    Check(Abs(wn.back.center - 180) < 0.01 && wn.back.start = wn.back.end,
+        "The numbered ring's back marker is the parent direction, zero span")
+    for want, slice in Map(200, 6, 215, 6, 219, 6, 221, 7)
+        Check(RadialPickIn(wn, want) = slice,
+            "Numbered child bearing " want " must pick " slice)
+    loop 360
+        Check(RadialPickIn(wn, A_Index - 1) > 0,
+            "A numbered child ring may never select back")
     Check(RadialAngleIn(5, 355, 15) && !RadialAngleIn(20, 355, 15),
         "An arc that wraps past north")
 
@@ -449,10 +474,21 @@ try {
     Check(Lumi.Elide(long, 4, "body") = long,
         "A width with no room for two characters is left alone")
 
+    ; AHK property names are case-INSENSITIVE, so `static grab` next to
+    ; `static Grab()` is a duplicate declaration and the script does not
+    ; load at all (v0.6.4a). check_source.py catches the collision; this
+    ; catches the other half of the rename -- a member quietly renamed back,
+    ; or a reference left pointing at a name that no longer exists.
+    Check(Warp.HasOwnProp("grabbing") && Warp.HasOwnProp("Grab"),
+        "Warp.grabbing must not collide with Warp.Grab()")
+    Check(Warp.HasOwnProp("NINTH") && Warp.HasOwnProp("Sub"),
+        "Warp.NINTH must not collide with Warp.Sub()")
+
     FileAppend("PASS: JSON, config shape, radial geometry, wedges, corners, rename, pause, persistence, "
-        . "stations, adaptive layouts, imaging fallbacks, layout validation, "
+        . "hover scale, stations, adaptive layouts, imaging fallbacks, layout validation, "
         . "float round-trip, window placement, keyboard pointer geometry, "
-        . "clamped thresholds, hold/repeat action classes, event labels, elision, "
+        . "clamped thresholds, hold/repeat action classes, MButton hold risk, "
+        . "event labels, elision, "
         . "input-value options, wizard tiles, Details widget families`n", "*")
     ExitApp(0)
 } catch as e {

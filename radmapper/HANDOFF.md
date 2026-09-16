@@ -1,102 +1,197 @@
-# Handoff — RadMapper 0.6.2-preview: station-aware layouts + keyboard pointer
+# Handoff — RadMapper 0.6.4-preview: radial menus, review pass 4
 
-**Objective.** (1) Window arrangements that survive a different workstation
-monitor set, with imaging screens kept for the viewer and windows placed
-automatically when a station is recognised. (2) A keyboard "mouseless"
-pointer: lettered grid, ninths refinement, loupe, click/drag/snap by keys.
+**Objective.** Ship a single-file AutoHotkey v2 remapper for a PowerScribe +
+IntelliSpace reading room that is configured entirely at runtime: mouse and
+keyboard remapping, window arrangements that follow the radiologist between
+stations, a keyboard-driven pointer, and Kando-style radial (marking) menus
+for PACS shortcuts. This session was review pass 4 (v0.6.4a): a P0 load
+failure, a P0 usability defect in the wedge geometry, and a set of P1-P3
+robustness and polish fixes.
 
-**State.** Implemented in `radmapper/RadMapper.ahk`, documented, portable
-checks pass. **Not run on Windows** (no AutoHotkey here). Branch
-`claude/gallant-lamport-hiv2cu`.
+**State.** Branch `claude/gallant-lamport-hiv2cu`. Latest commit: **see
+`git log`** — this session's work is in the working tree and was
+deliberately **not committed**. Everything lives in
+`radmapper/RadMapper.ahk` (≈35.9k lines, single file, GpGFX vendored).
+Portable checks pass. **Still never run on Windows** — there is no
+AutoHotkey, no Windows and no display in this environment.
 
-**Done.**
-- §7c rewritten: `StationMons/StationKey/StationEntry`, `ImagingMons` (auto
-  = portrait or ≥1.35× the MEDIAN screen's pixels; when that would reserve
-  every screen it narrows to the portraits, else to the largest), slots carry
-  `mon/fx/fy/fw/fh` next to `x/y/w/h`, `LayoutSlotTarget` (exact on the
-  capturing station, adapted elsewhere), maximised-on-wrong-screen fixed,
-  guard mode 2 (place new windows once, `g_LayoutPlaced`), station watch
-  (`WM_DISPLAYCHANGE` + 5 s poll, debounced `StationSettled`, launch pass),
-  `WinPlace` grammar (`next|prev|here|1-9` × `max|left|right|top|bottom|
-  tl|tr|bl|br|keep|restore`). `MigrateLayoutSlots` stamps pre-0.6.2 layouts
-  with the current station on load.
-- §14e `class Warp`: invisible InputHook (modifiers visible), grid layer +
-  column highlight + region outline + loupe (`GdipBitmap.FromScreen`, layers
-  excluded from capture via `SetWindowDisplayAffinity 0x11`, hide/show
-  fallback), UIA `ElementFromPoint` snap (vtable 7 / 42 / 23, 64-bit only),
-  drag via `SendMode Input` `MouseMove`, 45 s idle close. Engine key rows
-  gated in `OnPressHK`/`OnReleaseHK`.
-- Actions `winplace`, `warp` (also in Simple mode); settings `stationAuto`,
-  `stationSettleMs`, `imagingMons`, `hkWinNext/Prev/Max` (blank),
-  `hkWarp` (`^!g`), `warpZoom/Loupe/Cell`; config key `stations`.
-- Windows page: "Saved on" column, This station block (arrangement Select,
-  imaging Field, Auto-apply Toggle), four stacked shortcut rows, three-state
-  keep button labelled with the selection's CURRENT state. F1 help and README updated. `tests/regression.ahk` covers the
-  pure helpers with a made-up 3-screen station.
+## The passes, in order
 
-**Decisions.** Station identity = sizes in left-to-right order (arrangement
-order matters, OS enumeration order does not). First arrangement saved on a
-station becomes its own. Grid keys: column then row letter; fine stage
-Q W E / A S D / Z X C; commands R M F G N V L on the right hand. Loupe uses
-GpGFX's bicubic scaling (crisp-enough; nearest-neighbour would need a
-Picture draw-path change).
+Each pass is written out in full in the changelog at the top of
+`RadMapper.ahk`; these paragraphs say only what each one was FOR, so the
+changelog stays the single source of truth.
 
-**Verification.** `python3 radmapper/tests/check_source.py` PASS (it now also
-asserts the Windows-page HkRow offsets and the Warp timer-identity statics);
-`node radmapper/tests/mockup.cjs` PASS; bracket
-balance of every inserted block checked; `git diff --check` clean. Pending
-on Windows: `AutoHotkey64.exe /ErrorStdOut tests\regression.ahk`, then a
-live pass: Ctrl+Alt+G on a multi-monitor PC (grid, Tab, letters, loupe, N
-on a toolbar button, G drag), save an arrangement, unplug/replug a monitor.
+**v0.6.2a — engine and delivery (review pass 1).** The first pass over the
+engine after the rewrite: press/release state, the action executor, the
+PowerScribe delivery path (skill §2: activate by EXE, never by hwnd), stuck
+modifiers, and the guarantee that every synthetic Down has a matching Up.
 
-**Risks to check first on Windows.** (1) `SetWindowDisplayAffinity` on a
-layered window — STILL OPEN. If it refuses, the loupe falls back to hiding
-overlays for the BitBlt; that path is now narrower (only the layers whose
-rects intersect the capture square, the Lumi toast included) and waits 40 ms
-instead of 15, and the probe result is cached across opens instead of being
-re-learned every time. Nothing here can be proved without a machine that
-refuses. (2) Hotkeys vs the invisible InputHook — SETTLED as far as static
-review can: modifiers stay `V`isible, `hkWarp` is bound to `Warp.Toggle()` so
-a second Ctrl+Alt+G closes the overlay, and `Warp.Open()` now refuses while a
-radial menu, the app switcher or the calibrator owns the keyboard ("Close the
-menu first"). Esc and the 45 s idle timeout are still the safety net.
-(3) UIA vtable indices — SETTLED: 43 was wrong. 42 is
-`get_CurrentBoundingRectangle`; 43 is `get_CurrentLabeledBy`, which returns an
-IUIAutomationElement, so the old code read a leaked pointer's halves as a
-rectangle. 23 (`get_CurrentName`) is unchanged and its BSTR is now freed in a
-`finally`. A failed call drops the cached automation object. (4) Windows page
-at 940 px — SETTLED: the three window hotkeys use the stacked `HkRow` form in
-three 220 px columns at `x`, `x+230`, `x+460` (right edge 680 ≤ pw 704); the
-arithmetic is written out in a comment in `PanelWindows` and
-`tests/check_source.py` asserts no HkRow offset there exceeds 460.
+**v0.6.2b — settings UI (review pass 2).** The Lumi Atlas widget kit and the
+Atlas front-end: layer ownership (a widget records the layer it was BUILT
+on and never consults the global again), dialog lifetime, the option-list
+popup, full-erase repaints, and the contrast rules that `check_source.py`
+still asserts.
 
-**Try these first on Windows (v0.6.2c).**
-1. **Loupe alignment.** Ctrl+Alt+G, pick a cell, then `+` to zoom to 10-12×
-   (where `Round(LW / z)` rounds hardest) and check that the magenta region
-   box and the nine letters sit exactly over the magnified pixels, not a few
-   px off toward the far corner. That is the `zr := LW / sw` fix.
-2. **N snap.** Hover a 14 px toolbar button in PowerScribe or IntelliSpace
-   and press N. It should snap to that control and name it. Before the vtable
-   fix it snapped to nonsense or refused.
-3. **Imaging reservation on a 3-head station.** Windows page → "This station"
-   should say which screens are imaging. Try the portrait + 4K case: the
-   portraits should be reserved, not "none".
-4. **Guard mode 2 after a restart.** Set an arrangement to "new windows",
-   exit RadMapper, start it again, then open PACS: it should land in place
-   without touching the Windows page. Then disarm and re-arm and open another
-   window — it should be placed again (the record is cleared on arming).
-5. **Warp click with Ctrl+Alt still held.** Hold Ctrl+Alt, press G, keep both
-   held, type a cell and press Space. The click must land unmodified — no
-   Ctrl+click tool change in the viewer.
-6. Unplug a monitor while the grid is up: the overlay should close and the
-   "screens changed" HUD should appear even with auto-apply off.
-7. A window arrangement with a maximised PowerScribe: applying it must not
-   un-minimise a minimised PS window or move a signing prompt.
+**v0.6.2c — stations + keyboard pointer (review pass 3).** Station-aware
+window arrangements (identity from monitor sizes in left-to-right order,
+imaging screens ranked against the MEDIAN screen), per-monitor-v2 DPI
+awareness set before the config is read, the UIA vtable fix (42, not 43),
+loupe alignment at the TRUE ratio, and `Warp.ClearMods` so a warp click does
+not inherit the Ctrl+Alt that opened the overlay.
 
-**Next.** Run on Windows; if the grid layer is slow on a 4K screen, drop
-in-cell labels for edge headers; consider a numpad-only key set for the
-fine stage; per-station names (`stations[i].name`) have no UI yet.
+**v0.6.3 — keyboard setup, mouse outputs, click lock.** The whole settings
+window from the keyboard (`Lumi.Focus`: every widget registers itself as it
+is built; the ring is not drawn until Tab), mouse buttons as OUTPUTS in the
+wizard, and click lock made configurable from the UI.
 
-**Key files.** `radmapper/RadMapper.ahk` (§7c ~line 6050, §14e ~line 18590,
-Atlas Windows page `PanelWindows` ~line 15720),
-`radmapper/tests/regression.ahk`, `radmapper/README.md`.
+**v0.6.4 — Kando radial menus.** Wedges instead of nearest-centre selection,
+marking mode (a corner or a pause opens a door without stopping), child
+rings spaced 360/(n+1) around the way back, a hub that says what is armed,
+and the movement/wedge switches on the Menus page.
+
+**v0.6.4a — this pass.** A load-blocking member collision in `class Warp`;
+the wedge tolerance rolled back to full sectors everywhere except a
+non-numbered child ring; orphaned wheel layers made impossible; a click now
+cancels a practice wheel; the focus keys and the keyboard pointer stop
+fighting over Tab/Space/Enter/arrows; keyboard focus survives a wizard
+answer; arrow-stepping the action dropdown reopens the wizard once instead
+of five times; `Atlas.IsFront` made cheap; the radial safety floors measure
+the whole menu rather than the current ring; a corner inside the hub opens
+nothing; docs rewritten.
+
+## Decisions, and why
+
+- **Skill rules honoured throughout.** PowerScribe is matched by EXE only
+  (its `ahk_class` carries a per-launch GUID, its title carries the
+  patient); PACS by `ahk_exe IntelliSpacePACSRadiology.exe`, which catches
+  worklist and viewer together; `PSFire` checks `PSActive()` first and never
+  calls `WinRestore`; every hold path releases in a `finally`; MButton is
+  never held synthetically; `^!q` is the panic release.
+- **Wedge policy (v0.6.4a).** Root ring = FULL sectors. Child ring = half
+  the gap, the rest is `back`. Numbered (9-way preset) ring = FULL sectors
+  at any depth, with a zero-span `back` marker so the parent node and its
+  connector still draw. Rationale: dead space is only worth having where a
+  bearing landing in it MEANS something, and the only ring where it does is
+  a child ring. At the root a leftover bearing would fire nothing and read
+  as a dropped button press. A bearing exactly on a shared edge goes to the
+  lower-numbered slice, because a boundary has to belong to somebody.
+- **Practice cancels on a click.** The old trial exemption made a practice
+  wheel the one window in RadMapper you had to wait out. Cancelling is part
+  of the gesture, so it is a thing to practise. A cancelled trial returns to
+  the settings window through `RadialClose`'s existing trial branch.
+- **The focus ring appears only after Tab.** A person who never touches the
+  keyboard sees exactly the interface they saw before. A dialog is the one
+  exception: it opens focused on its first control. The wizard's reopen now
+  carries `armed` as well as the index, so a mouse-driven wizard still shows
+  no ring.
+- **F13-F24 are not relevant here.** They matter in the older
+  `radiology_hotkeys` script, where PowerScribe's prev/next-field keys were
+  bound to F13/F14. RadMapper binds nothing to them by default; they are
+  just ordinary key names in the input tables.
+
+## Verified by reading / by portable checks
+
+Everything below was actually run in this environment:
+
+- `python3 radmapper/tests/check_source.py` — PASS. It now runs the
+  case-insensitive member-collision check over EVERY top-level class the
+  script declares (found by brace depth, with comments and string literals
+  stripped first), not just `Lumi` and `Atlas`. Confirmed it FAILS on the
+  pre-fix source (a copy with the collision reintroduced) and passes on the
+  current one.
+- `node radmapper/tests/mockup.cjs` — PASS.
+- Brace/paren/bracket balance of every edited function, and of the two test
+  files, computed with the same stripper.
+- `git diff --check` — clean. No v1 syntax in any added line.
+- The new wedge assertions were simulated in Python against a line-for-line
+  port of `RadialWedges` / `RadialAngleIn` / `RadialPickIn` before being
+  written into `tests/regression.ahk`, including both 360-bearing sweeps.
+
+## NOT verified — needs Windows
+
+Anything that needs a window, a hook, a monitor, GDI+, an InputHook, UIA or
+DWM is unproven. That is: every layer and every repaint, the radial overlay
+and its click-through/pass-thru registration, `Critical` interaction with
+GpGFX's message pumping, the keyboard pointer's InputHook and its loupe
+capture, `SetWindowDisplayAffinity`, UIA `ElementFromPoint`, station
+detection and window placement, the focus ring's hit rectangles, MsgBox
+ownership, and the timing of every debounce. `tests/regression.ahk` itself
+has never been executed — it needs `AutoHotkey64.exe`.
+
+## Windows test list, in priority order
+
+1. **Does it load at all.** Double-click `RadMapper.ahk`. v0.6.4 did not:
+   `class Warp` had `static grab` beside `static Grab()`. If a
+   duplicate-declaration error appears, read the class name in it and look
+   for the same shape elsewhere.
+2. `AutoHotkey64.exe /ErrorStdOut tests\regression.ahk` — expect one PASS
+   line, no FAIL.
+3. **Keyboard pointer, end to end.** Ctrl+Alt+G → grid → a cell → refine
+   with Q W E / A S D / Z X C → check the loupe's overlays sit exactly over
+   the magnified pixels → N to snap to a small toolbar control → G to drag.
+4. **The wheel under the hand.** Thumb button → hold → flick to
+   **Windowing** → turn a corner toward a number → release. Twenty times,
+   counting misfires: a wrong preset, a ring that opened on the wrong door,
+   a release that sent nothing.
+5. **Practice, then a real study.** Menus page → Practice safely → flick
+   around, then **click**: the wheel must vanish, send nothing, and hand
+   the settings window back. Then open a real study and confirm a click
+   cancels a live menu there too without reaching the image.
+6. **Ctrl+Alt+G with the settings window focused**, then press Space. The
+   pointer must refuse to open ("Close the settings window first") and
+   Space must press whatever the focus ring is on — one key doing one job.
+7. **Tab through the wizard end to end.** Set a button → Tab to a tile →
+   Space → the ring must be where it was, not back at control 1. Then step
+   the action dropdown with Left/Right through several actions in one run:
+   the dialog must reopen ONCE, when the arrows stop.
+8. **Ctrl+Alt+Q as a child ring opens.** Panic during a gesture, repeatedly,
+   looking for a stuck wheel: a click-through overlay left on top of the
+   study with no timer behind it. `g_RadialLayers` is the net under this.
+
+Still open from 0.6.2c:
+
+9. `SetWindowDisplayAffinity` on a layered window — if it refuses, the loupe
+   falls back to hiding the intersecting overlays for the BitBlt. Cannot be
+   proved without a machine that refuses.
+10. **Imaging reservation on a 3-head station.** Windows page → "This
+    station" on a portrait + 4K desk: the portraits should be reserved, not
+    "none".
+11. **Guard mode 2 after a restart.** Arm "place new windows", exit, start
+    again, open PACS: it should land in place untouched. Disarm and re-arm,
+    open another window: it should be placed again.
+
+## Key files and where to look
+
+- `radmapper/RadMapper.ahk` — the whole program. Navigate by the `§`
+  banners, and inside them by function name:
+  - §1 constants and globals: `g_Radial`, `g_RadialLayers`.
+  - §5 engine: `OnPressHK` (holds the radial click-cancel gate),
+    `OnReleaseHK`.
+  - §7c window layouts: `StationMons`, `StationKey`, `ImagingMons`,
+    `LayoutSlotTarget`, `MigrateLayoutSlots`.
+  - §7d radial menus: `RadialSliceAngles`, `RadialWedges`, `RadialPickIn`,
+    `RadialCornerAt`, `RadialRing`, `RadialOpen`, `RadialTick`,
+    `RadialEnter`, `RadialBack`, `RadialSweepLayers`, `RadialClose`,
+    `RadialPaint`, `RadialCancelActive` / `RadialCancelHit` /
+    `RadialBindCancel`.
+  - §10b safety: `PanicRelease`; §12 lifecycle: `Cleanup`, `Init`.
+  - §13 `class Lumi`: `Lumi.Focus` (`Reset`, `Restore`, `Add`, `Move`,
+    `Do`, `Paint`), `Lumi.Select`, `Lumi.SelectNudge`, `Lumi.nudging`.
+  - §14 `class Atlas`: `BindEscape`, `DoFocusKey`, `IsFront`, `Help` /
+    `HelpBox`, `Confirm`, `StartTick` / `StopTick`, `WizardDlg`,
+    `WizRefocus`, `WizDraft`, `DoWizPick`, `DoWizAct`, `DoWizActPicked`,
+    `WizReopenDue` / `WizReopenNow` / `WizReopenCancel`, `DoWizRecKey`,
+    `CloseDlg`, `RebuildAfterDlg`, `PanelWindows`.
+  - §14e `class Warp`: `Open`, `Close`, `Grab`, `Sub`, and the renamed
+    members `grabbing` and `NINTH`.
+- `radmapper/tests/check_source.py` — structural checks; `strip_ahk` is the
+  comment/string stripper the collision and balance checks share.
+- `radmapper/tests/regression.ahk` — pure-function tests; the wedge block is
+  near the top, the `Warp.grabbing` / `Warp.NINTH` existence check is at the
+  bottom next to the PASS line.
+- `radmapper/tests/mockup.cjs`, `radmapper/mockup/` — the HTML menu mockup.
+- `radmapper/README.md`, `radmapper/DESIGN.md`, `radmapper/SECOND-PASS.md`.
+
+**Next.** Get it in front of AutoHotkey on the workstation and work the list
+above from the top. Nothing else in this repo should change until item 1
+passes.
