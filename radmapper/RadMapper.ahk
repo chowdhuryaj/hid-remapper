@@ -20,6 +20,73 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.6.2c (review pass 3, stations + keyboard pointer) -- everything here
+;  is a fix to v0.6.2 code that has still never run on Windows:
+;    * UIA SNAP WAS READING THE WRONG VTABLE SLOT. 43 is get_CurrentLabeledBy,
+;      not get_CurrentBoundingRectangle (42) -- N snapped to a rectangle made
+;      of the low and high halves of a leaked element pointer. The name BSTR
+;      is freed in a `finally`, and a failed call now drops the cached
+;      IUIAutomation so the next press rebuilds it instead of failing for the
+;      rest of the session.
+;    * THE LOUPE IS ALIGNED WITH ITS OWN PICTURE. The magnified bitmap is
+;      scaled to the box by the kit ("w320 h320") rather than nudged there
+;      with four bmp* offsets, and every overlay inside it (region box,
+;      thirds, letters, crosshair) is drawn at the TRUE ratio LW / sw, not at
+;      the requested zoom -- which differ, because sw is rounded.
+;    * PER-MONITOR-V2 DPI AWARENESS IS SET AT STARTUP, before the config is
+;      read. MigrateLayoutSlots derives every legacy slot's fractions from the
+;      monitor work areas and the first StationKey() stamps a station
+;      identity; on a mixed-scaling desk both were reading virtualised pixels.
+;    * A LAYOUT IS ONLY STAMPED WITH THIS STATION IF IT PLAUSIBLY BELONGS TO
+;      IT -- every slot centre on a real monitor -- and an IMPORTED config is
+;      never stamped at all. A wrong stamp means "apply pixel for pixel",
+;      which is the one thing a foreign layout must not do.
+;    * WINDOWS THAT ARE NOT ARRANGEMENT MEMBERS ARE LEFT ALONE: owned windows
+;      (dialogs, PowerScribe's signing prompts) and windows with no
+;      WS_THICKFRAME. Each slot remembers its window CLASS, and the two loose
+;      match steps stay within it, so the IntelliSpace worklist and viewer
+;      stop swapping places. A minimised or owned PowerScribe window is never
+;      restored or moved from the guard tick (skill §2's standing rule).
+;    * WARP CLICKS NO LONGER INHERIT CTRL+ALT. The pointer is reached by a
+;      modifier chord and the InputHook leaves modifiers visible, so Space
+;      was sending Ctrl+click into the study. Every click, grab and wheel
+;      puts the modifiers up first (Warp.ClearMods). The wheel is POSTED to
+;      the window under the crosshair rather than sent to the focused one.
+;    * THE GUARD IS RE-ARMED AFTER A RESTART: the flag lives on the layout,
+;      but nothing read it back at startup, so "always" was a label with no
+;      timer behind it until the layout was applied by hand.
+;    * "Place NEW windows" keeps its record PER LAYOUT, writes it only on the
+;      mode-2 path, forgets it when the guard is armed or disarmed, and
+;      prunes dead hwnds every tick (Windows recycles handles).
+;    * IMAGING SCREENS: the pixel rule is ranked against the MEDIAN screen,
+;      not the smallest, and when every screen would be reserved the rule
+;      narrows to the portrait screens, or to the largest one, instead of
+;      giving up and reserving none.
+;    * THE WINDOWS PAGE FITS AT 940 px. The three window hotkeys use the
+;      stacked row form in three 220 px columns; the arithmetic is in a
+;      comment and check_source.py asserts it. "Saved on" names the station
+;      instead of counting its screens, and the Keep button says which state
+;      the selected arrangement is IN, with the next one underneath.
+;    * STATION WATCH INTERLOCKS: the settle pass refuses while a mouse button
+;      is physically down, while our own resize grip, the keyboard pointer, a
+;      radial menu, the app switcher or the calibrator is live, and while any
+;      monitor still reports zero area. WM_DISPLAYCHANGE closes the keyboard
+;      pointer. "Screens changed" is announced even when auto-apply is off.
+;    * ValidateCfg validates LAYOUTS AND STATIONS too (guard to 0/1/2, rects
+;      to Integer, fractions to Float or the slot goes, keyless stations
+;      dropped) -- they are read from timer threads, where a thrown error is
+;      a feature that stops working with nothing on screen to say so.
+;    * Captured fractions are clamped to their own screen (an invisible
+;      resize border used to give fx = -0.004), and the fw/fh floor is 0.005
+;      instead of 0.1 -- a tenth of a 4K screen is 384 px, which was
+;      inflating every narrow tool window on every adapt.
+;    * Smaller: WinMaximizeOn sizes the window to fit before maximising;
+;      tiling compensates the DWM invisible border; the no-affinity loupe
+;      fallback hides only the layers that intersect the capture (the HUD
+;      included) and the affinity probe is answered once, not per open;
+;      Warp refuses to open over a menu, the switcher or the calibrator;
+;      StationKey is computed once per apply, not once per slot.
+;
 ;  v0.6.2b (review pass 2, settings UI) -- wording, honesty and reach:
 ;    * ONE VOCABULARY for the buttons: "Button 4 (thumb, back)", "Button 5
 ;      (thumb, forward)", "Button 3 (wheel click)" everywhere, and the mouse
@@ -791,6 +858,20 @@ SetMouseDelay -1            ; SendInput's temporary hook removal
 CoordMode "Mouse", "Screen"
 CoordMode "ToolTip", "Screen"
 SetTitleMatchMode 2
+
+; PER-MONITOR-V2 DPI AWARENESS, BEFORE ANYTHING READS A MONITOR RECTANGLE.
+; Without it Windows virtualises MonitorGet/WinGetPos for a process it thinks
+; is DPI-unaware, and on the mixed-scaling stations this script exists for (a
+; 3 MP greyscale at 100% beside a 4K at 150%) the numbers come back scaled --
+; different numbers for the same physical screens. That matters here before
+; the GUI is ever drawn: MigrateLayoutSlots derives every legacy slot's
+; fractions from the monitor work areas during LoadCfg, and the FIRST
+; StationKey() stamps a station identity ("1920x1080|2048x1536|...") that
+; every later recognition is compared against. Both must see PHYSICAL pixels,
+; or a layout is stamped with one station on a scaled read and never matches
+; again. Layer.RegisterClass sets it too (GpGFX needs it for its own window
+; class); this call is idempotent and simply gets there first.
+try DllCall("user32\SetProcessDpiAwarenessContext", "ptr", -4, "int")
 
 ; High-res trackballs fire wheel hotkeys faster than AHK's default rate limit.
 A_MaxHotkeysPerInterval := 2000
@@ -2514,7 +2595,12 @@ RestoreNewestBackup(why) {
 
 ; Shared load/import funnel: backfill keys added since the file was written,
 ; then validate rows and run migrations. Operates on g_Cfg in place.
-NormalizeCfg() {
+/**
+ * imported = this config came from another machine's file. Its layouts were
+ * captured on THAT station, so MigrateLayoutSlots must not stamp them with
+ * this one.
+ */
+NormalizeCfg(imported := false) {
     c := g_Cfg
     ValidateCfgShape(c)
     if !c.Has("settings")
@@ -2539,7 +2625,7 @@ NormalizeCfg() {
         c["layers"] := ["Base"]
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
-    MigrateLayoutSlots()                     ; v0.6.2: layouts learn their screen
+    MigrateLayoutSlots(!imported)            ; v0.6.2: layouts learn their screen
     SeedNativeDefaults(c)                  ; unified button-path layer.
 }
 
@@ -2605,6 +2691,86 @@ ValidateCfg() {
             kept.Push(menu)
         }
         g_Cfg["menus"] := kept
+    }
+    ValidateLayouts()
+}
+
+/**
+ * Layouts and stations, coerced to shape (v0.6.2c).
+ *
+ * These are read from TIMER THREADS -- the guard tick and the station watch
+ * -- where an exception is not a message box, it is a thread that dies
+ * silently and a feature that has stopped working with nothing on screen to
+ * say so. A hand-edited (or hand-merged, or half-written) config must
+ * therefore cost the bad field, never the tick. Numbers are the whole risk:
+ * JSON gives back a String for "40" and LayoutSlotTarget does arithmetic on
+ * fx/fw without asking.
+ */
+ValidateLayouts() {
+    ; String() on a Map throws (no ToString), and so does comparing one with
+    ; `=`. Everything below a hand edit can reach goes through this.
+    flat(v) => IsObject(v) ? "" : String(v)
+    if (g_Cfg.Has("layouts") && g_Cfg["layouts"] is Array) {
+        kept := []
+        for lay in g_Cfg["layouts"] {
+            if !(lay is Map)
+                continue
+            lay["name"] := flat(MGet(lay, "name", ""))
+            g := flat(MGet(lay, "guard", 0))
+            lay["guard"] := (g = 1 || g = 2) ? Integer(g) : 0
+            lay["station"] := flat(MGet(lay, "station", ""))
+            if (!lay.Has("slots") || !(lay["slots"] is Array))
+                lay["slots"] := []
+            slots := []
+            for s in lay["slots"] {
+                if !(s is Map)
+                    continue
+                s["exe"] := flat(MGet(s, "exe", ""))
+                s["title"] := flat(MGet(s, "title", ""))
+                s["cls"] := flat(MGet(s, "cls", ""))
+                s["state"] := (flat(MGet(s, "state", "normal")) = "max")
+                    ? "max" : "normal"
+                for k in ["mon", "x", "y", "w", "h", "ord"] {
+                    if s.Has(k)
+                        s[k] := IsNumber(s[k]) ? Integer(s[k]) : 0
+                }
+                ; A slot with a non-numeric fraction cannot be adapted, and
+                ; half a fraction set is worse than none -- the missing one
+                ; defaults while the others do not, which places the window
+                ; somewhere nobody chose. Drop the whole slot.
+                bad := false
+                for k in ["fx", "fy", "fw", "fh"] {
+                    if !s.Has(k)
+                        continue
+                    if !IsNumber(s[k]) {
+                        bad := true
+                        break
+                    }
+                    s[k] := Float(s[k])
+                }
+                if bad
+                    continue
+                slots.Push(s)
+            }
+            lay["slots"] := slots
+            kept.Push(lay)
+        }
+        g_Cfg["layouts"] := kept
+    }
+    if (g_Cfg.Has("stations") && g_Cfg["stations"] is Array) {
+        kept := []
+        for st in g_Cfg["stations"] {
+            ; A station with no key is unreachable: StationEntry finds one by
+            ; key and nothing else.
+            if (!(st is Map) || flat(MGet(st, "key", "")) = "")
+                continue
+            st["key"] := flat(st["key"])
+            st["name"] := flat(MGet(st, "name", ""))
+            st["imaging"] := flat(MGet(st, "imaging", ""))
+            st["layout"] := flat(MGet(st, "layout", ""))
+            kept.Push(st)
+        }
+        g_Cfg["stations"] := kept
     }
 }
 
@@ -2725,7 +2891,7 @@ CfgImport() {
     wasDirty := g_CfgDirty
     try {
         g_Cfg := incoming
-        NormalizeCfg()
+        NormalizeCfg(true)                   ; imported: never stamp this station
     } catch as e {
         g_Cfg := previous
         MsgBox("Import failed: " e.Message "`nYour current settings are unchanged.",
@@ -6008,9 +6174,10 @@ AppSwitchPaint() {
 ;   * Imaging screens are RESERVED while adapting: a window that is not the
 ;     viewer is never placed on one while an unreserved screen exists, and
 ;     the viewer prefers one. "auto" reserves portrait screens and screens
-;     with markedly more pixels than the smallest one; a station can say
-;     "none", or list them ("2,3"); nothing is ever reserved when that would
-;     reserve every screen.
+;     with markedly more pixels than the MEDIAN one; a station can say
+;     "none", or list them ("2,3"); when the rule would reserve every screen
+;     it narrows to the portrait screens, or to the largest screen, rather
+;     than leaving the worklist the whole desk.
 ;
 ; SHAPE (config key "layouts", an array):
 ;     Map("name",    "Reading",
@@ -6045,7 +6212,12 @@ AppSwitchPaint() {
 
 global g_LayoutGuard := ""        ; name of the armed layout, "" = none
 global g_LayoutSnaps := 0         ; windows snapped back this session
-global g_LayoutPlaced := Map()    ; hwnd -> 1: already placed by a mode-2 guard
+; layout name -> Map(hwnd -> 1): windows a mode-2 guard has already placed.
+; PER LAYOUT, because "has this window been placed?" is only meaningful about
+; a particular arrangement: with one flat set, switching the guard from
+; "Reading" to "Worklist" found every window already marked and placed
+; nothing at all until a restart.
+global g_LayoutPlaced := Map()
 global g_StationKey := ""         ; monitor set the engine last saw
 global g_StationSeen := Map()     ; station keys announced this session
 global g_StationStartup := true   ; first StationSettled pass is the launch pass
@@ -6082,6 +6254,15 @@ StationMons() {
     loop MonitorGetCount() {
         MonitorGet(A_Index, &l, &t, &r, &b)
         MonitorGetWorkArea(A_Index, &wl, &wt, &wr, &wb)
+        ; A MONITOR WITH NO AREA IS A MONITOR MID-HANDSHAKE. Windows reports
+        ; a 0x0 display while a panel is waking, while a KVM is switching and
+        ; for a second or two after a dock -- and a 0x0 screen in the list
+        ; changes the station key ("|0x0"), divides by zero in the fraction
+        ; maths, and is a place a window could be "placed" and never seen
+        ; again. Drop it; the poll and WM_DISPLAYCHANGE bring us back when
+        ; the real numbers arrive.
+        if (r - l <= 0 || b - t <= 0)
+            continue
         arr.Push({i: A_Index, l: l, t: t, r: r, b: b,
                   wl: wl, wt: wt, wr: wr, wb: wb,
                   w: r - l, h: b - t,
@@ -6161,9 +6342,10 @@ StationEntry(key := "", create := false) {
  * rule: "auto" | "none" | "2" | "2,3". Pure: takes the monitor list.
  *
  *   auto  = portrait screens, and screens with at least 35% more pixels than
- *           the smallest one. The 3 MP and 5 MP greyscale displays a reading
+ *           the MEDIAN screen. The 3 MP and 5 MP greyscale displays a reading
  *           room uses are both; a colour worklist screen next to them is
- *           neither. If the rule would reserve EVERY screen it reserves none:
+ *           neither. If the rule would reserve EVERY screen it narrows --
+ *           to the portrait screens, else to the largest one -- because
  *           there has to be somewhere for the worklist to go.
  */
 ImagingMons(mons, rule := "auto") {
@@ -6175,15 +6357,45 @@ ImagingMons(mons, rule := "auto") {
     if (rule = "none")
         return out
     if (rule = "" || rule = "auto") {
-        minA := 0
+        ; THE PIXEL RULE IS RANKED AGAINST THE MEDIAN, NOT THE SMALLEST.
+        ; One outlier used to move the bar for everyone: a 1280x1024 legacy
+        ; screen in the corner dropped minA far enough that the two 1920x1080
+        ; colour screens beside it cleared 1.35x and were reserved as imaging
+        ; displays. The median is the typical screen at this station, which
+        ; is what "markedly more pixels than the others" actually means.
+        areas := []
+        for m in mons
+            areas.Push(m.w * m.h)
+        medA := StationMedian(areas)
+        portrait := Map()
         for m in mons {
-            a := m.w * m.h
-            if (minA = 0 || a < minA)
-                minA := a
-        }
-        for m in mons {
-            if (m.h > m.w || (minA > 0 && m.w * m.h >= minA * 1.35))
+            if (m.h > m.w)
+                portrait[m.idx] := 1
+            if (m.h > m.w || (medA > 0 && m.w * m.h >= medA * 1.35))
                 out[m.idx] := 1
+        }
+        ; NOTHING IS RESERVED WHEN EVERYTHING WOULD BE -- but "reserve none"
+        ; is the wrong answer at a station of three portrait diagnostics and
+        ; one 4K, where every screen clears a rule and the worklist then has
+        ; the whole desk to wander over. Narrow instead of giving up:
+        ;   1. the PORTRAIT screens alone, if that is a real subset
+        ;   2. failing that, the single largest screen (n >= 2), which is the
+        ;      diagnostic display at every station that has an obvious one
+        if (out.Count >= n) {
+            out := Map()
+            if (portrait.Count > 0 && portrait.Count < n) {
+                out := portrait
+            } else if (n >= 2) {
+                big := 1
+                bigA := 0
+                for m in mons {
+                    if (m.w * m.h > bigA) {
+                        bigA := m.w * m.h
+                        big := m.idx
+                    }
+                }
+                out[big] := 1
+            }
         }
     } else {
         for tok in StrSplit(rule, [",", " ", ";"]) {
@@ -6196,6 +6408,26 @@ ImagingMons(mons, rule := "auto") {
     if (out.Count >= n)
         out := Map()
     return out
+}
+
+/** Median of a list of numbers (insertion sort; the lists here are 1-4 long). */
+StationMedian(vals) {
+    a := vals.Clone()
+    i := 2
+    while (i <= a.Length) {
+        key := a[i]
+        j := i - 1
+        while (j >= 1 && a[j] > key) {
+            a[j + 1] := a[j]
+            j -= 1
+        }
+        a[j + 1] := key
+        i += 1
+    }
+    n := a.Length
+    if (n = 0)
+        return 0
+    return Mod(n, 2) ? a[(n + 1) // 2] : (a[n // 2] + a[n // 2 + 1]) / 2
 }
 
 /** The imaging rule in force for a station: its own, else the global setting. */
@@ -6297,13 +6529,19 @@ SlotIsImaging(slot, exes := 0) {
  * over four -- and then the reservation is applied: a viewer slot moves to
  * the nearest reserved screen, anything else moves OFF a reserved screen.
  */
-LayoutMonFor(slot, lay, mons, reserved, imaging := -1) {
+LayoutMonFor(slot, lay, mons, reserved, imaging := -1, key := "") {
     n := mons.Length
     if (n < 1)
         return 1
+    ; `key` is the caller's already-computed StationKey(mons): LayoutApplyRows
+    ; asks this question once per SLOT, and rebuilding the same string from
+    ; the same monitor list every time is work for nothing. Blank = work it
+    ; out here, which keeps the direct callers (and the tests) unchanged.
+    if (key = "")
+        key := StationKey(mons)
     sm := Integer(MGet(slot, "mon", 1))
     sm := Min(Max(sm, 1), 99)
-    if (StationKey(mons) = MGet(lay, "station", ""))
+    if (key = MGet(lay, "station", ""))
         return Min(sm, n)
     capN := Max(StationCount(MGet(lay, "station", "")), sm, 1)
     tgt := Round((sm - 0.5) / capN * n + 0.5)
@@ -6342,11 +6580,13 @@ NearestMon(from, n, reserved, wantReserved) {
  * the fractions elsewhere; a pre-0.6.2 slot with no fractions is kept where
  * it was if that is still on some screen, else centred on its mapped screen.
  */
-LayoutSlotTarget(slot, lay, mons, reserved, exes := 0) {
+LayoutSlotTarget(slot, lay, mons, reserved, exes := 0, key := "") {
+    if (key = "")
+        key := StationKey(mons)
     mi := LayoutMonFor(slot, lay, mons, reserved,
-        IsObject(exes) ? SlotIsImaging(slot, exes) : -1)
+        IsObject(exes) ? SlotIsImaging(slot, exes) : -1, key)
     m := mons[mi]
-    same := (StationKey(mons) = MGet(lay, "station", ""))
+    same := (key = MGet(lay, "station", ""))
     sx := MGet(slot, "x", 0), sy := MGet(slot, "y", 0)
     sw := MGet(slot, "w", 0), sh := MGet(slot, "h", 0)
     if (same && slot.Has("x"))
@@ -6364,8 +6604,14 @@ LayoutSlotTarget(slot, lay, mons, reserved, exes := 0) {
         return {x: m.wl + (ww - w) // 2, y: m.wt + (wh - h) // 2,
                 w: w, h: h, mon: m, adapted: true}
     }
-    fw := Min(Max(MGet(slot, "fw", 1.0) + 0.0, 0.1), 1.0)
-    fh := Min(Max(MGet(slot, "fh", 1.0) + 0.0, 0.1), 1.0)
+    ; The floor is 0.005, not 0.1. A tenth of a 4K screen is 384 px, so a
+    ; deliberately narrow window -- a dictation bar, a palette, a 200 px tool
+    ; strip -- was silently inflated to a tenth of the screen every time the
+    ; arrangement was adapted. The absolute floors below (120 x 80 px) are
+    ; the real protection against a degenerate rectangle; this one only has
+    ; to keep the multiplication away from zero.
+    fw := Min(Max(MGet(slot, "fw", 1.0) + 0.0, 0.005), 1.0)
+    fh := Min(Max(MGet(slot, "fh", 1.0) + 0.0, 0.005), 1.0)
     w := Max(Round(fw * ww), 120)
     h := Max(Round(fh * wh), 80)
     x := m.wl + Round((MGet(slot, "fx", 0) + 0.0) * ww)
@@ -6383,10 +6629,25 @@ SlotSetRelative(s, mons, x, y, w, h) {
     ww := Max(m.wr - m.wl, 1)
     wh := Max(m.wb - m.wt, 1)
     s["mon"] := mi
-    s["fx"] := Round((x - m.wl) / ww, 4)
-    s["fy"] := Round((y - m.wt) / wh, 4)
-    s["fw"] := Round(w / ww, 4)
-    s["fh"] := Round(h / wh, 4)
+    ; CLAMP TO THE CHOSEN SCREEN BEFORE DIVIDING. The monitor is picked by
+    ; the window's CENTRE, so a window can legitimately overhang it: a
+    ; maximised window's rect includes the invisible resize border and
+    ; starts a few pixels left of and above the monitor, and a window
+    ; straddling two screens has most of itself on one of them. Undivided,
+    ; that gave fx = -0.004 and fw = 1.9 -- fractions that mean "start off
+    ; the left edge and be twice as wide as the screen", and they were then
+    ; re-applied literally at the next station. The overflow is deliberately
+    ; DISCARDED rather than spilled onto the neighbour: a slot describes a
+    ; place on one screen, and the absolute x/y/w/h alongside it still carry
+    ; the exact original rectangle for the station it was captured on.
+    x2 := Min(Max(x, m.wl), m.wr)
+    y2 := Min(Max(y, m.wt), m.wb)
+    w2 := Max(Min(x + w, m.wr) - x2, 1)
+    h2 := Max(Min(y + h, m.wb) - y2, 1)
+    s["fx"] := Round((x2 - m.wl) / ww, 4)
+    s["fy"] := Round((y2 - m.wt) / wh, 4)
+    s["fw"] := Round(w2 / ww, 4)
+    s["fh"] := Round(h2 / wh, 4)
 }
 
 /**
@@ -6396,7 +6657,7 @@ SlotSetRelative(s, mons, x, y, w, h) {
  * on load, and the layout is stamped with it. Nothing about how they apply
  * here changes; they merely become portable.
  */
-MigrateLayoutSlots() {
+MigrateLayoutSlots(stamp := true) {
     mons := 0
     for lay in MGet(g_Cfg, "layouts", []) {
         if !(lay is Map)
@@ -6410,12 +6671,46 @@ MigrateLayoutSlots() {
             if (mons.Length = 0)
                 return
         }
+        ; STAMPING IS A CLAIM, and a wrong one is worse than none: a layout
+        ; stamped with this station is applied PIXEL FOR PIXEL here, skipping
+        ; the adapt path entirely. It is only true that the layout was
+        ; captured here if the windows it describes still fall on screens
+        ; this station has. If any slot's centre is off every monitor, the
+        ; rectangles came from somewhere else (a copied config, a station
+        ; that has since lost a display) -- leave "station" blank so the
+        ; layout is treated as foreign and ADAPTED, which is the safe answer.
+        onHere := true
+        for s in MGet(lay, "slots", []) {
+            if !(s is Map)
+                continue
+            if !s.Has("x") {
+                onHere := false
+                break
+            }
+            cx := MGet(s, "x", 0) + MGet(s, "w", 0) // 2
+            cy := MGet(s, "y", 0) + MGet(s, "h", 0) // 2
+            inside := false
+            for m in mons {
+                if (cx >= m.l && cx < m.r && cy >= m.t && cy < m.b) {
+                    inside := true
+                    break
+                }
+            }
+            if !inside {
+                onHere := false
+                break
+            }
+        }
         for s in MGet(lay, "slots", []) {
             if (!(s is Map) || s.Has("fx") || !s.Has("x"))
                 continue
             try SlotSetRelative(s, mons, s["x"], s["y"], s["w"], s["h"])
         }
-        lay["station"] := StationKey(mons)
+        ; An IMPORTED config was captured on the exporting machine by
+        ; definition, so its blank stations are never this one's: CfgImport
+        ; passes stamp := false and the fractions alone do the work.
+        if (stamp && onHere)
+            lay["station"] := StationKey(mons)
         g := MGet(lay, "guard", 0)
         lay["guard"] := (g = 1 || g = 2) ? g : 0
     }
@@ -6445,6 +6740,21 @@ LayoutWindows() {
                 continue
             if (WinGetExStyle("ahk_id " hwnd) & 0x00000080)   ; WS_EX_TOOLWINDOW
                 continue
+            ; OWNED WINDOWS ARE DIALOGS, not arrangement members: "Save as",
+            ; "Sign report?", PowerScribe's modal prompts. Moving one is
+            ; noticeable and useless (it is gone in two seconds), and worse,
+            ; it takes a slot's claim away from the real window behind it, so
+            ; the arrangement silently stopped placing the editor whenever a
+            ; prompt happened to be up. GW_OWNER = 4.
+            owner := 0
+            try owner := DllCall("user32\GetWindow", "ptr", hwnd, "uint", 4, "ptr")
+            if owner
+                continue
+            ; No thick frame = not resizable = nothing a layout can size.
+            ; Splash screens, fixed-size dialogs, some Electron pop-ups.
+            ; WS_THICKFRAME = 0x40000.
+            if !(WinGetStyle("ahk_id " hwnd) & 0x00040000)
+                continue
             cloaked := 0
             try DllCall("dwmapi\DwmGetWindowAttribute", "ptr", hwnd,
                 "int", 14, "int*", &cloaked, "int", 4)
@@ -6452,7 +6762,8 @@ LayoutWindows() {
                 continue
             exe := WinGetProcessName("ahk_id " hwnd)
             seen[exe] := MGet(seen, exe, 0) + 1
-            out.Push({hwnd: hwnd, exe: exe, title: title, ord: seen[exe]})
+            out.Push({hwnd: hwnd, exe: exe, title: title, cls: cls,
+                      ord: seen[exe]})
         }
     }
     return out
@@ -6475,6 +6786,15 @@ LayoutCapture(name) {
             s["exe"] := wnd.exe
             s["title"] := wnd.title
             s["ord"] := wnd.ord
+            ; The WINDOW CLASS narrows the loose match steps. PowerScribe's
+            ; class carries a per-run GUID and is useless for IDENTIFYING it
+            ; (see the skill's §1 rule: match PS by exe, never by class) --
+            ; but it is perfectly good for telling two windows of the SAME
+            ; process apart, which is the only thing it is used for below.
+            ; IntelliSpace runs the worklist and the viewer under one exe
+            ; with different classes, and that is exactly the pair steps 3
+            ; and 4 used to swap.
+            s["cls"] := wnd.cls
             s["state"] := (mm = 1) ? "max" : "normal"
             ; A maximised window's rect is the monitor it is maximised ON, so
             ; storing it is what lets a "max" slot be restored to the RIGHT
@@ -6519,6 +6839,14 @@ LayoutMatch(slot, wins, claimed) {
     exe := MGet(slot, "exe", "")
     title := MGet(slot, "title", "")
     pref := SubStr(title, 1, 12)
+    ; Steps 1 and 2 are anchored by the title and need no further narrowing.
+    ; Steps 3 and 4 are guesses, and a guess inside a multi-window process
+    ; should at least land on the same KIND of window: a pre-0.6.2c slot has
+    ; no "cls" and behaves exactly as before. PowerScribe's GUID-bearing
+    ; class changes every launch, so a stored PS class simply never matches
+    ; and those slots fall through to the old exe-only behaviour -- which is
+    ; the right outcome, not a regression.
+    cls := MGet(slot, "cls", "")
     ; 1. exe + exact title
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe && wnd.title = title)
@@ -6532,15 +6860,17 @@ LayoutMatch(slot, wins, claimed) {
                 return wnd
         }
     }
-    ; 3. exe + ordinal
+    ; 3. exe + class + ordinal
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
+            && (cls = "" || wnd.cls = cls)
             && wnd.ord = MGet(slot, "ord", 0))
             return wnd
     }
-    ; 4. exe, anything left
+    ; 4. exe + class, anything left
     for wnd in wins {
-        if (!claimed.Has(wnd.hwnd) && wnd.exe = exe)
+        if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
+            && (cls = "" || wnd.cls = cls))
             return wnd
     }
     return 0
@@ -6551,7 +6881,20 @@ WinMaximizeOn(id, m) {
     mm := WinGetMinMax(id)
     if (mm != 0)
         WinRestore(id)
-    WinMove(m.wl + 20, m.wt + 20, , , id)
+    ; Windows maximises onto the monitor the window's GREATEST AREA is on,
+    ; not the one its top-left corner is on. Moving only the corner therefore
+    ; failed for a restored window wider or taller than the target screen --
+    ; a 2048x1536 PowerScribe restored onto a 1920x1080 secondary still had
+    ; most of itself on the neighbour, and WinMaximize sent it straight back.
+    ; Shrink it to fit first (20 px of margin each side), then maximise.
+    monW := Max(m.wr - m.wl, 1)
+    monH := Max(m.wb - m.wt, 1)
+    w := monW, h := monH
+    try {
+        WinGetPos(, , &cw, &ch, id)
+        w := cw, h := ch
+    }
+    WinMove(m.wl + 20, m.wt + 20, Min(w, monW - 40), Min(h, monH - 40), id)
     WinMaximize(id)
 }
 
@@ -6573,29 +6916,65 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
     mons := StationMons()
     if (mons.Length = 0)
         return 0
-    st := StationEntry(StationKey(mons))
+    ; One StationKey for the whole pass: it is the same string for every
+    ; slot, and building it per slot walked the monitor list N times over.
+    skey := StationKey(mons)
+    st := StationEntry(skey)
     reserved := ImagingMons(mons, StationImagingRule(st))
     exes := ImagingExes()
     claimed := Map()
+    ; The mode-2 record is keyed by layout name, so two arrangements never
+    ; share one "already placed" answer.
+    lname := MGet(lay, "name", "")
+    if !g_LayoutPlaced.Has(lname)
+        g_LayoutPlaced[lname] := Map()
+    placed := g_LayoutPlaced[lname]
     moved := 0
     for slot in MGet(lay, "slots", []) {
         wnd := LayoutMatch(slot, wins, claimed)
         if !IsObject(wnd)
             continue
         claimed[wnd.hwnd] := 1
-        if (newOnly && g_LayoutPlaced.Has(wnd.hwnd))
+        if (newOnly && placed.Has(wnd.hwnd))
             continue
         try {
             id := "ahk_id " wnd.hwnd
             mm := WinGetMinMax(id)
             if (enforce && mm = -1)
                 continue
-            tgt := LayoutSlotTarget(slot, lay, mons, reserved, exes)
+            ; POWERSCRIBE IS NEVER RESTORED OR MOVED FROM HERE WHEN IT IS
+            ; MINIMISED OR IS A DIALOG. The skill's standing rule ("do NOT
+            ; call WinRestore on PS -- it un-maximizes a full-screen PS
+            ; window") is about touching PS incidentally, and this loop is
+            ; incidental by definition: it runs off a timer, with no report
+            ; open in front of the user's eyes to say what it is about to do.
+            ; A minimised PS window is minimised on purpose (the reader is in
+            ; the worklist); un-minimising it mid-dictation puts the editor
+            ; over the images. An owned PS window is a signing or discard
+            ; prompt, and moving one out from under a click is worse than
+            ; leaving it where the app put it. LayoutWindows already filters
+            ; owned windows, so the owner check here is a second belt: the
+            ; window can acquire a dialog between enumeration and this line.
+            if IsPSExe(wnd.exe) {
+                if (mm = -1)
+                    continue
+                psOwner := 0
+                try psOwner := DllCall("user32\GetWindow", "ptr", wnd.hwnd,
+                    "uint", 4, "ptr")                      ; GW_OWNER
+                if psOwner
+                    continue
+            }
+            tgt := LayoutSlotTarget(slot, lay, mons, reserved, exes, skey)
             if tgt.adapted
                 g_LayoutAdapted := true
             want := MGet(slot, "state", "normal")
             sx := tgt.x, sy := tgt.y, sw := tgt.w, sh := tgt.h
-            g_LayoutPlaced[wnd.hwnd] := 1
+            ; Only mode 2 keeps a record, and only mode 2 reads one. Mode 1
+            ; snaps a window back as often as it drifts, so marking it placed
+            ; meant nothing; writing on the mode-1 path merely poisoned the
+            ; set for a later switch to mode 2.
+            if newOnly
+                placed[wnd.hwnd] := 1
             if (want = "max") {
                 ; Already maximised -- but on the RIGHT screen? A maximised
                 ; window that opened on the wrong display is the commonest
@@ -6690,11 +7069,18 @@ LayoutChoose() {
 LayoutGuardArm(name) {
     global g_LayoutGuard
     g_LayoutGuard := name
+    ; Arming is a fresh start: "new windows" means new SINCE YOU ARMED IT,
+    ; so a window placed during an earlier arming of the same layout is a
+    ; candidate again. Without this, disarming and re-arming mode 2 did
+    ; nothing at all until the windows were closed and reopened.
+    g_LayoutPlaced[name] := Map()
     SetTimer(LayoutGuardTick, Cfg("layoutGuardMs"))
 }
 
 LayoutGuardDisarm() {
     global g_LayoutGuard
+    if (g_LayoutGuard != "" && g_LayoutPlaced.Has(g_LayoutGuard))
+        g_LayoutPlaced.Delete(g_LayoutGuard)
     g_LayoutGuard := ""
     SetTimer(LayoutGuardTick, 0)
 }
@@ -6721,11 +7107,15 @@ LayoutGuardTick() {
         LayoutGuardDisarm()
         return
     }
-    ; the placed-set is by hwnd, and hwnds are recycled: forget dead ones
-    if (g_LayoutPlaced.Count > 64) {
-        for h in g_LayoutPlaced.Clone() {
+    ; The placed-set is by hwnd, and Windows RECYCLES hwnds: a closed window's
+    ; handle can come back as a brand-new window, which the guard would then
+    ; refuse to place because "it already did". Prune on every tick, not only
+    ; past 64 entries -- the old threshold meant a two-window arrangement
+    ; never pruned at all, and the recycle window is exactly that small.
+    if g_LayoutPlaced.Has(g_LayoutGuard) {
+        for h in g_LayoutPlaced[g_LayoutGuard].Clone() {
             if !WinExist("ahk_id " h)
-                g_LayoutPlaced.Delete(h)
+                g_LayoutPlaced[g_LayoutGuard].Delete(h)
         }
     }
     n := LayoutApplyRows(lay, true, mode = 2)
@@ -6748,6 +7138,22 @@ SyncLayoutGuard() {
             return
         }
         LayoutGuardDisarm()
+        return
+    }
+    ; NOTHING ARMED, BUT THE CONFIG SAYS IT SHOULD BE. The guard flag lives
+    ; on the layout precisely so it survives a restart -- but g_LayoutGuard
+    ; is in-memory only, so after a restart the flag was set, the Windows
+    ; page said "always", and nothing was actually watching until the layout
+    ; was applied by hand. Arm the first layout that asks for it (only one
+    ; can be armed; LayoutGuardSel already clears the others' flags).
+    for lay in MGet(g_Cfg, "layouts", []) {
+        if !(lay is Map)
+            continue
+        nm := MGet(lay, "name", "")
+        if (nm != "" && MGet(lay, "guard", 0)) {
+            LayoutGuardArm(nm)
+            return
+        }
     }
 }
 
@@ -6775,6 +7181,11 @@ StationWatchStop() {
 }
 
 OnDisplayChange(wParam, lParam, msg, hwnd) {
+    ; Every Warp layer is sized and positioned from a monitor rectangle that
+    ; has just stopped being true, and one of them may be holding the left
+    ; button down for a drag. Take it down here rather than leave a grid
+    ; drawn across a screen that no longer exists.
+    try Warp.Close(true)
     SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
 }
 
@@ -6793,13 +7204,67 @@ StationPoll() {
  */
 StationSettled() {
     global g_StationKey, g_StationStartup
+    ; A BOUNDED WAIT. Every interlock below re-arms the timer, and a couple
+    ; of them can be true indefinitely -- a genuinely stuck mouse button, a
+    ; phantom 0x0 display a driver never retires. After ~20 retries (a
+    ; minute at the default settle) the pass runs anyway with the monitors
+    ; it can see: deferring for ever is its own failure mode.
+    static waits := 0
+    ; INTERLOCKS. This pass moves several windows at once; doing that under
+    ; the user's hand is the one thing a window feature must never do. Every
+    ; condition below means "something is mid-gesture" -- a physical button
+    ; down (a drag, a PACS pan), our own resize grip, the keyboard pointer
+    ; (which may be holding LButton itself), a live radial menu or app
+    ; switcher, the timing calibrator. Re-arm and ask again in a moment
+    ; rather than dropping the pass: the station really has changed.
+    busy := (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
+    if (!busy && Atlas.resizing)
+        busy := true
+    if (!busy && Warp.active)
+        busy := true
+    if (!busy && (IsObject(g_Radial) || IsObject(g_AppSw)))
+        busy := true
+    if (!busy && IsSet(Calib) && Calib.IsOpen())
+        busy := true
+    mons := []
+    nMon := -1
+    try {
+        mons := StationMons()
+        nMon := MonitorGetCount()
+    }
+    ; A zero-area monitor is a display still coming up (StationMons drops it,
+    ; so a short list here means the set is still in motion). Wait it out.
+    if (!busy && (mons.Length = 0 || mons.Length != nMon))
+        busy := true
+    if (busy && waits < 20) {
+        waits += 1
+        SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+        return
+    }
+    waits := 0
+    if (mons.Length = 0)
+        return                               ; nothing to place windows on
     startup := g_StationStartup
     g_StationStartup := false
-    key := StationKey()
+    key := StationKey(mons)
     changed := (key != g_StationKey)
     g_StationKey := key
     if (!changed && !startup)
         return
+    ; The SCREENS CHANGED notice is not conditional on auto-apply. Auto-apply
+    ; decides whether windows are moved for you; it does not decide whether
+    ; you are told that the desk you are looking at is a different one, which
+    ; is the fact that explains why every window is suddenly in the wrong
+    ; place. Announced once per station per session, like the "no arrangement
+    ; assigned" line below.
+    if (changed && !Cfg("stationAuto") && !g_StationSeen.Has(key)) {
+        g_StationSeen[key] := 1
+        st0 := StationEntry(key)
+        nm0 := IsObject(st0) ? MGet(st0, "layout", "") : ""
+        HUD("Screens changed (" StationLabel(key) ") — "
+            . (nm0 != "" ? ("apply “" nm0 "” on the Windows page")
+                         : "auto-apply is off"), "warn")
+    }
     if !Cfg("stationAuto")
         return
     st := StationEntry(key)
@@ -6862,12 +7327,60 @@ WinPlaceParse(v) {
     return {screen: screen, tile: tile, err: ""}
 }
 
-/** The tile rectangle on a screen's work area. Pure. */
-WinTileRect(m, tile) {
+/**
+ * THE INVISIBLE BORDER. Since Vista a resizable window's WinGetPos rectangle
+ * is several pixels larger on the left, right and bottom than the frame you
+ * can see -- that margin is the drop shadow and the grab area, and it is not
+ * painted. Tile two windows side by side using those numbers and there is a
+ * visible ~14 px gutter between them and a strip of desktop down the screen
+ * edge, which is exactly the complaint "half screen doesn't actually fill
+ * half the screen". DWMWA_EXTENDED_FRAME_BOUNDS (9) reports the VISIBLE
+ * bounds; the difference is the slack. Measured once per placement (it is a
+ * cross-process DWM call), try-wrapped, and zero on anything that refuses --
+ * in which case the behaviour is exactly what it was before.
+ */
+WinFrameSlack(id) {
+    out := {l: 0, t: 0, r: 0, b: 0}
+    try {
+        hwnd := WinExist(id)
+        if !hwnd
+            return out
+        rc := Buffer(16, 0)
+        if (DllCall("dwmapi\DwmGetWindowAttribute", "ptr", hwnd, "int", 9,
+                    "ptr", rc, "int", 16) != 0)
+            return out
+        WinGetPos(&wx, &wy, &ww, &wh, id)
+        el := NumGet(rc, 0, "int"), et := NumGet(rc, 4, "int")
+        er := NumGet(rc, 8, "int"), eb := NumGet(rc, 12, "int")
+        if (er - el <= 0 || eb - et <= 0)
+            return out
+        ; Clamped: a cloaked or mid-animation window can report nonsense, and
+        ; a 200 px "border" would throw the window off the screen entirely.
+        out.l := Min(Max(el - wx, 0), 32)
+        out.t := Min(Max(et - wy, 0), 32)
+        out.r := Min(Max((wx + ww) - er, 0), 32)
+        out.b := Min(Max((wy + wh) - eb, 0), 32)
+    }
+    return out
+}
+
+/**
+ * The tile rectangle on a screen's work area. Pure.
+ *
+ * `slack` (from WinFrameSlack) grows the rectangle outwards by the invisible
+ * border, so the VISIBLE edges land on the work area. Omitted = no
+ * compensation, which is the old behaviour and what the tests assert.
+ */
+WinTileRect(m, tile, slack := 0) {
     ww := m.wr - m.wl
     wh := m.wb - m.wt
     hw := ww // 2
     hh := wh // 2
+    if IsObject(slack) {
+        r := WinTileRect(m, tile)
+        return {x: r.x - slack.l, y: r.y - slack.t,
+                w: r.w + slack.l + slack.r, h: r.h + slack.t + slack.b}
+    }
     switch tile {
         case "left":   return {x: m.wl, y: m.wt, w: hw, h: wh}
         case "right":  return {x: m.wl + hw, y: m.wt, w: ww - hw, h: wh}
@@ -6961,9 +7474,12 @@ WinPlace(v) {
             HUD("Window moved to screen " tgt, "cyan")
             return
         }
-        r := WinTileRect(m, tile)
         if (mm != 0)
             WinRestore(id)
+        ; AFTER the restore: a maximised window's frame slack is not the
+        ; restored window's, and the restore is what makes the measurement
+        ; true. One DWM call per placement.
+        r := WinTileRect(m, tile, WinFrameSlack(id))
         WinMove(r.x, r.y, r.w, r.h, id)
         HUD("Window: " tile " of screen " tgt, "cyan")
     } catch as e {
@@ -7672,6 +8188,23 @@ PSMatch() {
             return "ahk_exe " exe
     }
     return ""
+}
+
+/**
+ * Is this exe PowerScribe? The same list PSActive() and PSMatch() use, asked
+ * about a name rather than about the foreground -- for the window-layout
+ * code, which holds an hwnd and its exe and has to know before it touches
+ * it. BY EXE, never by class or title: PowerScribe's class carries a
+ * per-launch GUID and its title carries the patient.
+ */
+IsPSExe(exe) {
+    exe := StrLower(Trim(String(exe)))
+    if (exe = "")
+        return false
+    for e in MGet(g_Cfg, "psExes", [])
+        if (StrLower(Trim(String(e))) = exe)
+            return true
+    return false
 }
 
 PSFire(keys) {
@@ -10962,6 +11495,10 @@ Init() {
         ExitApp(0)
     ResolveCfgPaths()                        ; must precede any config I/O
     LoadCfg()
+    SyncLayoutGuard()                        ; a layout whose guard flag is
+                                             ; set was armed BEFORE the last
+                                             ; exit; arm it again now
+
     OnClipboardChange(ClipChanged)           ; feeds the clipboard shelf
     BuildMain()
     BuildTray()
@@ -15287,14 +15824,18 @@ class Atlas {
             cnt := MGet(lay, "slots", []).Length
             g := MGet(lay, "guard", 0)
             stKey := MGet(lay, "station", "")
+            ; "3 screens" named nothing: every station a reader uses has
+            ; three screens. The station LABEL (its sizes, left to right) is
+            ; the thing that tells two of them apart, elided to the column.
             rows.Push({cells: [nm, cnt " window" (cnt = 1 ? "" : "s"),
                 g = 1 ? "always" : (g = 2 ? "new windows" : "—"),
                 (g_LayoutGuard = nm && nm != "") ? "IN USE" : "",
                 stKey = here ? "this station"
-                    : (stKey = "" ? "?" : StationCount(stKey) " screens")]})
+                    : (stKey = "" ? "any station"
+                       : Lumi.Elide(StationLabel(stKey), 130, "mute"))]})
             Atlas.layoutRefs.Push(i)
         }
-        Atlas.list := Lumi.List(x, y + 96, w, h - 366, rows,
+        Atlas.list := Lumi.List(x, y + 96, w, h - 396, rows,
             [{w: 230}, {w: 100, kind: "mute"}, {w: 120, kind: "mono"},
              {w: 80, kind: "mono"}, {w: 130, kind: "mute"}],
             (i, dbl) => (dbl ? Atlas.LayoutApplySel() : 0), 30,
@@ -15307,7 +15848,20 @@ class Atlas {
         ; ── this station ────────────────────────────────────────────────
         ; The monitor set in front of the engine right now, which arrangement
         ; belongs on it, and which of its screens are imaging screens.
-        sy := y + h - 262
+        ; ── HORIZONTAL BUDGET, at the 940 px minimum window width ───────
+        ;   pw = 940 - NAVW(188) - SP["xl"](24) - SP["xl"](24) = 704
+        ; Every element below is placed at an offset from `x` and must end
+        ; at or before x + 704:
+        ;   hotkey row   x+460 + cw(220)          = 680  ✓
+        ;   pointer row  x+230 + para(w - 230)    = w    ✓  (w = pw)
+        ;   station row  x+534 + toggle(52 + label) ~ 666 ✓
+        ;   name row     x+540 + (w - 540)        = w    ✓
+        ;   button row   x + Min(w, 640)          = 640  ✓
+        ; The three window-hotkey rows used the WIDE form at a 300 px pitch
+        ; (x, x+300, x+600), and the last one's Rec button reached x+724 --
+        ; 20 px past the panel, clipped and unclickable at 940 px. They use
+        ; the stacked form now, three 220 px columns at a 230 px pitch.
+        sy := y + h - 286
         Lumi.Rule(x, sy - 6, w)
         st := StationEntry(here)
         reserved := Map()
@@ -15337,18 +15891,20 @@ class Atlas {
 
         ; ── shortcuts ───────────────────────────────────────────────────
         ky := ry + 42
-        ; Wider pitch and a taller row: every hotkey now has a Rec button
-        ; beside it and its value in words underneath.
-        Atlas.HkRow(x, ky, "Window → next screen", "hkWinNext", 150, 90)
-        Atlas.HkRow(x + 300, ky, "→ previous screen", "hkWinPrev", 128, 90)
-        Atlas.HkRow(x + 600, ky, "Fill screen", "hkWinMax", 80, 90)
-        ky2 := ky + 50
-        Atlas.HkRow(x, ky2, "Keyboard pointer", "hkWarp", 150, 90)
-        Lumi.Para(x + 300, ky2 + 2, w - 300, 30,
+        ; The STACKED HkRow form (cw = 220): name on its own line, field and
+        ; Rec under it, the value in words under that. Three of them fit
+        ; across 704 px at a 230 px pitch; the wide form did not (see the
+        ; budget above).
+        Atlas.HkRow(x, ky, "Window → next screen", "hkWinNext", 150, 90, "", 220)
+        Atlas.HkRow(x + 230, ky, "Window → previous screen", "hkWinPrev", 128, 90, "", 220)
+        Atlas.HkRow(x + 460, ky, "Fill the screen", "hkWinMax", 80, 90, "", 220)
+        ky2 := ky + 62
+        Atlas.HkRow(x, ky2, "Keyboard pointer", "hkWarp", 150, 90, "", 220)
+        Lumi.Para(x + 230, ky2 + 2, w - 230, 40,
             "A lettered grid over the screen: type a cell, refine with Q W E / "
             . "A S D / Z X C, Space clicks, G drags, N snaps to a control.", "mute")
 
-        by := y + h - 100
+        by := y + h - 92
         Lumi.Label(x, by, 90, "New name", "dim", "left", 30)
         Atlas.layoutName := Lumi.Field(x + 96, by, 250, 30, "", 0,
             "e.g. Reading", true)
@@ -15360,12 +15916,34 @@ class Atlas {
                    " window" (g_LayoutSnaps = 1 ? "" : "s") " put back so far")
                 : "Not keeping anything in place", "mute", "left", 30)
 
-        by2 := y + h - 52
-        b := Atlas.BtnRow(x, Min(w, 640), [0.2, 0.28, 0.28, 0.24])
+        by2 := y + h - 56
+        ; The Keep button carries the longest label ("Keep in place: new
+        ; windows", 26 characters), so it gets the widest share: at Lumi's
+        ; body size Elide fits 27 characters into 194 px, and 0.35 of the
+        ; 610 px of button (640 less three 10 px gaps) is 214 px.
+        b := Atlas.BtnRow(x, Min(w, 640), [0.17, 0.35, 0.26, 0.22])
         Lumi.Btn(b[1].x, by2, b[1].w, 34, "Use it",
             (*) => Atlas.LayoutApplySel(), "accent")
-        Lumi.Btn(b[2].x, by2, b[2].w, 34, "Keep in place: off / always / new",
+        ; THE KEEP BUTTON SAYS WHERE IT IS, NOT WHAT IT CAN BE. "Keep in
+        ; place: off / always / new" was a menu printed on a button: it never
+        ; told you which of the three the selected arrangement was actually
+        ; in, which is the one thing the list column beside it could not be
+        ; read for while the row was highlighted. The label is the CURRENT
+        ; state; the line underneath names what one click does next.
+        selLay := Atlas.LayoutSel()
+        keepG := IsObject(selLay) ? MGet(selLay, "guard", 0) : -1
+        keepNow := (keepG = 1) ? "always"
+                 : (keepG = 2) ? "new windows"
+                 : (keepG = 0) ? "off" : "—"
+        keepNext := (keepG = 0) ? "click for “always”"
+                  : (keepG = 1) ? "click for “new windows”"
+                  : (keepG = 2) ? "click to turn it off"
+                  : "pick an arrangement first"
+        Lumi.Btn(b[2].x, by2, b[2].w, 34,
+            Lumi.Elide("Keep in place: " keepNow, b[2].w - 20, "body"),
             (*) => Atlas.LayoutGuardSel(), "ghost")
+        Lumi.Label(b[2].x, by2 + 36, b[2].w + 40,
+            Lumi.Elide(keepNext, b[2].w + 40, "mute"), "mute", "left", 14)
         Lumi.Btn(b[3].x, by2, b[3].w, 34, "Save over it",
             (*) => Atlas.LayoutRecapture(), "ghost")
         Lumi.Btn(b[4].x, by2, b[4].w, 34, "Delete",
@@ -18367,11 +18945,17 @@ class Warp {
     static grab := false            ; left button held by us (dragging)
     static zoom := 4
     static loupeOn := true
-    static affinity := true         ; SetWindowDisplayAffinity accepted
+    ; SetWindowDisplayAffinity accepted. Whether this build of Windows and
+    ; this driver honour WDA_EXCLUDEFROMCAPTURE does not change between one
+    ; press of the hotkey and the next, so the answer is learned ONCE and
+    ; kept: resetting it to true in Open() meant every single Open paid a
+    ; failing DllCall per layer and then discovered the same "no" again.
+    static affinity := true
     static L := Map()               ; layers: grid, col, fine, loupe, legend
     static cx := 0
     static cy := 0
     static idleFn := 0
+    static redrawFn := 0            ; the post-scroll DrawFine BoundFunc
     static uia := 0
     static IDLE_MS := 45000
     static LOUPE := 320             ; magnified square, px
@@ -18449,6 +19033,23 @@ class Warp {
             HUD("Keyboard pointer needs the overlay kit (not in this build)", "warn")
             return
         }
+        ; A radial menu, the app switcher and the timing calibrator all own
+        ; the keyboard (or a held button) while they are up. Opening an
+        ; InputHook that swallows every key on top of one of them leaves the
+        ; menu unable to hear its own cancel key and the switcher unable to
+        ; hear its release -- and the user with two overlays and no way out
+        ; but Esc. Refuse instead; the menu is one keystroke from gone.
+        busy := ""
+        if IsObject(g_Radial)
+            busy := "menu"
+        else if IsObject(g_AppSw)
+            busy := "window switcher"
+        else if (IsSet(Calib) && Calib.IsOpen())
+            busy := "calibrator"
+        if (busy != "") {
+            HUD("Close the " busy " first", "warn")
+            return
+        }
         try {
             Warp.mons := StationMons()
             if (Warp.mons.Length = 0)
@@ -18457,7 +19058,6 @@ class Warp {
             Warp.loupeOn := Cfg("warpLoupe") ? true : false
             Warp.grab := false
             Warp.first := ""
-            Warp.affinity := true
             RM_GetPos(&x, &y)
             Warp.cx := x
             Warp.cy := y
@@ -18477,6 +19077,21 @@ class Warp {
         Warp.StopHook()
         if Warp.idleFn
             SetTimer(Warp.idleFn, 0)
+        if Warp.redrawFn
+            SetTimer(Warp.redrawFn, 0)       ; a pending post-scroll redraw
+        Warp.ReleaseUia()
+        ; Stale claims: OnReleaseHK swallows the Up of every key Warp took,
+        ; and a key whose Up never arrived (focus theft, a hook drop) would
+        ; otherwise eat the next press of that key for the rest of the
+        ; session. Keys still PHYSICALLY down keep their claim -- the key
+        ; that closed the overlay is one of them, and its Up is exactly the
+        ; one that must still be swallowed (see OnReleaseHK).
+        for name in Warp.claimed.Clone() {
+            held := false
+            try held := GetKeyState(name, "P")
+            if !held
+                Warp.claimed.Delete(name)
+        }
         if Warp.grab {
             Warp.grab := false
             try SendNativeUp("LButton")
@@ -18767,13 +19382,30 @@ class Warp {
         }
     }
 
+    /**
+     * The keyboard pointer is REACHED by a modifier chord (Ctrl+Alt+G by
+     * default), and the InputHook deliberately leaves modifiers visible so
+     * that chord keeps working -- which means Ctrl and Alt are very often
+     * still physically down when Space or R finally clicks. `{Blind}` would
+     * then send a CTRL+click into the study: in IntelliSpace that is a
+     * different tool, and Ctrl+drag is a different gesture again. So every
+     * click, drag and wheel from here starts by putting the modifiers UP.
+     * Explicit L/R Ups (not {Blind}) because only a real Up event clears the
+     * modifier the OS is holding for us.
+     */
+    static ClearMods() {
+        try SafeSend("{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}"
+            . "{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
+    }
+
     static Click(btn, n) {
         if Warp.grab {
             Warp.Release()
             return
         }
         Warp.Close(false)                    ; overlays down first, then the
-        SendNativeClick(btn, n)              ; click lands on the application
+        Warp.ClearMods()                     ; click lands on the application
+        SendNativeClick(btn, n)              ; unmodified
     }
 
     static Grab() {
@@ -18781,6 +19413,7 @@ class Warp {
             Warp.Release()
             return
         }
+        Warp.ClearMods()                     ; a Ctrl+drag is a different gesture
         SendNativeDown("LButton")
         Warp.grab := true
         Warp.DrawLegend()
@@ -18789,14 +19422,42 @@ class Warp {
 
     static Release() {
         Warp.grab := false
+        Warp.ClearMods()
         try SendNativeUp("LButton")
         Warp.Close(false)
     }
 
+    /**
+     * PostMessage rather than Send. A wheel notch is delivered to the window
+     * under the POINTER, not to the focused one, and Send's WheelUp goes to
+     * whatever has focus -- which during the keyboard pointer is usually not
+     * what the crosshair is sitting on. WM_MOUSEWHEEL carries the delta in
+     * the high word of wParam and SCREEN coordinates in lParam, so posting it
+     * straight at WindowFromPoint scrolls the thing being looked at. Send is
+     * the fallback for the (rare) point with no window under it.
+     */
     static Wheel(dir) {
-        SafeSend("{Blind}{" dir " 3}")
-        if (Warp.stage = "fine" && Warp.loupeOn)
-            SetTimer(ObjBindMethod(Warp, "DrawFine"), -120)   ; after it scrolls
+        Warp.ClearMods()
+        delta := (dir = "WheelUp") ? 120 * 3 : -120 * 3
+        hwnd := 0
+        try hwnd := DllCall("user32\WindowFromPoint", "int64",
+            (Warp.cx & 0xFFFFFFFF) | ((Warp.cy & 0xFFFFFFFF) << 32), "ptr")
+        posted := false
+        if hwnd {
+            try {
+                wp := (delta & 0xFFFF) << 16                 ; high word = delta
+                lp := (Warp.cx & 0xFFFF) | ((Warp.cy & 0xFFFF) << 16)
+                PostMessage(0x020A, wp, lp, , "ahk_id " hwnd)   ; WM_MOUSEWHEEL
+                posted := true
+            }
+        }
+        if !posted
+            SafeSend("{" dir " 3}")
+        if (Warp.stage = "fine" && Warp.loupeOn) {
+            if !Warp.redrawFn
+                Warp.redrawFn := ObjBindMethod(Warp, "DrawFine")
+            SetTimer(Warp.redrawFn, -120)                    ; after it scrolls
+        }
     }
 
     ; ── snap to the control under the pointer (UI Automation) ────────────────
@@ -18821,26 +19482,47 @@ class Warp {
             ComCall(7, Warp.uia, "int64", pt, "ptr*", &el)     ; ElementFromPoint
             if !el
                 return 0
+            ; IUIAutomationElement vtable, counting IUnknown's three:
+            ;   3..  SetFocus, GetRuntimeId, FindFirst, FindAll, ...
+            ;   42   get_CurrentBoundingRectangle  (a RECT of four LONGs)
+            ;   43   get_CurrentLabeledBy          (an element -- NOT a rect)
+            ; 43 was off by one: it returned an IUIAutomationElement pointer
+            ; written into rc, so the "rectangle" was a pointer's low and
+            ; high halves and N snapped to nonsense (and leaked the element).
             rc := Buffer(16, 0)
-            ComCall(43, el, "ptr", rc)                          ; get_CurrentBoundingRectangle
+            ComCall(42, el, "ptr", rc)                          ; get_CurrentBoundingRectangle
             name := ""
             bstr := 0
             try {
                 ComCall(23, el, "ptr*", &bstr)                  ; get_CurrentName
-                if bstr {
+                if bstr
                     name := StrGet(bstr, "UTF-16")
-                    DllCall("OleAut32\SysFreeString", "ptr", bstr)
-                }
+            } finally {
+                ; the BSTR is ours whether StrGet ran or threw
+                if bstr
+                    try DllCall("OleAut32\SysFreeString", "ptr", bstr)
             }
             l := NumGet(rc, 0, "int"), t := NumGet(rc, 4, "int")
             r := NumGet(rc, 8, "int"), b := NumGet(rc, 12, "int")
             return {x: l, y: t, w: r - l, h: b - t, name: name}
         } catch as e {
+            ; A failed call can leave the cached automation object unusable
+            ; (RPC_E_DISCONNECTED after a session switch is the usual one).
+            ; Drop it so the next N press builds a fresh one instead of
+            ; failing for the rest of the session.
+            Warp.ReleaseUia()
             Problem("warp-snap", "UI Automation lookup failed: " e.Message)
             return 0
         } finally {
             if el
                 try ObjRelease(el)
+        }
+    }
+
+    /** Let the cached IUIAutomation go; the next Snap builds a new one. */
+    static ReleaseUia() {
+        if Warp.uia {
+            try Warp.uia := 0
         }
     }
 
@@ -19052,6 +19734,35 @@ class Warp {
         }
     }
 
+    /**
+     * Our own layers that overlap the square about to be photographed, and
+     * so would end up magnified inside the loupe. Only used on machines
+     * where SetWindowDisplayAffinity refused (pre-2004, or a driver that
+     * says no); everywhere else the layers are excluded from capture and
+     * nothing has to blink. Lumi's toast layer is included: it is a HUD over
+     * the study, not a Warp layer, and it sits where a capture can reach it.
+     */
+    static CaptureBlockers(sx, sy, sw) {
+        out := []
+        cands := []
+        for name in ["fine", "col", "grid", "loupe", "legend"] {
+            if Warp.L.Has(name)
+                cands.Push(Warp.L[name])
+        }
+        try {
+            if IsObject(Lumi._toast)
+                cands.Push(Lumi._toast)
+        }
+        for lyr in cands {
+            try {
+                if (lyr.x < sx + sw && lyr.x + lyr.w > sx
+                    && lyr.y < sy + sw && lyr.y + lyr.h > sy)
+                    out.Push(lyr)
+            }
+        }
+        return out
+    }
+
     static DrawLoupe() {
         m := Warp.mon
         rg := Warp.region
@@ -19064,16 +19775,23 @@ class Warp {
         cap := 22
         size := LW + frame * 2
         p := Warp.LoupePlace(m, rg, Warp.cx, Warp.cy, sw // 2 + 4, size)
-        ; photograph the screen -- without our own overlays in the picture
+        ; Photograph the screen -- without our own overlays in the picture.
+        ; Only the layers that actually INTERSECT the capture square are
+        ; hidden: blinking the legend at the bottom of a 4K screen for a
+        ; capture at the top is a visible flicker for nothing. The HUD is in
+        ; the list too -- it is a separate layer that is not in Warp.L, and a
+        ; toast sitting over the capture ended up magnified in the loupe.
+        ; 15 ms was not enough for the compositor to actually take the layer
+        ; down before BitBlt ran, so a ghost of the overlay was photographed
+        ; anyway; 40 ms clears a 60 Hz frame with room to spare.
         hidden := []
         if !Warp.affinity {
-            for name in ["fine", "col", "grid", "loupe", "legend"] {
-                if Warp.L.Has(name) {
-                    try Warp.L[name].Hide()
-                    hidden.Push(Warp.L[name])
-                }
+            for lyr in Warp.CaptureBlockers(sx, sy, sw) {
+                try lyr.Hide()
+                hidden.Push(lyr)
             }
-            Sleep(15)
+            if (hidden.Length > 0)
+                Sleep(40)
         }
         bmp := 0
         try bmp := GdipBitmap.FromScreen(sx, sy, sw, sw)
@@ -19091,31 +19809,38 @@ class Warp {
         size := LW + frame * 2
         Rectangle(0, 0, size, size + cap, Lumi.Alpha(Lumi.C["surface"], 0xF0), true)
         Rectangle(0, 0, size, size + cap, Lumi.C["hair"], false)
+        ; The picture is scaled to the box by the kit's own resize path
+        ; ("w<LW> h<LW>"), which lands it at (frame, frame) exactly LW px
+        ; square -- no bmpX/bmpY/bmpW/bmpH arithmetic, which was drawing the
+        ; bitmap one half-pixel-offset centre-align away from where the
+        ; overlay maths assumed it was.
         if IsObject(bmp) {
-            pic := Picture(frame, frame, LW, LW, bmp)
-            ; the kit centres an unscaled bitmap in its box and grows it by
-            ; bmpW/bmpH; pull it back to the corner and grow it to the box
-            pic.bmpX := -((LW - sw) // 2)
-            pic.bmpY := -((LW - sw) // 2)
-            pic.bmpW := LW - sw
-            pic.bmpH := LW - sw
+            Picture(frame, frame, LW, LW, bmp, "w" LW " h" LW)
         } else {
             Rectangle(frame, frame, LW, LW, Lumi.C["abyss"], true)
             Warp.Txt(frame, frame, LW, LW, "no picture", Lumi.C["inkMute"], 12, false)
         }
+        ; THE SCALE INSIDE THE LOUPE IS NOT `z`. The source square is
+        ; sw = Max(Round(LW / z), 8) screen pixels, and that rounding (and
+        ; the floor of 8) makes LW / sw differ from z -- at z = 12 and
+        ; LW = 320, sw = 27 and the real magnification is 11.85. Overlays
+        ; drawn at z were therefore progressively offset from the picture
+        ; underneath, worst at the far corner. zr is the true ratio; z is
+        ; kept only for the caption, which quotes the user's chosen zoom.
+        zr := LW / sw
         ; the region, magnified, with its thirds and letters
-        rx := frame + (rg.x - sx) * z
-        ry := frame + (rg.y - sy) * z
-        Warp.__Region(rx, ry, rg.w * z, rg.h * z, z, true)
+        rx := frame + (rg.x - sx) * zr
+        ry := frame + (rg.y - sy) * zr
+        Warp.__Region(rx, ry, rg.w * zr, rg.h * zr, zr, true)
         ; crosshair on the pointer's pixel
-        lx := frame + (cx - sx) * z + z // 2
-        ly := frame + (cy - sy) * z + z // 2
+        lx := frame + (cx - sx) * zr + zr // 2
+        ly := frame + (cy - sy) * zr + zr // 2
         cross := Lumi.C["cyan"]
         Line(lx - 18, ly, lx - 5, ly, cross, 1)
         Line(lx + 5, ly, lx + 18, ly, cross, 1)
         Line(lx, ly - 18, lx, ly - 5, cross, 1)
         Line(lx, ly + 5, lx, ly + 18, cross, 1)
-        Rectangle(lx - z // 2, ly - z // 2, Max(z, 2), Max(z, 2),
+        Rectangle(lx - zr // 2, ly - zr // 2, Max(zr, 2), Max(zr, 2),
             grab ? Lumi.C["jade"] : Lumi.C["magenta"], false)
         ; caption
         Rectangle(0, size, size, cap, Lumi.C["raised"], true)
