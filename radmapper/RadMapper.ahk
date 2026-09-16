@@ -2290,6 +2290,7 @@ StarterPacks() {
          rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
         {name: "PACS zoom and pan on the thumb buttons",
          sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)",
+              . " (replaces the PACS wheel / Window presets packs on those buttons)"
          ; The left button is deliberately NOT in this pack. A native row
          ; scoped to one app is not an INERT row (InertShape wants app "*"),
          ; so adding one would HOOK the left button inside PACS and turn
@@ -16152,7 +16153,7 @@ class Atlas {
         ; ── the keys that work even when nothing else does ──────────────
         ; Pinned to the BOTTOM, so this block is in the same place whatever
         ; size the window is, and nothing above it has to be measured
-        ; against it. At the 640 px minimum the jobs end 6 px above the rule.
+        ; against it. At the 640 px minimum the jobs end 2 px above the rule.
         Lumi.Rule(x, y + h - 104, w - 8)
         Lumi.Para(x, y + h - 96, w - 20, 44,
             "Keys that always work: " Atlas.HkWords("hkPanic")
@@ -18123,8 +18124,8 @@ class Atlas {
         ; Band 2 grew a second column in v0.6.5 (the wheel repeat guards),
         ; so it takes a larger share and a taller minimum; band 3 gives the
         ; difference back. At the 940x640 minimum the three still fit:
-        ; 148 + 179 + 143 + 2 gaps of 12 = 494 = the panel's own height.
-        bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 168, 132])
+        ; 148 + 166 + 132 + 2 gaps of 12 = 446 = the space the three bands are given (h - 34 - 24).
+        bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 166, 132])
         sw := Min(300, Max(160, w - 340))    ; slider track
         lx := x + 24
 
@@ -18290,7 +18291,7 @@ class Atlas {
                 String(Cfg("tiltRepeatMs")),
                 (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150),
                 "", true)
-            Lumi.Para(c3, hy + p2 + 32, colw, 44,
+            Lumi.Para(c3, hy + p2 + 32, colw, Max(20, B.h - (hy + p2 + 32 - B.y) - 6),
                 "Milliseconds. Razer tilt wheels repeat while held; 150 "
                 . "turns a held tilt into one press. 0 = off.", "mute")
         }
