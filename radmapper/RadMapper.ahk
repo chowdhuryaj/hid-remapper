@@ -21076,7 +21076,9 @@ class Warp {
             Warp.Drop("fine")
             Warp.Drop("loupe")
             if Warp.L.Has("grid")
-                try Warp.L["grid"].Show()
+                try {
+                    Warp.L["grid"].Show()
+                }
             else
                 Warp.DrawGrid()
             Warp.DrawLegend()

@@ -167,6 +167,18 @@ while _i < len(_lines):
     _i = _j + 1
 assert not _clashes, ('Nested function name conflicts with an enclosing parameter', _clashes)
 
-print('PASS: UI member references, case-insensitive collisions, nested-name clashes, timer identity, '
+# ---- one-line try between an if and its else ------------------------------
+# `if x` / `try stmt` / `else ...`: the brace-less try takes the else as ITS
+# else clause (v2 try has one), and the if is left dangling -> "Unexpected
+# Else" at load. Brace the try body. (A one-line try followed by catch is fine.)
+_tryelse = []
+for _k in range(len(_lines) - 2):
+    if re.match(r'^\s*(if|else if)\b.*[^{]\s*$', _lines[_k]) \
+            and re.match(r'^\s*try\s+\S', _lines[_k + 1]) and not _lines[_k + 1].rstrip().endswith('{') \
+            and re.match(r'^\s*else\b', _lines[_k + 2]):
+        _tryelse.append(_k + 2)
+assert not _tryelse, ('One-line try between an if and its else', _tryelse)
+
+print('PASS: UI member references, case-insensitive collisions, nested-name clashes, try/else binding, timer identity, '
       f'Windows page fit (max HkRow offset {max(_offs)} <= 460), '
       f'{len(pairs)} text/background contrast pairs')
