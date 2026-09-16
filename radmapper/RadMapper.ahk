@@ -20,6 +20,79 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.6.5 -- the reading room on the front page, a rate limiter for tilt
+;  wheels, and the row buttons that could not be pressed:
+;    * BUG (workstation): "the button rows are not always able to be edited
+;      from the main panel and cannot be deleted at all." ROOT CAUSE, and it
+;      is three lines in three places. (1) Lumi.__ListDo writes view.sel and
+;      calls the list's onPick; the Mouse and Keyboard pages passed
+;      `(i, dbl) => (dbl ? Atlas.EditRow(i) : 0)`, so a SINGLE click painted
+;      the row and did nothing else, and the Apps page passed 0. (2) Edit and
+;      Delete are drawn once per frame with `Atlas.HasSel(rows.Length)`, and
+;      HasSel reads Atlas.savedSel, which is only refreshed at the top of
+;      Build(). (3) Build() runs from Tick() ONLY when the status signature
+;      changes. So after clicking a row nothing rebuilt the buttons, they
+;      kept the "muted" kind they were born with, and Lumi.Btn's muted case
+;      sets onClick := 0 -- a button with no handler at all. Delete could
+;      therefore never be pressed, and Edit only after something unrelated
+;      (an app switch, a new problem, a scope dropdown) happened to rebuild
+;      the frame: "not always able to be edited". Nothing was wrong with
+;      DeleteSel, SelectedRef or the confirm.
+;      FIX: Atlas.Picker(mode) is the onPick every panel list now hands to
+;      Lumi.List. It records the pick in the new Atlas.selWant and rebuilds,
+;      so the buttons wake up in the same frame; a double click still opens
+;      the row. Build() prefers selWant over the outgoing list's own sel,
+;      which is what lets the mouse map and the key tiles select a row too:
+;      PickZone and PickKeyTile ask for row 1, so clicking a part of the
+;      mouse that HAS rows leaves Edit and Delete usable, instead of
+;      inheriting the previous input's selection index. Deleting a row
+;      selects nothing afterwards rather than whichever row slid up into its
+;      place. check_source.py now asserts that no page can mute its row
+;      buttons without handing its list a picker.
+;    * RAZER TILT WHEELS FIRED FOUR TIMES. A tilt wheel does not send one
+;      WheelLeft when you tilt it; it sends one every 30-50 ms for as long as
+;      the wheel is held over, exactly like a held keyboard key, so a bound
+;      tilt produced "multiple repeated inputs causing unpredictable
+;      outputs". New settings tiltRepeatMs (150 ms) and wheelRepeatMs (0 =
+;      off), clamped 0..1000 in ValidateCfg: a notch arriving within the
+;      guard of the last ACCEPTED notch for the SAME input is dropped, so a
+;      held tilt is one press and a flick left then right is still two. The
+;      decision is WheelAccept(input, now, lastMap, limitMs) -- pure apart
+;      from the map, replayed against a fake clock in regression.ahk,
+;      including the 49.7-day A_TickCount wrap. Only BOUND (non-native)
+;      directions are limited: an inert row is plain scrolling and stays
+;      byte-for-byte hardware-native. Both fields are on the Pointer page;
+;      Simple mode, which hides that page, gets the tilt one on Settings.
+;    * HOME SHOWS THE READING ROOM. A new first card, "Reading room
+;      essentials", lists the seven things this program is for -- dictate on
+;      and off, next field, previous field, pointer to the left monitor,
+;      pointer to the right monitor, the PACS wheel and the window presets --
+;      with every trigger each one has today (buttons, keys and the Settings
+;      hotkey, in plain words, joined by "or", or "not set"), a Set button
+;      that opens the wizard with question 3 already answered, and a Clear
+;      button that removes them after asking. The five hotkey rows added to
+;      Settings in v0.6.2b (hkDictate, hkNextField, hkPrevField, hkTeleLeft,
+;      hkTeleRight) are gone from that page -- the settings themselves are
+;      untouched and still registered; they are set from the card now, where
+;      the key sits next to the button that does the same job. Settings
+;      keeps the four keys that are about RadMapper itself. WizWhat learned
+;      to say these actions as sentences, so the wizard's summary reads
+;      "Button 4, when you tap it, will start or stop dictation in
+;      PowerScribe" rather than quoting the action table at itself.
+;    * ZOOM AND PAN AS NAMED OUTPUTS. In IntelliSpace, Alt held with a
+;      left-drag is zoom and Ctrl held with a left-drag is pan -- which the
+;      engine has always been able to do (moddrag) and nothing ever said out
+;      loud. No new action type: the wizard's question 3 grew two tiles,
+;      "Zoom (Alt+drag)" and "Pan (Ctrl+drag)", that set moddrag with LAlt or
+;      LCtrl (seven tiles, four to a row, which is why everything below them
+;      on that dialog sits 46 px lower); the Details dropdown says "Alt --
+;      zoom in PACS" and "Ctrl -- pan in PACS"; moddrag is on the Simple
+;      action list; and a starter pack, "PACS zoom and pan on the thumb
+;      buttons", puts both on buttons 4 and 5 scoped to the PACS profile.
+;      The pack deliberately adds NO left-button row: a native row scoped to
+;      one app is not an inert row, so it would hook the left button inside
+;      PACS and turn every click into an injected resend.
+;
 ;  v0.6.4a (review pass 4) -- every item here is a fix to code that has
 ;  still never run on Windows:
 ;    * LOAD FIX (first workstation run): RadialIcon(name, x, y, ...) declared
@@ -1162,7 +1235,12 @@ global INPUT_VALUE_CODES := ["LButton", "RButton", "MButton", "XButton1",
 ; "Modifier + left-drag" is picked the same way, but the thing it picks is a
 ; MODIFIER, so it has its own four.
 global MODDRAG_CODES := ["LAlt", "LCtrl", "LShift", "LWin"]
-global MODDRAG_LABELS := Map("LAlt", "Alt", "LCtrl", "Ctrl",
+; v0.6.5: the two that have a JOB in IntelliSpace say what that job is.
+; The codes are unchanged, so nothing about the file format moves -- this is
+; the word in the Details dropdown, and it is the word a reader is looking
+; for ("how do I put zoom on a thumb button?").
+global MODDRAG_LABELS := Map("LAlt", "Alt — zoom in PACS",
+                             "LCtrl", "Ctrl — pan in PACS",
                              "LShift", "Shift", "LWin", "Windows key")
 ; The same inputs said MID-SENTENCE, for the wizard's one-line summary:
 ; "... will lock the middle button down until pressed again". INPUT_LABELS is
@@ -1198,7 +1276,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
     "Double-click a button",
-    "Modifier + left-drag (hold)",
+    "Hold a modifier with left-drag (Alt = zoom, Ctrl = pan in PACS)",
     "Native drag after move (hold)", "PowerScribe: toggle dictation",
     "PowerScribe: next field", "PowerScribe: previous field",
     "PowerScribe: send keys",
@@ -1235,7 +1313,8 @@ global ACT_HINTS := Map(
            . "app's own binding runs. Scope it to one app or layer to carve "
            . "an exception out of a broader remap.",
     "dblclick", "The button this one double-clicks.",
-    "moddrag", "The modifier held down while the left button drags.",
+    "moddrag", "The modifier held down while the left button drags. In "
+             . "IntelliSpace, Alt+drag zooms and Ctrl+drag pans.",
     "dragmove", "The button that starts dragging once the cursor moves.",
     "ps_dictate", "No value needed (uses the dictate key from Settings)",
     "ps_next", "No value needed",
@@ -1324,6 +1403,18 @@ global DEFAULTS := Map(
                                ;   cursor jumping between two spots) and mark
                                ;   the anchor with a small ring instead
     "scrollPtrMax", 20,        ; max notches emitted per 10 ms tick (runaway cap)
+    ; v0.6.5 -- WHEEL REPEAT GUARDS. A Razer tilt wheel does not send one
+    ; WheelLeft when you tilt it: it sends one every 30-50 ms for as long as
+    ; the wheel is held over, exactly like a held keyboard key. Bound to an
+    ; action, that is a burst of presses nobody asked for ("the left/right
+    ; tilts send multiple repeated inputs"). A notch arriving within this
+    ; many ms of the last ACCEPTED notch for the same input is dropped, so a
+    ; held tilt is one press. Per input, so left and right never limit each
+    ; other. 0 = off. Native (inert) rows are never limited -- plain
+    ; scrolling must stay byte-for-byte hardware-native.
+    "tiltRepeatMs", 150,       ; WheelLeft / WheelRight
+    "wheelRepeatMs", 0,        ; WheelUp / WheelDown (off: a real wheel is
+                               ;   meant to repeat)
     "hkDictate", "",           ; PS/teleport hotkeys ship unassigned (v0.3);
     "hkPrevField", "",         ; set them in the Settings tab when wanted
     "hkNextField", "",
@@ -2197,6 +2288,18 @@ StarterPacks() {
         {name: "Window presets on button 5",
          sub:  "hold button 5 in PACS for the numbered preset ring",
          rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
+        {name: "PACS zoom and pan on the thumb buttons",
+         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)",
+         ; The left button is deliberately NOT in this pack. A native row
+         ; scoped to one app is not an INERT row (InertShape wants app "*"),
+         ; so adding one would HOOK the left button inside PACS and turn
+         ; every click into an injected resend -- the shape behind the
+         ; dead-mouse report. Left stays native there by simply having no
+         ; row, which is what it already is. A TAP of either thumb button
+         ; still sends the modified left click: that is what moddrag does
+         ; on a tap.
+         rows: [["PACS", "*", "", "XButton1", "hold", "moddrag", "LAlt"],
+                ["PACS", "*", "", "XButton2", "hold", "moddrag", "LCtrl"]]},
         {name: "Drag scroll on button 5",
          sub:  "hold button 5 and move the mouse to scroll, everywhere",
          rows: [["*", "*", "", "XButton2", "hold", "scrollptr", ""]]},
@@ -2976,6 +3079,17 @@ ValidateCfg() {
                 v := g_Cfg["settings"][k]
                 g_Cfg["settings"][k] := (!IsObject(v) && (v = 0 || v = "0"
                     || v = false)) ? 0 : 1
+            }
+        }
+        ; The two wheel repeat guards are read from the WHEEL HOOK, once per
+        ; notch, where a hand-edited "fast" or an object would throw inside a
+        ; Critical thread. Clamped to 0..1000 ms here; anything unusable
+        ; falls back to the shipped value. (v0.6.5)
+        for k in ["tiltRepeatMs", "wheelRepeatMs"] {
+            if g_Cfg["settings"].Has(k) {
+                v := g_Cfg["settings"][k]
+                g_Cfg["settings"][k] := ClampInt(IsObject(v) ? "" : v,
+                    0, 1000, DEFAULTS[k])
             }
         }
     }
@@ -4708,6 +4822,42 @@ CommitTaps(st, n) {
 
 ; --- wheel -------------------------------------------------------------------
 
+; Tick of the last ACCEPTED notch, per wheel input. Not part of the config:
+; it is live state, like g_BS.
+global g_WheelAt := Map()
+
+/**
+ * Should this notch be acted on? (v0.6.5)
+ *
+ * PURE apart from the map it is handed -- no config, no clock, no hook --
+ * so tests/regression.ahk can drive it with a fake clock. `lastMap` is
+ * input -> tick of the last accepted notch, and an ACCEPTED notch is the
+ * one that restarts the window: holding a Razer wheel over keeps sending
+ * notches every 30-50 ms, and every one of them must be measured against
+ * the press that was let through, not against the notch before it.
+ *
+ * A negative gap means A_TickCount has wrapped (49.7 days); accept, so a
+ * wrap costs nothing worse than one extra press.
+ */
+WheelAccept(input, now, lastMap, limitMs) {
+    if (limitMs <= 0)
+        return true
+    if lastMap.Has(input) {
+        gap := now - lastMap[input]
+        if (gap >= 0 && gap < limitMs)
+            return false
+    }
+    lastMap[input] := now
+    return true
+}
+
+/** The guard that applies to one wheel input, clamped as stored. */
+WheelLimitMs(wh) {
+    tilt := (wh = "WheelLeft" || wh = "WheelRight")
+    key := tilt ? "tiltRepeatMs" : "wheelRepeatMs"
+    return ClampInt(Cfg(key), 0, 1000, DEFAULTS[key])
+}
+
 OnWheelHK(wh, *) {
     Critical "On"
     TestNotify(wh, 2)
@@ -4746,6 +4896,13 @@ OnWheelHK(wh, *) {
             else
                 SendWheelRaw(tgt != "" ? tgt : wh, 1)
         } else {
+            ; A BOUND wheel direction is rate-limited (v0.6.5). A tilt wheel
+            ; repeats while it is held over, so without this one tilt fires
+            ; the action four or five times. Dropped outright, not re-sent:
+            ; this notch belongs to an action, and passing it through would
+            ; scroll the study instead.
+            if !WheelAccept(wh, A_TickCount, g_WheelAt, WheelLimitMs(wh))
+                return
             holder := LayerHolderSt(b)       ; deepest held holder (0 at Base)
             ActionFire(b, holder)            ; ActionFire marks every lay holder used
         }
@@ -14495,6 +14652,10 @@ class Atlas {
     static ticking := false
     static timerFn := 0
     static savedSel := 0           ; list selection, preserved across rebuilds
+    ; A selection made SINCE the last frame -- a row click, a mouse-map zone,
+    ; a key tile -- waiting for the rebuild it asked for. -1 = nothing new,
+    ; so the old list's own sel is carried over as before. (v0.6.5)
+    static selWant := -1
     static parkRef := 0            ; app row awaiting a park-spot capture
     static escBound := false
     static wizReopenFn := 0        ; the debounced wizard reopen (BoundFunc,
@@ -14542,7 +14703,12 @@ class Atlas {
     ; button is the most ordinary output a mouse button can have, and all
     ; three now have an editor Simple mode can show -- a dropdown of buttons
     ; (TakesInputValue), not a field wanting a code.
+    ; v0.6.5: "moddrag" is on this list. Alt+drag (zoom) and Ctrl+drag
+    ; (pan) are two of the most-used PACS gestures and the wizard offers
+    ; them as tiles, so Simple mode has to be able to show the action they
+    ; actually save.
     static SIMPLE_ACTS := ["keys", "text", "native", "dblclick", "clicklock",
+        "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
         "zoomptr", "radial", "winplace", "warp", "guiopen",
@@ -15242,7 +15408,15 @@ class Atlas {
         prevActive := LayerStack.ActiveLayer
         LayerStack.ActiveLayer := lyr
         try {
-            Atlas.savedSel := IsObject(Atlas.list) ? Atlas.list.sel : 0
+            ; A pick made since the last frame outranks the old list's sel:
+            ; the old list may belong to the input we have just navigated
+            ; away from, and its sel would then select an unrelated row.
+            if (Atlas.selWant >= 0) {
+                Atlas.savedSel := Atlas.selWant
+                Atlas.selWant := -1
+            } else {
+                Atlas.savedSel := IsObject(Atlas.list) ? Atlas.list.sel : 0
+            }
             lyr.Clear()
             Atlas.list := 0
             ; The focus ring is rebuilt with the frame. Same layer, so the
@@ -15574,6 +15748,12 @@ class Atlas {
 
     static HelpBox() {
         MsgBox("Home is the whole map.`n`n"
+            . "The card at the top, Reading room essentials, is the seven "
+            . "things this program is for -- dictation on and off, the two "
+            . "PowerScribe fields, the pointer to the left or right monitor, "
+            . "the PACS wheel and the window presets -- each with whatever "
+            . "fires it today, a Set button that asks three questions, and a "
+            . "Clear button that puts it back to normal.`n`n"
             . "It offers four jobs -- change what a mouse button does, "
             . "change what a keyboard key does, set up a radial menu, apply "
             . "a starter pack -- and every one of them is a button. Start "
@@ -15812,71 +15992,176 @@ class Atlas {
      * you decide which panel that is. Four jobs, said the way the person
      * asking for them would say them, and each one is a button.
      */
+    /**
+     * THE READING ROOM ESSENTIALS (v0.6.5).
+     *
+     * Seven functions this program exists for, one row each:
+     *   label, action type, action value (radial menus only), hotkey setting.
+     * A function is "set" when ANY binding fires it, or when its Settings
+     * hotkey is filled in -- which is why the row reads both and says so in
+     * one sentence. The value is compared only for "radial", where the menu
+     * name is what tells the PACS wheel from the preset ring.
+     */
+    static ESSENTIALS := [
+        ["Dictate on / off",         "ps_dictate", "",               "hkDictate"],
+        ["Next field",               "ps_next",    "",               "hkNextField"],
+        ["Previous field",           "ps_prev",    "",               "hkPrevField"],
+        ["Pointer to left monitor",  "tele_prev",  "",               "hkTeleLeft"],
+        ["Pointer to right monitor", "tele_next",  "",               "hkTeleRight"],
+        ["PACS wheel",               "radial",     "PACS",           ""],
+        ["Window presets",           "radial",     "Window presets", ""]]
+
+    /** Every trigger for one essential, in plain words, or "". */
+    static EssTriggers(act, value, hk := "") {
+        out := ""
+        for row in MGet(g_Cfg, "bindings", []) {
+            a := MGet(row, "action", 0)
+            if (!IsObject(a) || MGet(a, "type", "") != act)
+                continue
+            if (act = "radial" && MGet(a, "value", "") != value)
+                continue
+            one := InputLabel(MGet(row, "button", ""))
+            ev := EventLabelOf(MGet(row, "event", ""))
+            if (ev != "")
+                one .= " (" StrLower(SubStr(ev, 1, 1)) SubStr(ev, 2) ")"
+            out .= (out = "" ? "" : " or ") one
+        }
+        if (hk != "" && Trim(String(Cfg(hk))) != "")
+            out .= (out = "" ? "" : " or ") Atlas.HkWords(hk)
+        return out
+    }
+
+    /** Factories -- one closure per row, capturing the row by VALUE. */
+    static EssSet(i) {
+        return (*) => Atlas.DoEssSet(i)
+    }
+
+    static EssClear(i) {
+        return (*) => Atlas.DoEssClear(i)
+    }
+
+    /** "Set…" -- the wizard, with question 3 already answered. */
+    static DoEssSet(i) {
+        if (i < 1 || i > Atlas.ESSENTIALS.Length)
+            return
+        e := Atlas.ESSENTIALS[i]
+        ; A radial menu is a HOLD: flick a direction and release. Everything
+        ; else here is a tap.
+        Atlas.OpenDlg(() => Atlas.WizardDlg({act: e[2], value: e[3],
+            event: (e[2] = "radial") ? "hold" : "tap"}))
+    }
+
+    /** "Clear" -- every binding that fires it, and its Settings hotkey. */
+    static DoEssClear(i) {
+        if (i < 1 || i > Atlas.ESSENTIALS.Length)
+            return
+        e := Atlas.ESSENTIALS[i]
+        if (Atlas.EssTriggers(e[2], e[3], e[4]) = "")
+            return
+        if !Atlas.Confirm("Stop “" e[1] "” from happening?`n`n"
+            . "Everything that does it now — " Atlas.EssTriggers(e[2], e[3], e[4])
+            . " — goes back to whatever Windows and the program normally do "
+            . "with it. You can set it again from here.")
+            return
+        kept := []
+        for row in g_Cfg["bindings"] {
+            a := MGet(row, "action", 0)
+            drop := IsObject(a) && (MGet(a, "type", "") = e[2])
+            if (drop && e[2] = "radial" && MGet(a, "value", "") != e[3])
+                drop := false
+            if !drop
+                kept.Push(row)
+        }
+        g_Cfg["bindings"] := kept
+        if (e[4] != "")
+            CfgSet(e[4], "")
+        Atlas.SaveOrWarn()
+        AfterCfgChange()
+        Lumi.Toast("Cleared “" e[1] "”", "magenta")
+        Atlas.selWant := 0
+        Atlas.Build()
+    }
+
     static PanelHome(x, y, w, h) {
-        Lumi.Label(x, y, 420, "Start here", "title")
-        Lumi.Para(x, y + 30, Min(w - 20, 720), 40,
-            "Make your mouse and keyboard work the way you read. "
-            . "Start with one shortcut, then add more when you need them.",
-            "mute")
+        Lumi.Label(x, y, 220, "Start here", "title")
+        Lumi.Label(x + 228, y + 4, Max(200, w - 248),
+            "Make your mouse and keyboard work the way you read.",
+            "mute", "left", 22)
+
+        ; ── reading room essentials ─────────────────────────────────────
+        ; WIDTH, at the 940 px minimum: the panel is
+        ;   940 - NAVW(188) - SP.xl(24) - SP.xl(24) = 704
+        ; and the card's own 16 px gutters leave 672 for a row:
+        ;   name 210 + 10 + triggers + 10 + Set 74 + 8 + Clear 64 = 672
+        ; so triggers gets 704 - 408 = 296 px here and grows with the window.
+        ; HEIGHT: 30 for the heading + 7 rows of 24 + 4 = 202.
+        ; Seven functions, seven rows: this card is what the program is for,
+        ; so it is the first thing on the first page.
+        cy := y + 28
+        rowH := 24
+        ch := 30 + rowH * Atlas.ESSENTIALS.Length + 4
+        Lumi.Card(x, cy, w, ch, "surface")
+        Lumi.Label(x + 16, cy + 6, 400, "Reading room essentials", "section")
+        nw := 210
+        tw := Max(140, w - 408)
+        for i, e in Atlas.ESSENTIALS {
+            ry := cy + 30 + (i - 1) * rowH
+            Lumi.Label(x + 16, ry, nw, e[1], "dim", "left", rowH)
+            trig := Atlas.EssTriggers(e[2], e[3], e[4])
+            Lumi.Label(x + 16 + nw + 10, ry, tw,
+                Lumi.Elide(trig = "" ? "not set" : trig, tw,
+                    trig = "" ? "mute" : "body"),
+                trig = "" ? "mute" : "body", "left", rowH)
+            bx := x + 16 + nw + tw + 20
+            Lumi.Btn(bx, ry + 1, 74, rowH - 4, "Set…", Atlas.EssSet(i),
+                "accent")
+            Lumi.Btn(bx + 82, ry + 1, 64, rowH - 4, "Clear",
+                Atlas.EssClear(i), trig = "" ? "muted" : "ghost")
+        }
 
         ; ── is it on? in words, not in a light ──────────────────────────
-        Lumi.Card(x, y + 76, w, 60, "surface")
-        Lumi.Chip(x + 16, y + 94, 92, 24, g_Enabled ? "on" : "off",
+        sy := cy + ch + 8
+        Lumi.Card(x, sy, w, 48, "surface")
+        Lumi.Chip(x + 16, sy + 12, 92, 24, g_Enabled ? "on" : "off",
             g_Enabled ? "jade" : "warn")
-        Lumi.Label(x + 120, y + 86, w - 140,
+        Lumi.Label(x + 120, sy + 4, w - 140,
             g_Enabled
                 ? "RadMapper is ON — your buttons and keys do what you set up here."
                 : "RadMapper is OFF — your mouse and keyboard behave normally.",
             "body", "left", 22)
-        Lumi.Label(x + 120, y + 108, w - 140,
+        Lumi.Label(x + 120, sy + 24, w - 140,
             "Use the switch at the bottom of the list on the left to turn it "
             . "on or off.", "mute", "left", 20)
 
         ; ── the four jobs ───────────────────────────────────────────────
-        Lumi.Label(x, y + 150, 420, "What do you want to do?", "section")
+        jy := sy + 54
+        Lumi.Label(x, jy, 420, "What do you want to do?", "section")
         bw := Min(380, (w - 16) // 2)
-        bh := 54
-        Lumi.Btn(x, y + 176, bw, bh, "Change what a mouse button does",
+        bh := 40
+        Lumi.Btn(x, jy + 22, bw, bh, "Change what a mouse button does",
             (*) => (Atlas.Advanced() ? Atlas.Go(Atlas.PanelIndex("Mouse"))
                 : Atlas.OpenDlg(() => Atlas.WizardDlg())), "primary")
-        Lumi.Btn(x + bw + 16, y + 176, bw, bh,
+        Lumi.Btn(x + bw + 16, jy + 22, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
-        Lumi.Btn(x, y + 176 + bh + 12, bw, bh, "Set up a radial menu",
+        Lumi.Btn(x, jy + 66, bw, bh, "Set up a radial menu",
             (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
-        Lumi.Btn(x + bw + 16, y + 176 + bh + 12, bw, bh, "Apply a starter pack",
+        Lumi.Btn(x + bw + 16, jy + 66, bw, bh, "Apply a starter pack",
             (*) => Atlas.PackChoose(), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
-        ky := y + 176 + (bh + 12) * 2 + 14
-        Lumi.Rule(x, ky, w - 8)
-        Lumi.Label(x, ky + 10, 420, "Keys that always work", "section")
-        Lumi.Label(x, ky + 32, w - 20,
-            "Press " Atlas.HkWords("hkPanic")
-            . " if a button ever feels stuck down.", "dim", "left", 22)
-        Lumi.Label(x, ky + 56, w - 20,
-            "Press " Atlas.HkWords("hkToggle")
-            . " to switch RadMapper off, and again to switch it back on.",
-            "dim", "left", 22)
-        Lumi.Label(x, ky + 80, w - 20,
-            "Press " Atlas.HkWords("hkGui") " to reopen settings. F1 opens quick help.",
-            "dim", "left", 22)
-
-        ; ── simple or advanced ──────────────────────────────────────────
-        Lumi.Toggle(x, ky + 110, "Show advanced pages and every action",
+        ; Pinned to the BOTTOM, so this block is in the same place whatever
+        ; size the window is, and nothing above it has to be measured
+        ; against it. At the 640 px minimum the jobs end 6 px above the rule.
+        Lumi.Rule(x, y + h - 104, w - 8)
+        Lumi.Para(x, y + h - 96, w - 20, 44,
+            "Keys that always work: " Atlas.HkWords("hkPanic")
+            . " if a button ever feels stuck down · " Atlas.HkWords("hkToggle")
+            . " switches RadMapper off and back on · " Atlas.HkWords("hkGui")
+            . " reopens this window · F1 opens quick help.", "dim")
+        Lumi.Toggle(x, y + h - 50, "Show advanced pages and every action",
             Atlas.Advanced() ? 1 : 0, (v) => Atlas.SetAdvanced(v))
-        Lumi.Label(x + 64, ky + 138, w - 80,
-            "Off: the essentials — Mouse, Keyboard, Menus, Settings, Diagnostics "
-            . "and a short list of actions. On: Layers, Macros, Apps, Windows "
-            . "and Pointer too. Nothing is lost either way.",
-            "mute", "left", 20)
-
-        ; ── where the settings live ─────────────────────────────────────
-        ; Pinned to the BOTTOM, so it is in the same place whatever size the
-        ; window is, and so nothing above it has to be measured against it.
-        Lumi.Label(x, y + h - 46, w - 20, "Defaults: dictation key + thumb-button monitor switching. Edit them in Mouse / Keyboard.",
-            "mute", "left", 20)
-        Lumi.Label(x, y + h - 26, w - 20, "Saved in  " CFG_PATH, "code", "left", 22)
+        Lumi.Label(x, y + h - 22, w - 20, "Saved in  " CFG_PATH, "code", "left", 20)
     }
 
     ; ── PANEL: MOUSE ────────────────────────────────────────────────────────
@@ -15921,7 +16206,7 @@ class Atlas {
         }
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
-            (i, dbl) => (dbl ? Atlas.EditRow(i) : 0), 30,
+            Atlas.Picker("mouse"), 30,
             ["When you", "It does", "Also hold"])
 
         ; The four buttons were at fixed offsets adding up to 486 px inside a
@@ -16118,6 +16403,12 @@ class Atlas {
 
     static PickZone(code) {
         Atlas.sel := code
+        ; Pick this input's FIRST row with it (v0.6.5). Selecting a part of
+        ; the mouse is how most people get to a setting, and it must leave
+        ; Edit and Delete usable; without this the incoming frame inherited
+        ; the sel of the list belonging to the PREVIOUS input, which pointed
+        ; at whatever row happened to sit at that index here.
+        Atlas.selWant := 1
         Atlas.Build()
     }
 
@@ -16325,7 +16616,7 @@ class Atlas {
         }
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
-            (i, dbl) => (dbl ? Atlas.EditRow(i, true) : 0), 30,
+            Atlas.Picker("key"), 30,
             ["When you", "It does", "Also hold"])
 
         by := y + h - 78
@@ -16458,6 +16749,7 @@ class Atlas {
 
     static PickKeyTile(code) {
         Atlas.keySel := code
+        Atlas.selWant := 1               ; as PickZone: the key's first row
         Atlas.Build()
     }
 
@@ -16532,7 +16824,8 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 112, w, h - 176, rows,
             [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
              {w: 190, kind: "mono"}],
-            0, 30, ["Program", "Recognised by", "Pointer spot", "Special"])
+            Atlas.Picker(), 30,
+            ["Program", "Recognised by", "Pointer spot", "Special"])
 
         by := y + h - 52
         b := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
@@ -16684,7 +16977,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 96, w, h - 248, rows,
             [{w: 210}, {w: 150, kind: "mute"}, {w: 110, kind: "mono"},
              {w: 110, kind: "mono"}, {w: w - 620, kind: "mono"}],
-            (i, dbl) => (dbl ? Atlas.MenuEditSel() : 0), 30,
+            Atlas.Picker("menu"), 30,
             ["Menu", "Program", "Size", "Filled in", "Opened by"])
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
@@ -16797,7 +17090,7 @@ class Atlas {
         ; "which button should it hold?" -- so the dialog grows a fourth
         ; step rather than hiding the answer behind a typed code.
         askLock := (d.act = "clicklock")
-        h := askLock ? 664 : 620
+        h := askLock ? 710 : 666
         Lumi.CloseSelect()
         Lumi.EndEdit()
         if IsObject(Atlas.dlg) {
@@ -16872,38 +17165,48 @@ class Atlas {
         ; sixteen, then type "MButton" into a box labelled Details. Each tile
         ; sets the action AND its value in one press.
         Lumi.Label(24, 244, 400, "3 · What should it do?", "section")
+        ; v0.6.5: seven tiles, four to a row. Zoom and Pan are the two
+        ; IntelliSpace gestures a reader asks for by name -- Alt held with a
+        ; left-drag is zoom, Ctrl held with a left-drag is pan -- and both
+        ; are the existing moddrag action with its value filled in, not a
+        ; new kind of output. The second row is why everything below the
+        ; tiles sits 46 px lower than it did, and why the dialog is 46 px
+        ; taller.
         acts3 := [["Left click", "native", "LButton"],
                   ["Right click", "native", "RButton"],
                   ["Middle click", "native", "MButton"],
                   ["Double-click", "dblclick", "LButton"],
-                  ["Click lock", "clicklock", "MButton"]]
-        tw3 := (w - 48 - 4 * 8) // 5
-        tx := 24
+                  ["Click lock", "clicklock", "MButton"],
+                  ["Zoom (Alt+drag)", "moddrag", "LAlt"],
+                  ["Pan (Ctrl+drag)", "moddrag", "LCtrl"]]
+        tw3 := (w - 48 - 3 * 8) // 4
+        ti := 0                              ; tile index -> column and row
         for a in acts3 {
             on := (d.act = a[2]) && (a[2] = "clicklock" || d.value = a[3])
-            Lumi.Btn(tx, 264, tw3, 38, a[1], Atlas.WizAct(st, a[2], a[3]),
+            Lumi.Btn(24 + Mod(ti, 4) * (tw3 + 8), 264 + (ti // 4) * 46,
+                tw3, 38, a[1], Atlas.WizAct(st, a[2], a[3]),
                 on ? "accent" : "ghost")
-            tx += tw3 + 8
+            ti += 1
         }
-        Lumi.Label(24, 310, 110, "or choose", "mute", "left", 32)
-        st.act := Atlas.ActSelect(140, 310, 390, 32, d.act,
+        Lumi.Label(24, 356, 110, "or choose", "mute", "left", 32)
+        st.act := Atlas.ActSelect(140, 356, 390, 32, d.act,
             Atlas.WizActPicked(st))
         ; Click lock's value is question 4, below -- asking for it twice on
         ; one dialog would be two controls writing the same field.
         if !askLock {
-            Lumi.Label(24, 350, 120, "Details", "dim", "left", 30)
+            Lumi.Label(24, 396, 120, "Details", "dim", "left", 30)
             if TakesInputValue(d.act) {
                 ch := InputValueChoices(d.act, d.value)
                 st.valueCodes := ch.codes
-                st.value := Lumi.Select(150, 350, 380, 30, ch.labels,
+                st.value := Lumi.Select(150, 396, 380, 30, ch.labels,
                     Atlas.IndexOfText(ch.codes, d.value),
                     Atlas.WizValuePicked(st))
             } else {
-                st.value := Lumi.Field(150, 350, 300, 30, d.value, 0,
+                st.value := Lumi.Field(150, 396, 300, 30, d.value, 0,
                     "shortcut, text or menu name", true)
                 st.ed := FieldEdit(st.value)     ; the Keys picker writes here
-                Lumi.Btn(456, 350, 60, 30, "Rec", Atlas.RecValue(st), "accent")
-                Lumi.Btn(522, 350, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
+                Lumi.Btn(456, 396, 60, 30, "Rec", Atlas.RecValue(st), "accent")
+                Lumi.Btn(522, 396, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
             }
         }
         ; WRAPPED, not clipped: several of these hints are a sentence and a
@@ -16911,19 +17214,19 @@ class Atlas {
         ; question 4 showing there is no Details row above it, so the hint
         ; moves up into its place rather than leaving a 34 px hole between
         ; the action dropdown and a sentence about it.
-        st.hint := Lumi.Para(24, askLock ? 350 : 384, w - 48, 36,
+        st.hint := Lumi.Para(24, askLock ? 396 : 430, w - 48, 36,
             ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute")
 
-        progY := 428
+        progY := 474
         if askLock {
             ; 4 -- which button the lock holds
-            Lumi.Label(24, 428, 460, "4 · Which button should it hold?", "section")
+            Lumi.Label(24, 474, 460, "4 · Which button should it hold?", "section")
             ch := InputValueChoices("clicklock", d.value)
             st.valueCodes := ch.codes
-            st.value := Lumi.Select(24, 448, 380, 30, ch.labels,
+            st.value := Lumi.Select(24, 494, 380, 30, ch.labels,
                 Atlas.IndexOfText(ch.codes, d.value),
                 Atlas.WizValuePicked(st))
-            progY := 492
+            progY := 538
         }
 
         apps := AppChoices()
@@ -16987,6 +17290,32 @@ class Atlas {
      */
     static WizWhat(d) {
         switch d.act {
+            ; v0.6.5. The Home card sends the wizard here with question 3
+            ; already answered, so these are the sentences a reader sees
+            ; most often -- and "will PowerScribe: toggle dictation" (the
+            ; table's words, dropped into a sentence) is not one of them.
+            case "ps_dictate":
+                return "start or stop dictation in PowerScribe"
+            case "ps_next":
+                return "move to the next field in PowerScribe"
+            case "ps_prev":
+                return "move to the previous field in PowerScribe"
+            case "tele_prev":
+                return "send the pointer to the monitor on the left"
+            case "tele_next":
+                return "send the pointer to the monitor on the right"
+            case "radial":
+                return (d.value = "")
+                    ? "open the menu that matches the program in front"
+                    : "open the “" d.value "” menu"
+            case "moddrag":
+                switch d.value {
+                    case "LAlt":
+                        return "zoom (Alt held with a left-drag) while held"
+                    case "LCtrl":
+                        return "pan (Ctrl held with a left-drag) while held"
+                }
+                return "hold " ModifierLabel(d.value) " with a left-drag"
             case "clicklock":
                 return (d.value = "")
                     ? "lock whichever button you are holding down until pressed again"
@@ -17791,7 +18120,11 @@ class Atlas {
 
     static PanelPointer(x, y, w, h) {
         Lumi.Label(x, y, 400, "Pointer", "title")
-        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.36, 0.30], [148, 156, 138])
+        ; Band 2 grew a second column in v0.6.5 (the wheel repeat guards),
+        ; so it takes a larger share and a taller minimum; band 3 gives the
+        ; difference back. At the 940x640 minimum the three still fit:
+        ; 148 + 179 + 143 + 2 gaps of 12 = 494 = the panel's own height.
+        bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 168, 132])
         sw := Min(300, Max(160, w - 340))    ; slider track
         lx := x + 24
 
@@ -17811,20 +18144,35 @@ class Atlas {
             . "hold for momentary, tap to toggle. The original speed is "
             . "restored on release, on panic and on exit.", "mute")
 
-        ; ── drag scroll ─────────────────────────────────────────────────
+        ; ── the wheel: drag scroll, and the repeat guards ────────────────
+        ; Two columns. Left is drag scroll; right is what a HELD tilt or a
+        ; held wheel is allowed to do. At the 940 px minimum the panel is
+        ; 704 px wide, so each column is (704 - 48 - 24) / 2 = 316 and a
+        ; 150 px name plus a 90 px box (240) sits inside one with room over.
         B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
+        col := Max(240, (w - 72) // 2)
+        rxw := lx + col + 24
         Lumi.Label(lx, B.y + 12, 300, "Drag scroll", "section")
-        Lumi.Label(lx, B.y + 38, 170, "Pixels per notch", "dim", "left", 24)
-        Lumi.Field(lx + 176, B.y + 36, 90, 30, String(Cfg("scrollPtrPx")),
+        Lumi.Label(lx, B.y + 36, 150, "Pixels per notch", "dim", "left", 24)
+        Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("scrollPtrPx")),
             (t) => Atlas.SetCfgInt("scrollPtrPx", t, 2, 200, 18), "", true)
-        tw := Max(200, (w - 72) // 2)
-        Lumi.Toggle(lx, B.y + 76, "Pin the cursor while scrolling",
+        Lumi.Toggle(lx, B.y + 70, "Pin the cursor while scrolling",
             Cfg("scrollPtrPin"), (v) => Atlas.SetCfg("scrollPtrPin", v ? 1 : 0))
-        Lumi.Toggle(lx + tw, B.y + 76, "Invert (push to scroll)",
+        Lumi.Toggle(lx, B.y + 98, "Invert (push to scroll)",
             Cfg("scrollPtrInvert"),
             (v) => Atlas.SetCfg("scrollPtrInvert", v ? 1 : 0))
-        Lumi.Para(lx, B.y + 108, w - 48, B.h - 120,
+        Lumi.Label(rxw, B.y + 12, 300, "Wheel repeat", "section")
+        Lumi.Label(rxw, B.y + 36, 150, "Tilt guard (ms)", "dim", "left", 24)
+        Lumi.Field(rxw + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
+            (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150), "", true)
+        Lumi.Label(rxw, B.y + 72, 150, "Wheel guard (ms)", "dim", "left", 24)
+        Lumi.Field(rxw + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
+            (t) => Atlas.SetCfgInt("wheelRepeatMs", t, 0, 1000, 0), "", true)
+        Lumi.Para(rxw, B.y + 104, col, 40,
+            "Razer tilt wheels repeat while held; 150 ms turns a held tilt "
+            . "into one press. 0 = off.", "mute")
+        Lumi.Para(lx, B.y + 128, col, B.h - 140,
             "Bind “Drag scroll” to an input, hold it and move the mouse. "
             . "Pinning holds the cursor on the spot you started from, so "
             . "travel is unlimited and the pointer never drifts off the "
@@ -17857,9 +18205,12 @@ class Atlas {
 
     static PanelSettings(x, y, w, h) {
         Lumi.Label(x, y, 400, "Settings", "title")
-        ; The hotkey band grew: every row now carries a Rec button and a
-        ; plain-words line, and there are nine of them.
-        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.42, 0.24], [172, 212, 118])
+        ; The hotkey band SHRANK in v0.6.5: the five reading-room functions
+        ; (dictation, the two fields, the two teleports) moved to Home, where
+        ; they are shown next to the buttons and menus that also fire them.
+        ; What is left here is the four keys that are about RadMapper itself,
+        ; so the band needs two rows instead of three.
+        bands := Atlas.Bands(y + 34, h - 34, [0.36, 0.34, 0.30], [172, 160, 118])
         half := (w - 20) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
@@ -17913,28 +18264,36 @@ class Atlas {
         B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(x + 24, B.y + 10, 300, "Hotkeys", "section")
-        p2 := Atlas.Pitch(B.h - 44, 3, 52, 58)
+        p2 := Atlas.Pitch(B.h - 44, 2, 52, 58)
         hy := B.y + 30
         c1 := x + 24
         c2 := c1 + colw + 12
         c3 := c2 + colw + 12
         Atlas.HkRow(c1, hy,          "Open settings",      "hkGui",   0, 0, "", colw)
         Atlas.HkRow(c1, hy + p2,     "Pause (combo)",      "hkToggle", 0, 0, "", colw)
-        Atlas.HkRow(c1, hy + p2 * 2, "Panic release",      "hkPanic", 0, 0, "", colw)
         Atlas.HkRow(c2, hy,          "Pause (single key)", "hkPause", 0, 0,
             "its native lock toggle is suppressed", colw)
-        Atlas.HkRow(c2, hy + p2,     "PowerScribe: toggle dictation",
-            "hkDictate", 0, 0, "", colw)
-        Atlas.HkRow(c2, hy + p2 * 2, "PowerScribe: next field",
-            "hkNextField", 0, 0, "", colw)
-        Atlas.HkRow(c3, hy,          "PowerScribe: previous field",
-            "hkPrevField", 0, 0, "", colw)
-        ; The two teleports were bindable to a mouse button and to nothing
-        ; else -- the thing the script shipped to do had no keyboard row.
-        Atlas.HkRow(c3, hy + p2,     "Pointer to left monitor",
-            "hkTeleLeft", 0, 0, "", colw)
-        Atlas.HkRow(c3, hy + p2 * 2, "Pointer to right monitor",
-            "hkTeleRight", 0, 0, "", colw)
+        Atlas.HkRow(c2, hy + p2,     "Panic release",      "hkPanic", 0, 0, "", colw)
+        ; Where the five that used to be here went.
+        Lumi.Para(c3, hy, colw, 44,
+            "Dictation, the two PowerScribe fields and the two pointer "
+            . "teleports are on Home, under “Reading room essentials”.",
+            "mute")
+        ; The tilt guard lives on the Pointer page, which Simple mode hides.
+        ; A Razer tilt wheel repeating into a bound action is the kind of
+        ; thing a reader meets on day one, so Simple mode gets it here.
+        ; Sized to the COLUMN: colw is (940 - 188 - 48 - 72) / 3 = 210 at the
+        ; minimum window width, and 100 + 4 + 80 = 184 fits inside it.
+        if !Atlas.Advanced() {
+            Lumi.Label(c3, hy + p2, 100, "Tilt guard", "dim", "left", 30)
+            Lumi.Field(c3 + 104, hy + p2, 80, 30,
+                String(Cfg("tiltRepeatMs")),
+                (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150),
+                "", true)
+            Lumi.Para(c3, hy + p2 + 32, colw, 44,
+                "Milliseconds. Razer tilt wheels repeat while held; 150 "
+                . "turns a held tilt into one press. 0 = off.", "mute")
+        }
 
         ; ── band 3: behaviour + where the config lives ──────────────────
         B := bands[3]
@@ -18192,6 +18551,53 @@ class Atlas {
         return (n > 0 && Atlas.savedSel >= 1 && Atlas.savedSel <= n)
     }
 
+    /**
+     * The onPick every panel list hands to Lumi.List (v0.6.5).
+     *
+     * THE BUG THIS FIXES. Clicking a row used to do nothing but paint the
+     * row: Lumi.__ListDo writes view.sel and calls onPick, and onPick was
+     * `(i, dbl) => (dbl ? Atlas.EditRow(i) : 0)` -- a single click fell
+     * through to 0. Edit and Delete, though, are drawn ONCE per frame from
+     * Atlas.HasSel(), which reads savedSel, which is only refreshed when
+     * Build() runs; and Build() runs from Tick() only when the status
+     * signature changes. So the two buttons kept the "muted" kind they were
+     * born with -- and Lumi.Btn's muted case sets onClick := 0, so the
+     * click had nothing to run and nothing to say. Delete could therefore
+     * never be pressed at all, and Edit only after something unrelated
+     * (switching app, a new problem) happened to rebuild the frame.
+     *
+     * A pick is recorded in selWant and the frame is rebuilt, which is what
+     * makes the buttons wake up. Build() may defer that rebuild while the
+     * button is still physically down; Tick picks the deferral up.
+     */
+    static Picker(mode := "") {
+        return (i, dbl) => Atlas.PickRow(i, dbl, mode)
+    }
+
+    static PickRow(i, dbl, mode := "") {
+        if (i >= 1) {
+            Atlas.selWant := i
+            if IsObject(Atlas.list)
+                Atlas.list.sel := i
+        }
+        if dbl {
+            switch mode {
+                case "mouse": Atlas.EditRow(i)
+                case "key":   Atlas.EditRow(i, true)
+                case "menu":  Atlas.MenuEditSel()
+            }
+            return
+        }
+        ; Already the selected row? Then the buttons standing next to it are
+        ; already live and there is nothing to rebuild. Worth the test: the
+        ; FIRST click of a double click arrives here on its own (GpGFX fires
+        ; Click on the button-up), and a frame rebuilt between the two is a
+        ; frame the second click has to find its way back onto.
+        if (Atlas.savedSel = i)
+            return
+        Atlas.Build()
+    }
+
     static SelectedRef() {
         if (!IsObject(Atlas.list) || Atlas.list.sel < 1)
             return 0
@@ -18254,6 +18660,10 @@ class Atlas {
         Atlas.SaveOrWarn()
         AfterCfgChange()
         Lumi.Toast("Deleted — that one is back to normal", "magenta")
+        ; Nothing is selected afterwards: the row that was is gone, and
+        ; keeping the index would hand Edit and Delete whichever row slid
+        ; up into its place.
+        Atlas.selWant := 0
         Atlas.Build()
     }
 

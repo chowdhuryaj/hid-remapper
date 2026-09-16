@@ -113,6 +113,35 @@ _win = s[s.index('static PanelWindows('):s.index('static StationLayoutPick(')]
 _offs = [int(n) for n in re.findall(r'Atlas\.HkRow\(x \+ (\d+),', _win)]
 assert _offs, 'Windows page HkRow offsets not found'
 assert max(_offs) <= 460, ('Windows page HkRow runs past the panel', _offs)
+# MUTED ROW BUTTONS NEED A LIVE SELECTION (v0.6.5). Edit and Delete are drawn
+# once per frame from Atlas.HasSel(), which reads savedSel, which only moves
+# when Build() runs -- and Lumi.Btn's "muted" kind throws the click handler
+# away. So a page whose buttons mute themselves MUST hand its list an onPick
+# that records the pick and rebuilds (Atlas.Picker); with the old
+# `(i, dbl) => (dbl ? ... : 0)` a single click changed nothing on screen and
+# Delete could never be pressed at all.
+_src = (Path(__file__).parents[1] / 'RadMapper.ahk').read_text(encoding='utf-8-sig')
+_pan = re.compile(r'\n    static (Panel\w+)\(x, y, w, h\) \{')
+_hits = list(_pan.finditer(_src))
+_bad = []
+for _i, _m in enumerate(_hits):
+    _end = _hits[_i + 1].start() if _i + 1 < len(_hits) else len(_src)
+    _body = _src[_m.start():_end]
+    # a panel body ends at its own closing brace, not at the next panel
+    _body = _body[:_body.index('\n    }') + 6] if '\n    }' in _body else _body
+    if 'Atlas.HasSel(' in _body and 'Atlas.Picker(' not in _body:
+        _bad.append(_m.group(1))
+assert not _bad, ('A page mutes its row buttons but never records a pick', _bad)
+assert 'static Picker(mode := "")' in s, 'Atlas.Picker is missing'
+
+# THE HOME CARD FITS AT 940 px. The panel is 704 wide there (as above), the
+# card keeps 16 px gutters, and one row is
+#   name 210 + 10 + triggers + 10 + Set 74 + 8 + Clear 64
+# so the triggers column is w - 408 and everything sums to 704 - 32 = 672.
+_home = _src[_src.index('static PanelHome('):_src.index('; ── PANEL: MOUSE')]
+assert 'w - 408' in _home, 'Home essentials row width is no longer derived from w'
+assert 210 + 10 + (704 - 408) + 10 + 74 + 8 + 64 == 704 - 32, 'Home row arithmetic'
+
 # All helper text must be readable on every standard background.
 def luminance(h):
     rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
@@ -283,5 +312,5 @@ while _i < len(_B):
 assert not _shadow, ('A local shadows a class/function the same body calls', _shadow)
 
 print('PASS: UI member references, case-insensitive collisions, nested-name clashes, try/else binding, case-variant variables, class-name shadowing, timer identity, '
-      f'Windows page fit (max HkRow offset {max(_offs)} <= 460), '
+      f'Windows page fit (max HkRow offset {max(_offs)} <= 460), row-button pickers, Home card fit, '
       f'{len(pairs)} text/background contrast pairs')

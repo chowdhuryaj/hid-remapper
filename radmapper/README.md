@@ -12,7 +12,14 @@ workstation. Treat it as a candidate for testing.
 1. Install **AutoHotkey v2** from https://www.autohotkey.com (the v2 installer, not v1).
 2. Double-click `RadMapper.ahk`. A tray icon appears and the settings window
    opens on **Home** the first time each version runs.
-3. On Home, pick what you want to do:
+3. Home opens on **Reading room essentials**: one row for each of the seven
+   things this program is for — *dictate on/off*, *next field*, *previous
+   field*, *pointer to the left monitor*, *pointer to the right monitor*, the
+   *PACS wheel* and the *window presets*. Each row shows what fires it today
+   (a button, a key, a hotkey, or several, joined by "or"), a **Set…** button
+   that opens the three-question wizard with the answer to "what should it
+   do?" already filled in, and a **Clear** button that removes every trigger
+   for it. Below the card, pick a bigger job:
    - **Change what a mouse button does** (a three-question wizard: which
      button, tap or hold, what it should do; "All options" opens the full editor)
    - **Change what a keyboard key does**
@@ -59,6 +66,11 @@ In Simple view the add button is **Set a button…** on the Mouse page and
 Advanced view both become **Add new** and open the full editor. Settings ▸
 **Restore shipped defaults…** puts everything back the way it arrived (it
 asks first, and it cannot be undone).
+
+A mouse button can also be a **PACS gesture**: the wizard's *Zoom (Alt+drag)*
+and *Pan (Ctrl+drag)* tiles hold Alt or Ctrl with a left-drag while the button
+is down, which is zoom and pan in IntelliSpace; the starter pack **PACS zoom
+and pan on the thumb buttons** puts both on buttons 4 and 5 inside PACS only.
 
 A mouse button can be **another mouse button**: choose *Left click*, *Right
 click*, *Middle click*, *Double-click* or *Click lock* in the wizard, or pick
@@ -208,6 +220,23 @@ go on any mouse button.
 | A corrupt config was found on start | It was copied next to the original with a `.corrupt-` suffix and defaults were loaded. If that copy could not be made, saving is blocked until you move the file and restart. |
 
 These are the default hotkeys; Home shows the ones actually configured.
+
+The **Settings** page keeps the keys that are about RadMapper itself — *open
+settings*, *pause (combo)*, *pause (single key)* and *panic release* — plus the
+click-lock key on Pointer, the clipboard and scratchpad keys, and the keyboard
+pointer key on Windows. The five reading-room functions that used to have rows
+there (dictation, the two fields, the two teleports) are set from the Home card
+instead, where the key sits next to the buttons and menus that also fire it.
+
+### Razer tilt wheels
+
+A tilt wheel sends *WheelLeft* or *WheelRight* every 30-50 ms for as long as it
+is held over, so one tilt used to fire a bound action four or five times.
+**Tilt guard** (Pointer page, or Settings in Simple view) drops repeats that
+arrive within 150 ms of the last accepted one, per direction, which turns a
+held tilt into one press; **Wheel guard** does the same for wheel up/down and
+ships off. Set either to 0 to turn it off. Plain scrolling — a wheel direction
+with no assignment — is never touched.
 
 ## Sharing feedback
 

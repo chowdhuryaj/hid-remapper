@@ -419,12 +419,15 @@ try {
     Check(InputValueChoices("native", "RButton").codes[1] != "RButton",
         "A value the list already offers is not duplicated")
 
-    ; The wizard's five tiles: label -> action + value, and the sentence each
-    ; one produces. "Click lock" is the one that asks a fourth question, so
-    ; its value is the answer to that question, not the tile's.
+    ; The wizard's seven tiles: label -> action + value, and the sentence
+    ; each one produces. "Click lock" is the one that asks a fourth question,
+    ; so its value is the answer to that question, not the tile's. The last
+    ; two are v0.6.5's PACS gestures -- the existing moddrag action with its
+    ; modifier filled in, never a new action type.
     for tile in [["native", "LButton"], ["native", "RButton"],
                  ["native", "MButton"], ["dblclick", "LButton"],
-                 ["clicklock", "MButton"]] {
+                 ["clicklock", "MButton"], ["moddrag", "LAlt"],
+                 ["moddrag", "LCtrl"]] {
         Check(ACT_CODES[ActIndexOf(tile[1])] = tile[1],
             "Wizard tile names a real action: " tile[1])
         Check(Atlas.HasCode(Atlas.SIMPLE_ACTS, tile[1]),
@@ -464,6 +467,75 @@ try {
     Check(!MButtonHoldRisk("XButton1", "tap"),
         "Locking the middle button from button 4 must not warn")
 
+    ; ── v0.6.5 ──────────────────────────────────────────────────────────
+    ; Zoom and pan are moddrag rows, said as sentences, and the starter pack
+    ; that puts them on the thumb buttons is two ordinary PACS-scoped rows.
+    Check(Atlas.WizWhat({act: "moddrag", value: "LAlt"})
+        = "zoom (Alt held with a left-drag) while held",
+        "Alt+drag must be described as zoom")
+    Check(Atlas.WizWhat({act: "moddrag", value: "LCtrl"})
+        = "pan (Ctrl held with a left-drag) while held",
+        "Ctrl+drag must be described as pan")
+    Check(InStr(ModifierLabel("LAlt"), "zoom")
+        && InStr(ModifierLabel("LCtrl"), "pan"),
+        "The Details dropdown must name what Alt and Ctrl do in PACS")
+    pack := StarterPackByName("PACS zoom and pan on the thumb buttons")
+    Check(IsObject(pack) && pack.rows.Length = 2,
+        "The zoom/pan starter pack must exist")
+    for r in pack.rows {
+        ok := true
+        Check(r[1] = "PACS" && r[5] = "hold" && r[6] = "moddrag",
+            "A zoom/pan pack row is a PACS-scoped moddrag hold")
+        Check(ValidateActionValue(0, r[6], r[7], &ok) = r[7] && ok,
+            "Pack row value rejected: " r[7])
+    }
+    ; The Home card's sentences. WizSummary drops these into "..., when you
+    ; tap it, will X - in every program", so each one has to BE a verb
+    ; phrase; the fallback (the action table's own words) is not.
+    Check(Atlas.WizWhat({act: "ps_dictate", value: ""})
+        = "start or stop dictation in PowerScribe", "Dictate sentence")
+    Check(Atlas.WizWhat({act: "tele_prev", value: ""})
+        = "send the pointer to the monitor on the left", "Teleport sentence")
+    Check(InStr(Atlas.WizWhat({act: "radial", value: "PACS"}), "PACS")
+        && InStr(Atlas.WizWhat({act: "radial", value: ""}), "matches"),
+        "A radial menu is named in the summary, or said to be automatic")
+    ; Every essential the Home card lists must name a real action, and the
+    ; two menu rows must name menus that actually ship.
+    for e in Atlas.ESSENTIALS {
+        Check(ActIndexOf(e[2]) > 0, "Essential names a real action: " e[2])
+        Check(e[4] = "" || DEFAULTS.Has(e[4]),
+            "Essential names a real setting: " e[4])
+    }
+
+    ; THE WHEEL REPEAT GUARD (v0.6.5). Pure: a fake clock and a map of its
+    ; own, so the Razer tilt can be replayed without a mouse. A notch is
+    ; measured against the last ACCEPTED notch, never against the last notch
+    ; seen -- a wheel held over sends one every 30-50 ms, and measuring
+    ; against the previous drop would let every one of them through the
+    ; moment the burst outlasted the window.
+    seen := Map()
+    Check(WheelAccept("WheelLeft", 1000, seen, 150), "The first notch is let through")
+    Check(!WheelAccept("WheelLeft", 1040, seen, 150), "A repeat 40 ms later is dropped")
+    Check(!WheelAccept("WheelLeft", 1080, seen, 150), "So is the next one")
+    Check(!WheelAccept("WheelLeft", 1149, seen, 150), "And the one just inside the window")
+    Check(WheelAccept("WheelLeft", 1150, seen, 150), "A notch at the window edge is a new press")
+    ; The two directions are counted separately: a flick left then right is
+    ; two presses, however fast the hand is.
+    Check(WheelAccept("WheelRight", 1155, seen, 150), "Left never limits right")
+    ; 0 turns it off completely, and nothing is recorded while it is off.
+    Check(WheelAccept("WheelUp", 2000, seen, 0) && WheelAccept("WheelUp", 2001, seen, 0),
+        "A guard of 0 lets every notch through")
+    Check(!seen.Has("WheelUp"), "A guard of 0 records nothing")
+    ; A_TickCount wraps every 49.7 days; a negative gap must not swallow
+    ; input for the next 150 ms.
+    Check(WheelAccept("WheelLeft", 900, seen, 150), "A wrapped clock accepts")
+    Check(WheelLimitMs("WheelLeft") = WheelLimitMs("WheelRight"),
+        "Both tilts share the tilt guard")
+    Check(WheelLimitMs("WheelUp") = WheelLimitMs("WheelDown"),
+        "Both wheel directions share the wheel guard")
+    Check(DEFAULTS["tiltRepeatMs"] = 150 && DEFAULTS["wheelRepeatMs"] = 0,
+        "The shipped guards are 150 ms on tilt, off on the wheel")
+
     ; Elide is pure arithmetic over Lumi.Size -- no layer, no GpGFX.
     Check(Lumi.Elide("short", 400, "body") = "short", "Elide cut a string that fits")
     long := "PowerScribe: previous field, in every program"
@@ -489,7 +561,8 @@ try {
         . "float round-trip, window placement, keyboard pointer geometry, "
         . "clamped thresholds, hold/repeat action classes, MButton hold risk, "
         . "event labels, elision, "
-        . "input-value options, wizard tiles, Details widget families`n", "*")
+        . "input-value options, wizard tiles, Details widget families, "
+        . "wheel repeat guard, PACS zoom/pan pack, reading-room essentials`n", "*")
     ExitApp(0)
 } catch as e {
     FileAppend("FAIL: " e.Message " (line " e.Line ")`n", "**")
