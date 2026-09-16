@@ -1,4 +1,4 @@
-# RadMapper 0.6.1-preview
+# RadMapper 0.6.2-preview
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -66,6 +66,68 @@ To edit a menu, use **Edit commands**: each row has a label, an action, the
 recorded shortcut, and an icon. A row set to "Radial menu" opens another menu
 inside this one. Size 9 is the numbered ring for presets.
 
+## Window arrangements that follow you between stations
+
+The **Windows** page (turn on "Show advanced pages" on Home) saves where every
+window sits and puts it back: in one click, on any button ("Apply window
+layout"), or automatically. Since 0.6.2 an arrangement is not tied to the
+station it was saved on:
+
+- Each window remembers its **screen, counted left to right**, and its place
+  on that screen as a fraction of the work area. On the saving station it is
+  restored pixel for pixel. On any other station it is **adapted**: screens
+  are mapped by position onto the screens that exist (a four-screen
+  arrangement folds onto three), and maximised stays maximised.
+- **Imaging screens are reserved.** "auto" treats portrait screens, and
+  screens with clearly more pixels than the smallest one, as imaging
+  screens: the viewer goes there, nothing else does. A station whose
+  screens are all alike reserves nothing. Type `none` or `2,3` in **Imaging
+  screens** to overrule it for the station in front of you.
+- **Stations are recognised.** The monitor set is the station's identity.
+  The first arrangement saved on a station becomes its own (change it in
+  **Arrangement here**); with **Auto-apply** on, the arrangement is applied
+  when RadMapper starts and whenever the screens change (docking, a KVM,
+  a display waking late).
+- **Keep in place** has three settings per arrangement: off; **always**
+  (a program that moves or resizes a window is undone); **new windows**
+  (a window is placed once, the first time it appears, and never touched
+  again, so PACS opened after RadMapper lands on the right screen and a
+  window you then move stays moved). Neither runs while a mouse button is
+  down.
+
+Two shortcuts move the **active window** without dragging: "Window → next
+screen" / "previous screen" (keeps its shape, or stays maximised) and
+"Fill screen" (maximise on the screen it is on; again restores). Both are
+unassigned until you type a key on the Windows page. The same thing is
+available as the action **Window: move / fill** on any button, with a value
+such as `next`, `here max`, `2 left`, `br`.
+
+## Keyboard pointer (Ctrl+Alt+G)
+
+A keyboard-driven pointer for reaching small controls across several
+screens without the mouse, in the spirit of "mouseless":
+
+1. **Ctrl+Alt+G** covers the screen under the pointer with a lettered grid.
+   Type a cell: **column letter, then row letter**. The pointer jumps there.
+   **Tab** / **Shift+Tab** or **1-9** move the grid to another screen.
+2. The cell becomes the **region**, and a **loupe** appears beside the
+   pointer showing the region magnified with nine letters over it.
+   **Q W E / A S D / Z X C** zoom into that ninth, again and again, down to
+   the pixel. **Arrow keys** nudge by 1 px (Shift 10, Ctrl 40).
+   **Backspace** goes back a step; **Home** starts over; **+ / -** change the
+   magnification; **L** hides the loupe.
+3. **Space** or **Enter** clicks. **R** right-clicks, **M** middle-clicks,
+   **F** double-clicks. **G** grabs (holds the left button) so the next moves
+   drag; Space or G drops. **N** snaps the pointer onto the control under it
+   (UI Automation, so toolbars and dialogs; not buttons painted inside an
+   image canvas). **V** leaves the pointer where it is. **Esc** closes.
+   **PgUp / PgDn** scroll under the pointer.
+
+While it is open nothing you type reaches the application. The panic key
+(Ctrl+Alt+Q) closes it too, and it closes itself after 45 s without a key.
+The hotkey is on the Windows page; the action **Keyboard pointer** can also
+go on any mouse button.
+
 ## If something feels wrong
 
 | Problem | Do this |
@@ -104,7 +166,9 @@ the same setup sequence.
 
 The regression script sets `RM_TEST` so RadMapper's startup (tray, hooks,
 hotkeys) is skipped, then exercises the real JSON, config, menu and save helpers
-with a temporary config. It installs no bindings.
+with a temporary config, plus the station, layout-adaptation, window-placement
+and keyboard-pointer geometry helpers with a made-up three-screen station. It
+installs no bindings and opens no overlay.
 
 See `SECOND-PASS.md` for the second-pass findings and remaining Windows checks,
 and the changelog at the top of `RadMapper.ahk` for everything since 0.5.2.

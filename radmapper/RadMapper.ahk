@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.1-preview  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.2-preview  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -25,6 +25,46 @@
 ;    rename, explicit shortcut validation, foreground cancellation, reliable
 ;    preview return timer, retained failed-save state and transactional import.
 ;    F1 quick help, clearer Home defaults, readable hints and softer pink.
+;
+;  v0.6.2: WINDOWS THAT FOLLOW YOU BETWEEN STATIONS, and a KEYBOARD POINTER.
+;
+;    * STATION-AWARE ARRANGEMENTS. A saved window arrangement used to be a
+;      list of absolute rectangles, which is meaningless at any station but
+;      the one it was captured on. Every slot now also remembers its SCREEN
+;      (counted left to right) and its place on that screen as fractions of
+;      the work area. On the capturing station it applies pixel for pixel;
+;      anywhere else it ADAPTS: screens are mapped by relative position onto
+;      the screens that exist, imaging screens (portrait, or markedly more
+;      pixels than the smallest -- or listed by hand) are kept for the
+;      viewer and refused to everything else, and maximised stays maximised
+;      on the mapped screen. A maximised window on the WRONG screen is now
+;      corrected, too; it used to count as done.
+;    * STATIONS. The monitor set is the station's identity
+;      ("1920x1080|2048x1536|1920x1080"). Each station names the arrangement
+;      that belongs on it (the first one saved there, by default) and which
+;      screens are imaging screens. When the monitor set changes -- dock,
+;      KVM, a display waking late, logging in elsewhere -- the engine
+;      recognises the station and applies its arrangement; on launch too.
+;      "Keep in place" gained a gentle third mode, NEW WINDOWS: a window is
+;      placed once, when it first appears, and never touched again, so PACS
+;      opened after RadMapper lands on the right screen and a window you
+;      then move stays moved.
+;    * WINDOW BY KEYSTROKE. The action "Window: move / fill" sends the ACTIVE
+;      window to a screen (next, prev, here, 1-9) and/or a tile (max, left,
+;      right, top, bottom, corners). Three Settings hotkeys for the common
+;      three, unassigned by default; the Windows page has the fields.
+;    * KEYBOARD POINTER (Ctrl+Alt+G). The keyboard version of "mouseless": a
+;      lettered grid over the screen under the pointer (column letter, then
+;      row letter), then Q W E / A S D / Z X C zoom into ninths down to the
+;      pixel, with a LOUPE beside the pointer showing the region magnified
+;      and the same nine letters drawn over it -- a 14 px PACS toolbar
+;      button is picked by reading a letter off a picture of it. Space
+;      clicks, R / M / F right, middle, double; G grabs so the next moves
+;      DRAG; N snaps onto the control under the pointer (UI Automation);
+;      Tab and 1-9 change screen; arrows nudge; Esc closes. An invisible
+;      InputHook owns the keyboard while it is up (nothing typed reaches the
+;      viewer), modifiers stay live for the panic key, engine key rows are
+;      gated, and a 45 s idle timeout guarantees the keyboard comes back.
 ;
 ;  v0.6.1f: THE "SET A BUTTON" WIZARD. One dialog, three numbered
 ;  questions -- which button (tiles: Button 4, Button 5, Middle, or record
@@ -708,7 +748,7 @@ if !IsSet(RM_TEST)
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.1-preview"
+global RM_VERSION := "0.6.2-preview"
 global g_CfgRecoveryBlocked := false
 global g_CfgSaveFailed := false   ; last SaveCfg() threw or was blocked
 ; -- WHERE THE CONFIG LIVES (v0.4.1) -----------------------------------------
@@ -778,6 +818,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "sniper", "boost", "scrollptr", "zoomptr", "clicklock", "wldial", "appswitch",
     "clipboard", "scratchpad",
     "layout",
+    "winplace", "warp",
     "radial",
     "macro", "run", "guiopen", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
@@ -805,6 +846,8 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Open the clipboard shelf",
     "Open the scratchpad",
     "Apply window layout",
+    "Window: move / fill the active window",
+    "Keyboard pointer (grid + loupe; click and drag by keys)",
     "Radial menu (hold and flick a direction)",
     "Run macro", "Run program",
     "Open RadMapper settings", "Toggle engine pause", "Disabled"]
@@ -838,6 +881,14 @@ global ACT_HINTS := Map(
     "wldial", "+1 or -1 (sends W/L preset digits 1..9,0 on a ring)",
     "layout", "Leave BLANK to pick from a list at the cursor, or name one "
             . "layout from the Windows tab to apply it directly",
+    "winplace", "A screen and/or a tile, e.g. next, prev, here, 2, max, "
+              . "left, right, top, bottom, tl, tr, bl, br. 'next' keeps the "
+              . "window's shape on the next screen; 'max' fills the screen it "
+              . "is on (again restores); 'here max' fills the screen under "
+              . "the pointer",
+    "warp", "No value needed — opens the lettered grid on the screen under "
+          . "the pointer (again closes it). Space clicks, G drags, N snaps "
+          . "to the control under the pointer, Esc closes",
     "clipboard", "No value needed — the last 25 copies, at the cursor",
     "scratchpad", "No value needed — your saved snippets, at the cursor",
     "appswitch", "+1 or -1. Put it on the wheel inside a layer: the list "
@@ -953,6 +1004,19 @@ global DEFAULTS := Map(
                                ;   menu and that menu takes over, still held
     "hkClipboard", "^!c",
     "hkScratch", "^!n",
+    ; v0.6.2: stations, window placement, the keyboard pointer
+    "stationAuto", 1,          ; apply a station's arrangement when its screens
+                               ;   appear (launch, dock, KVM, log-in elsewhere)
+    "stationSettleMs", 2500,   ; wait for Windows to finish re-enumerating
+    "imagingMons", "auto",     ; which screens are imaging displays, unless the
+                               ;   station says: auto | none | "2,3"
+    "hkWinNext", "",           ; active window -> next screen (left to right)
+    "hkWinPrev", "",           ; active window -> previous screen
+    "hkWinMax", "",            ; fill the screen it is on (again = restore)
+    "hkWarp", "^!g",           ; the keyboard pointer: grid + loupe
+    "warpZoom", 4,             ; loupe magnification 2..12 (+/- while open)
+    "warpLoupe", 1,            ; 1 = show the loupe in the fine stage
+    "warpCell", 110,           ; target grid cell size, px
     ; Window-switcher hide list. Rules separated by "|", each one
     ;     exe.name:title fragment
     ; with "*" (or an empty side) meaning "any". The title is matched as a
@@ -2315,6 +2379,8 @@ NormalizeCfg() {
     }
     if !c.Has("layouts")
         c["layouts"] := []
+    if !c.Has("stations")
+        c["stations"] := []
     if !c.Has("menus")
         c["menus"] := []
     if !c.Has("snippets")
@@ -2327,13 +2393,15 @@ NormalizeCfg() {
         c["layers"] := ["Base"]
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
+    MigrateLayoutSlots()                     ; v0.6.2: layouts learn their screen
     SeedNativeDefaults(c)                  ; unified button-path layer.
 }
 
 ValidateCfgShape(c) {
     if !(c is Map) || !(MGet(c, "bindings", 0) is Array)
         throw Error("Expected a settings object with a bindings list")
-    for key in ["apps", "layers", "layouts", "menus", "snippets", "psExes"] {
+    for key in ["apps", "layers", "layouts", "menus", "snippets", "psExes",
+                "stations"] {
         if (c.Has(key) && !(c[key] is Array))
             throw Error(key " must be a list")
     }
@@ -3412,6 +3480,13 @@ KbHookActive(hk) {
 OnPressHK(btn, *) {
     Critical "On"
     TestNotify(btn, 1)
+    ; v0.6.2: while the keyboard pointer is up it owns every key. A bound key
+    ; row is a hooked "*key" hotkey and would beat its InputHook to the key,
+    ; so the row is bypassed here and the key handed over (and suppressed).
+    if (Warp.active && IsKeyInput(btn)) {
+        Warp.FromHook(btn)
+        return
+    }
     ; A reinjected click can never change which window is the foreground one
     ; (Windows' foreground lock), so the engine must manage activation itself
     ; around its own windows. Ours-ness is POSITIONAL (window under the
@@ -3755,6 +3830,8 @@ OnReleaseHK(btn, *) {
     Critical "On"
     TestNotify(btn, 0)
     st := BS(btn)
+    if (Warp.active && IsKeyInput(btn) && !st)
+        return                               ; press went to the keyboard pointer
     if (!st || !st.down) {
         SendNativeUp(btn)                    ; safety: never leave one stuck
         if st
@@ -4080,6 +4157,10 @@ ActionFire(binding, st) {
             AppSwitchStep(st, v)
         case "layout":
             LayoutApply(v)
+        case "winplace":
+            WinPlace(v)
+        case "warp":
+            Warp.Toggle()
         case "radial":
             ; A SECOND TAP while a menu is up is the cancel gesture: the only
             ; other ways out of a tap-opened menu were Escape and a timeout,
@@ -5617,7 +5698,7 @@ AppSwitchPaint() {
 }
 
 
-; ── §7c  WINDOW LAYOUTS (multi-monitor) ─────────────────────────────────────
+; ── §7c  WINDOW LAYOUTS (multi-monitor, station-aware) ──────────────────────
 ;
 ; A reading station is a fixed arrangement of the same six or seven windows
 ; across three or four displays, and two things keep breaking it: a window
@@ -5626,12 +5707,42 @@ AppSwitchPaint() {
 ; arrangement captured once, by name, and put back on demand -- and, when it
 ; is armed, put back again whenever something drifts.
 ;
+; v0.6.2 makes a layout survive a DIFFERENT STATION. A radiologist reads at
+; several workstations a week, and no two have the same monitors in the same
+; order; the only near-constant is that the diagnostic display shows images
+; and nothing else -- and even that is not true everywhere. So:
+;
+;   * A slot remembers WHICH screen it sat on, counted left to right, and
+;     WHERE on that screen as fractions of its work area, next to the
+;     absolute rectangle. On the station it was captured on the absolute
+;     rectangle is used, pixel for pixel. Anywhere else the slot is ADAPTED:
+;     its screen is mapped by relative position onto the screens that exist
+;     and its fractions are re-applied there. Maximised stays maximised.
+;   * A STATION is the set of monitors the engine can see, identified by
+;     their sizes in left-to-right order ("1920x1080|2048x1536|1920x1080").
+;     Each station can name the arrangement that belongs on it and which of
+;     its screens are IMAGING screens; when the monitor set changes (dock,
+;     log-in elsewhere, a display waking late) the engine recognises the
+;     station and applies its arrangement.
+;   * Imaging screens are RESERVED while adapting: a window that is not the
+;     viewer is never placed on one while an unreserved screen exists, and
+;     the viewer prefers one. "auto" reserves portrait screens and screens
+;     with markedly more pixels than the smallest one; a station can say
+;     "none", or list them ("2,3"); nothing is ever reserved when that would
+;     reserve every screen.
+;
 ; SHAPE (config key "layouts", an array):
-;     Map("name",  "Reading",
-;         "guard", 0|1,
-;         "slots", [ Map("exe","title","ord","x","y","w","h","state") ... ])
+;     Map("name",    "Reading",
+;         "guard",   0|1|2,       0 off, 1 keep in place, 2 place NEW windows only
+;         "station", "1920x1080|2048x1536",     the monitor set it was captured on
+;         "slots", [ Map("exe","title","ord","x","y","w","h","state",
+;                        "mon","fx","fy","fw","fh") ... ])
 ; state is "normal" | "max"; minimised windows are not captured, because a
 ; layout that re-minimises windows is a layout nobody wants restored.
+;
+; SHAPE (config key "stations", an array):
+;     Map("key", "1920x1080|2048x1536", "name", "", "imaging", "auto"|"none"|"2,3"|"",
+;         "layout", "Reading")
 ;
 ; MATCHING is the whole difficulty. Titles on this workstation are not
 ; stable -- PowerScribe puts the patient in the title, and IntelliSpace runs
@@ -5643,15 +5754,21 @@ AppSwitchPaint() {
 ;     3. same exe + same ordinal position      (nth window of that process)
 ;     4. same exe, any window still unclaimed
 ;
-; The guard is opt-in per layout and deliberately blunt: while armed it snaps
-; drifted windows back on a timer. It never runs while a mouse button is
-; physically down, so it cannot fight a drag in progress, and it ignores
-; minimised windows. If you want to move something and keep it moved, disarm
-; the guard -- that is the honest trade for having it undo an application's
-; unasked-for resize.
+; The guard is opt-in per layout. Mode 1 is deliberately blunt: while armed
+; it snaps drifted windows back on a timer. Mode 2 is the gentle one for a
+; station's own arrangement: it places a window ONCE, when it first appears,
+; and never touches it again -- so PACS opened after RadMapper still lands on
+; the right screen, and a window you then move stays moved. Neither runs
+; while a mouse button is physically down, so they cannot fight a drag in
+; progress, and both ignore minimised windows.
 
 global g_LayoutGuard := ""        ; name of the armed layout, "" = none
 global g_LayoutSnaps := 0         ; windows snapped back this session
+global g_LayoutPlaced := Map()    ; hwnd -> 1: already placed by a mode-2 guard
+global g_StationKey := ""         ; monitor set the engine last saw
+global g_StationSeen := Map()     ; station keys announced this session
+global g_StationStartup := true   ; first StationSettled pass is the launch pass
+global g_LayoutAdapted := false   ; last LayoutApplyRows had to adapt to this station
 
 global LAYOUT_TOL := 8            ; px of drift the guard tolerates
 
@@ -5670,6 +5787,360 @@ LayoutIndexOf(name) {
     }
     return 0
 }
+
+; --- stations -----------------------------------------------------------------
+
+/**
+ * Every monitor, LEFT TO RIGHT (then top to bottom), with its bounds and its
+ * work area. idx is the position in this order -- the number every station
+ * feature means by "screen 2". OS enumeration order is not used anywhere:
+ * it changes with cable swaps and driver updates; left-to-right does not.
+ */
+StationMons() {
+    arr := []
+    loop MonitorGetCount() {
+        MonitorGet(A_Index, &l, &t, &r, &b)
+        MonitorGetWorkArea(A_Index, &wl, &wt, &wr, &wb)
+        arr.Push({i: A_Index, l: l, t: t, r: r, b: b,
+                  wl: wl, wt: wt, wr: wr, wb: wb,
+                  w: r - l, h: b - t,
+                  primary: (A_Index = MonitorGetPrimary())})
+    }
+    return StationSort(arr)
+}
+
+/** Insertion sort by left edge, then top edge; assigns idx. Pure. */
+StationSort(arr) {
+    i := 2
+    while (i <= arr.Length) {
+        key := arr[i]
+        j := i - 1
+        while (j >= 1 && (arr[j].l > key.l
+                          || (arr[j].l = key.l && arr[j].t > key.t))) {
+            arr[j + 1] := arr[j]
+            j -= 1
+        }
+        arr[j + 1] := key
+        i += 1
+    }
+    for k, m in arr
+        m.idx := k
+    return arr
+}
+
+/** "1920x1080|2048x1536|1920x1080": the identity of a monitor set. */
+StationKey(mons := 0) {
+    if !IsObject(mons)
+        mons := StationMons()
+    s := ""
+    for m in mons
+        s .= (s = "" ? "" : "|") m.w "x" m.h
+    return s
+}
+
+/** Number of screens a station key describes. */
+StationCount(key) {
+    return (key = "") ? 0 : StrSplit(key, "|").Length
+}
+
+/** "3 screens · 1920x1080 · 2048x1536 · 1920x1080" */
+StationLabel(key) {
+    if (key = "")
+        return "no screens"
+    parts := StrSplit(key, "|")
+    s := parts.Length " screen" (parts.Length = 1 ? "" : "s")
+    for p in parts
+        s .= " · " p
+    return s
+}
+
+/** The station record for a key ("" = the current station); create on request. */
+StationEntry(key := "", create := false) {
+    if (key = "")
+        key := StationKey()
+    for st in MGet(g_Cfg, "stations", []) {
+        if (MGet(st, "key", "") = key)
+            return st
+    }
+    if !create
+        return 0
+    st := Map()
+    st["key"] := key
+    st["name"] := ""
+    st["imaging"] := ""
+    st["layout"] := ""
+    if !g_Cfg.Has("stations")
+        g_Cfg["stations"] := []
+    g_Cfg["stations"].Push(st)
+    return st
+}
+
+/**
+ * Which screens (left-to-right idx) are imaging displays, as Map(idx -> 1).
+ * rule: "auto" | "none" | "2" | "2,3". Pure: takes the monitor list.
+ *
+ *   auto  = portrait screens, and screens with at least 35% more pixels than
+ *           the smallest one. The 3 MP and 5 MP greyscale displays a reading
+ *           room uses are both; a colour worklist screen next to them is
+ *           neither. If the rule would reserve EVERY screen it reserves none:
+ *           there has to be somewhere for the worklist to go.
+ */
+ImagingMons(mons, rule := "auto") {
+    out := Map()
+    n := mons.Length
+    if (n < 2)
+        return out
+    rule := Trim(StrLower(String(rule)))
+    if (rule = "none")
+        return out
+    if (rule = "" || rule = "auto") {
+        minA := 0
+        for m in mons {
+            a := m.w * m.h
+            if (minA = 0 || a < minA)
+                minA := a
+        }
+        for m in mons {
+            if (m.h > m.w || (minA > 0 && m.w * m.h >= minA * 1.35))
+                out[m.idx] := 1
+        }
+    } else {
+        for tok in StrSplit(rule, [",", " ", ";"]) {
+            tok := Trim(tok)
+            if (tok != "" && IsInteger(tok) && Integer(tok) >= 1
+                && Integer(tok) <= n)
+                out[Integer(tok)] := 1
+        }
+    }
+    if (out.Count >= n)
+        out := Map()
+    return out
+}
+
+/** The imaging rule in force for a station: its own, else the global setting. */
+StationImagingRule(st := 0) {
+    r := IsObject(st) ? Trim(String(MGet(st, "imaging", ""))) : ""
+    return (r != "") ? r : Cfg("imagingMons")
+}
+
+/** "screen 2" / "screens 2 and 3" / "none" */
+ImagingWords(reserved) {
+    if (reserved.Count = 0)
+        return "none"
+    idxs := []
+    for k in reserved
+        idxs.Push(k)
+    ; Map iteration order is insertion order; sort for the sentence
+    i := 2
+    while (i <= idxs.Length) {
+        key := idxs[i]
+        j := i - 1
+        while (j >= 1 && idxs[j] > key) {
+            idxs[j + 1] := idxs[j]
+            j -= 1
+        }
+        idxs[j + 1] := key
+        i += 1
+    }
+    if (idxs.Length = 1)
+        return "screen " idxs[1]
+    s := "screens "
+    for k, v in idxs
+        s .= (k = 1 ? "" : (k = idxs.Length ? " and " : ", ")) v
+    return s
+}
+
+/** Left-to-right index of the monitor containing (or nearest to) a point. */
+MonIndexAt(mons, px, py) {
+    for m in mons {
+        if (px >= m.l && px < m.r && py >= m.t && py < m.b)
+            return m.idx
+    }
+    best := 1
+    bestD := 0
+    for m in mons {
+        dx := (px < m.l) ? m.l - px : (px >= m.r ? px - m.r + 1 : 0)
+        dy := (py < m.t) ? m.t - py : (py >= m.b ? py - m.b + 1 : 0)
+        d := dx * dx + dy * dy
+        if (m.idx = 1 || d < bestD) {
+            best := m.idx
+            bestD := d
+        }
+    }
+    return best
+}
+
+/** Exes the imaging viewer runs as: the PACS app profile's, else IntelliSpace. */
+ImagingExes() {
+    out := Map()
+    for app in MGet(g_Cfg, "apps", []) {
+        if (MGet(app, "name", "") != Cfg("pacsApp"))
+            continue
+        for m in MGet(app, "match", []) {
+            s := Trim(String(m))
+            if (SubStr(s, 1, 6) = "title:" || s = "")
+                continue
+            if (SubStr(s, 1, 8) = "ahk_exe ")
+                s := Trim(SubStr(s, 9))
+            else if InStr(s, "ahk_")
+                continue
+            out[StrLower(s)] := 1
+        }
+    }
+    if (out.Count = 0)
+        out["intellispacepacsradiology.exe"] := 1
+    return out
+}
+
+/**
+ * Is this slot the imaging viewer? Exe says PACS AND the title says viewer
+ * (pacsWindow, "VirtualMonitor" by default): IntelliSpace's worklist is the
+ * same exe and belongs on the colour screen, not the diagnostic one.
+ */
+SlotIsImaging(slot, exes := 0) {
+    if !IsObject(exes)
+        exes := ImagingExes()
+    if !exes.Has(StrLower(MGet(slot, "exe", "")))
+        return false
+    want := Trim(Cfg("pacsWindow"))
+    return (want = "") || InStr(MGet(slot, "title", ""), want) ? true : false
+}
+
+/**
+ * Which current screen a slot lands on. Pure, given the monitor list and the
+ * reserved set.
+ *
+ * Same station as the capture: its own screen. Otherwise the slot's screen
+ * (nth of N) maps to the nearest nth of the M screens that exist -- so a
+ * four-screen arrangement folds onto three, and a three-screen one spreads
+ * over four -- and then the reservation is applied: a viewer slot moves to
+ * the nearest reserved screen, anything else moves OFF a reserved screen.
+ */
+LayoutMonFor(slot, lay, mons, reserved, imaging := -1) {
+    n := mons.Length
+    if (n < 1)
+        return 1
+    sm := Integer(MGet(slot, "mon", 1))
+    sm := Min(Max(sm, 1), 99)
+    if (StationKey(mons) = MGet(lay, "station", ""))
+        return Min(sm, n)
+    capN := Max(StationCount(MGet(lay, "station", "")), sm, 1)
+    tgt := Round((sm - 0.5) / capN * n + 0.5)
+    tgt := Min(Max(tgt, 1), n)
+    if (reserved.Count = 0 || reserved.Count >= n)
+        return tgt
+    if (imaging = -1)
+        imaging := SlotIsImaging(slot)
+    if (imaging && !reserved.Has(tgt))
+        return NearestMon(tgt, n, reserved, true)
+    if (!imaging && reserved.Has(tgt))
+        return NearestMon(tgt, n, reserved, false)
+    return tgt
+}
+
+/** Nearest screen index whose reserved-ness matches wantReserved. */
+NearestMon(from, n, reserved, wantReserved) {
+    best := from
+    bestD := 999
+    loop n {
+        isRes := reserved.Has(A_Index) ? true : false
+        if (isRes != wantReserved)
+            continue
+        d := Abs(A_Index - from)
+        if (d < bestD) {
+            best := A_Index
+            bestD := d
+        }
+    }
+    return best
+}
+
+/**
+ * The absolute target rectangle for a slot on the current station:
+ * {x, y, w, h, mon, adapted}. Exact on the capturing station; adapted from
+ * the fractions elsewhere; a pre-0.6.2 slot with no fractions is kept where
+ * it was if that is still on some screen, else centred on its mapped screen.
+ */
+LayoutSlotTarget(slot, lay, mons, reserved, exes := 0) {
+    mi := LayoutMonFor(slot, lay, mons, reserved,
+        IsObject(exes) ? SlotIsImaging(slot, exes) : -1)
+    m := mons[mi]
+    same := (StationKey(mons) = MGet(lay, "station", ""))
+    sx := MGet(slot, "x", 0), sy := MGet(slot, "y", 0)
+    sw := MGet(slot, "w", 0), sh := MGet(slot, "h", 0)
+    if (same && slot.Has("x"))
+        return {x: sx, y: sy, w: sw, h: sh, mon: m, adapted: false}
+    ww := Max(m.wr - m.wl, 1)
+    wh := Max(m.wb - m.wt, 1)
+    if !slot.Has("fx") {
+        ; legacy slot: on-screen somewhere? keep it. Else centre it.
+        cx := sx + sw // 2, cy := sy + sh // 2
+        for om in mons {
+            if (cx >= om.l && cx < om.r && cy >= om.t && cy < om.b)
+                return {x: sx, y: sy, w: sw, h: sh, mon: om, adapted: true}
+        }
+        w := Min(Max(sw, 200), ww), h := Min(Max(sh, 120), wh)
+        return {x: m.wl + (ww - w) // 2, y: m.wt + (wh - h) // 2,
+                w: w, h: h, mon: m, adapted: true}
+    }
+    fw := Min(Max(MGet(slot, "fw", 1.0) + 0.0, 0.1), 1.0)
+    fh := Min(Max(MGet(slot, "fh", 1.0) + 0.0, 0.1), 1.0)
+    w := Max(Round(fw * ww), 120)
+    h := Max(Round(fh * wh), 80)
+    x := m.wl + Round((MGet(slot, "fx", 0) + 0.0) * ww)
+    y := m.wt + Round((MGet(slot, "fy", 0) + 0.0) * wh)
+    ; keep it on the screen it was mapped to
+    x := Min(Max(x, m.wl), m.wr - w)
+    y := Min(Max(y, m.wt), m.wb - h)
+    return {x: x, y: y, w: w, h: h, mon: m, adapted: true}
+}
+
+/** Fill a slot's screen-relative fields from an absolute rect. */
+SlotSetRelative(s, mons, x, y, w, h) {
+    mi := MonIndexAt(mons, x + w // 2, y + h // 2)
+    m := mons[mi]
+    ww := Max(m.wr - m.wl, 1)
+    wh := Max(m.wb - m.wt, 1)
+    s["mon"] := mi
+    s["fx"] := Round((x - m.wl) / ww, 4)
+    s["fy"] := Round((y - m.wt) / wh, 4)
+    s["fw"] := Round(w / ww, 4)
+    s["fh"] := Round(h / wh, 4)
+}
+
+/**
+ * Pre-0.6.2 layouts carry absolute rectangles only. They were captured on
+ * THIS machine (there was no other way to get one into this config), so
+ * their screen and fractions are derived against the current station once,
+ * on load, and the layout is stamped with it. Nothing about how they apply
+ * here changes; they merely become portable.
+ */
+MigrateLayoutSlots() {
+    mons := 0
+    for lay in MGet(g_Cfg, "layouts", []) {
+        if !(lay is Map)
+            continue
+        if (MGet(lay, "station", "") != "")
+            continue
+        if !IsObject(mons) {
+            try mons := StationMons()
+            catch
+                return
+            if (mons.Length = 0)
+                return
+        }
+        for s in MGet(lay, "slots", []) {
+            if (!(s is Map) || s.Has("fx") || !s.Has("x"))
+                continue
+            try SlotSetRelative(s, mons, s["x"], s["y"], s["w"], s["h"])
+        }
+        lay["station"] := StationKey(mons)
+        g := MGet(lay, "guard", 0)
+        lay["guard"] := (g = 1 || g = 2) ? g : 0
+    }
+}
+
+; --- capture / match / apply --------------------------------------------------
 
 /**
  * Every window a layout could reasonably own, in z-order, with its ordinal
@@ -5711,6 +6182,7 @@ LayoutCapture(name) {
     name := Trim(name)
     if (name = "")
         return 0
+    mons := StationMons()
     slots := []
     for wnd in LayoutWindows() {
         try {
@@ -5730,6 +6202,7 @@ LayoutCapture(name) {
             s["y"] := wy
             s["w"] := ww
             s["h"] := wh
+            SlotSetRelative(s, mons, wx, wy, ww, wh)
             slots.Push(s)
         }
     }
@@ -5747,6 +6220,13 @@ LayoutCapture(name) {
             g_Cfg["layouts"] := []
         g_Cfg["layouts"].Push(lay)
     }
+    lay["station"] := StationKey(mons)
+    ; The first arrangement saved on a station becomes that station's own,
+    ; so "save it" is enough for it to come back next time the engine sees
+    ; these screens. Change it on the Windows page.
+    st := StationEntry(lay["station"], true)
+    if (MGet(st, "layout", "") = "" || !IsObject(LayoutByName(st["layout"])))
+        st["layout"] := name
     return slots.Length
 }
 
@@ -5785,17 +6265,36 @@ LayoutMatch(slot, wins, claimed) {
     return 0
 }
 
+/** Maximise a window ON a given screen (WinMaximize alone keeps its screen). */
+WinMaximizeOn(id, m) {
+    mm := WinGetMinMax(id)
+    if (mm != 0)
+        WinRestore(id)
+    WinMove(m.wl + 20, m.wt + 20, , , id)
+    WinMaximize(id)
+}
+
 /**
  * Put a layout back.
  *
  * enforce = the guard's mode: only touch windows that have actually drifted,
  * and leave minimised ones alone (the user minimised them on purpose).
- * Returns the number of windows moved.
+ * newOnly = mode 2: only windows this guard has never placed before.
+ * Returns the number of windows moved; g_LayoutAdapted says whether anything
+ * had to be adapted to a different station.
  */
-LayoutApplyRows(lay, enforce := false) {
+LayoutApplyRows(lay, enforce := false, newOnly := false) {
+    global g_LayoutAdapted
+    g_LayoutAdapted := false
     if !IsObject(lay)
         return 0
     wins := LayoutWindows()
+    mons := StationMons()
+    if (mons.Length = 0)
+        return 0
+    st := StationEntry(StationKey(mons))
+    reserved := ImagingMons(mons, StationImagingRule(st))
+    exes := ImagingExes()
     claimed := Map()
     moved := 0
     for slot in MGet(lay, "slots", []) {
@@ -5803,24 +6302,35 @@ LayoutApplyRows(lay, enforce := false) {
         if !IsObject(wnd)
             continue
         claimed[wnd.hwnd] := 1
+        if (newOnly && g_LayoutPlaced.Has(wnd.hwnd))
+            continue
         try {
             id := "ahk_id " wnd.hwnd
             mm := WinGetMinMax(id)
             if (enforce && mm = -1)
                 continue
+            tgt := LayoutSlotTarget(slot, lay, mons, reserved, exes)
+            if tgt.adapted
+                g_LayoutAdapted := true
             want := MGet(slot, "state", "normal")
-            sx := MGet(slot, "x", 0), sy := MGet(slot, "y", 0)
-            sw := MGet(slot, "w", 0), sh := MGet(slot, "h", 0)
+            sx := tgt.x, sy := tgt.y, sw := tgt.w, sh := tgt.h
+            g_LayoutPlaced[wnd.hwnd] := 1
             if (want = "max") {
-                if (mm != 1) {
+                ; Already maximised -- but on the RIGHT screen? A maximised
+                ; window that opened on the wrong display is the commonest
+                ; way an arrangement is wrong, and the previous check
+                ; ("maximised, so done") let exactly that stand.
+                onMon := 0
+                if (mm = 1) {
+                    WinGetPos(&cx, &cy, &cw, &ch, id)
+                    onMon := MonIndexAt(mons, cx + cw // 2, cy + ch // 2)
+                }
+                if (mm != 1 || onMon != tgt.mon.idx) {
                     ; Place it on the target monitor FIRST, then maximise --
                     ; WinMaximize alone maximises onto whichever screen the
                     ; window is already on, which on a four-head station is
                     ; exactly the bug this feature exists to fix.
-                    if (mm = -1)
-                        WinRestore(id)
-                    WinMove(sx + 20, sy + 20, , , id)
-                    WinMaximize(id)
+                    WinMaximizeOn(id, tgt.mon)
                     moved += 1
                 }
                 continue
@@ -5866,23 +6376,26 @@ LayoutApply(name) {
         HUD("No layout named '" name "'", "warn")
         return
     }
-    n := LayoutApplyRows(lay, false)
+    n := LayoutApplyRows(lay, false, false)
     if MGet(lay, "guard", 0)
         LayoutGuardArm(name)
-    HUD("Layout '" name "' — " n " window" (n = 1 ? "" : "s") " placed",
-        "cyan")
+    HUD("Layout '" name "' — " n " window" (n = 1 ? "" : "s") " placed"
+        . (g_LayoutAdapted ? " (adapted to this station)" : ""), "cyan")
 }
 
 LayoutChoose() {
     items := []
+    here := StationKey()
     for lay in MGet(g_Cfg, "layouts", []) {
         nm := MGet(lay, "name", "")
         if (nm = "")
             continue
         cnt := MGet(lay, "slots", []).Length
+        g := MGet(lay, "guard", 0)
         items.Push({label: nm, key: nm,
                     sub: cnt " window" (cnt = 1 ? "" : "s")
-                       . (MGet(lay, "guard", 0) ? "   ·   guard armed" : "")})
+                       . (MGet(lay, "station", "") = here ? "" : "   ·   other station")
+                       . (g = 1 ? "   ·   guard armed" : (g = 2 ? "   ·   places new windows" : ""))})
     }
     if (items.Length = 0) {
         HUD("No layouts saved yet — capture one in the Windows tab", "warn")
@@ -5922,12 +6435,25 @@ LayoutGuardTick() {
         LayoutGuardDisarm()
         return
     }
-    n := LayoutApplyRows(lay, true)
+    mode := MGet(lay, "guard", 0)
+    if (mode = 0) {
+        LayoutGuardDisarm()
+        return
+    }
+    ; the placed-set is by hwnd, and hwnds are recycled: forget dead ones
+    if (g_LayoutPlaced.Count > 64) {
+        for h in g_LayoutPlaced.Clone() {
+            if !WinExist("ahk_id " h)
+                g_LayoutPlaced.Delete(h)
+        }
+    }
+    n := LayoutApplyRows(lay, true, mode = 2)
     if (n > 0) {
         g_LayoutSnaps += n
         ; Traceable but silent: a HUD toast every time an application nudges
         ; a window would be its own kind of interruption. Diagnostics has it.
-        Problem("layout-guard", "Snapped " n " window(s) back to '"
+        Problem("layout-guard", (mode = 2 ? "Placed " : "Snapped ") n
+            . " window(s) " (mode = 2 ? "into" : "back to") " '"
             . g_LayoutGuard "'")
     }
 }
@@ -5941,6 +6467,227 @@ SyncLayoutGuard() {
             return
         }
         LayoutGuardDisarm()
+    }
+}
+
+; --- station watch ------------------------------------------------------------
+; The monitor set changes when a laptop docks, a display wakes late, a KVM
+; switches, or someone logs in at a different station with a roaming profile.
+; WM_DISPLAYCHANGE says so (Windows sends it to every top-level window, ours
+; included); a slow poll catches the cases where it does not arrive. Either
+; way the change is debounced, because Windows re-enumerates in steps and the
+; first message describes a half-built desktop.
+
+StationWatchStart() {
+    global g_StationKey, g_StationStartup
+    g_StationKey := StationKey()
+    g_StationStartup := true
+    OnMessage(0x007E, OnDisplayChange)       ; WM_DISPLAYCHANGE
+    SetTimer(StationPoll, 5000)
+    SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+}
+
+StationWatchStop() {
+    SetTimer(StationPoll, 0)
+    SetTimer(StationSettled, 0)
+    try OnMessage(0x007E, OnDisplayChange, 0)
+}
+
+OnDisplayChange(wParam, lParam, msg, hwnd) {
+    SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+}
+
+StationPoll() {
+    try {
+        if (StationKey() != g_StationKey)
+            SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+    }
+}
+
+/**
+ * The monitor set has held still for stationSettleMs. Recognise the station
+ * and apply its arrangement -- on the launch pass too, so logging in at a
+ * station puts the windows that are already open where they belong (the
+ * ones that open later are the mode-2 guard's job).
+ */
+StationSettled() {
+    global g_StationKey, g_StationStartup
+    startup := g_StationStartup
+    g_StationStartup := false
+    key := StationKey()
+    changed := (key != g_StationKey)
+    g_StationKey := key
+    if (!changed && !startup)
+        return
+    if !Cfg("stationAuto")
+        return
+    st := StationEntry(key)
+    name := IsObject(st) ? MGet(st, "layout", "") : ""
+    lay := (name != "") ? LayoutByName(name) : 0
+    if IsObject(lay) {
+        n := LayoutApplyRows(lay, false, false)
+        if MGet(lay, "guard", 0)
+            LayoutGuardArm(name)
+        if (n > 0 || changed)
+            HUD((changed ? "Screens changed: " : "") "'" name "' — " n
+                . " window" (n = 1 ? "" : "s") " placed"
+                . (g_LayoutAdapted ? " (adapted)" : ""), "cyan")
+        return
+    }
+    if (changed && !g_StationSeen.Has(key)) {
+        g_StationSeen[key] := 1
+        HUD("New screen setup (" StationLabel(key) ") — no arrangement "
+            . "assigned; save one on the Windows page", "warn")
+    }
+}
+
+; --- window placement by keystroke (v0.6.2) -----------------------------------
+; The other half of not dragging windows around: send the ACTIVE window to a
+; screen, and fill it. One action, a short grammar in its value:
+;
+;     screen:  next | prev | here | 1..9     (left to right; here = under the cursor)
+;     tile:    max | left | right | top | bottom | tl | tr | bl | br | keep | restore
+;
+; Any order, both optional. "next" alone keeps the window's shape on the next
+; screen; "max" alone fills the screen it is on (and again restores it);
+; "here max" fills the screen the pointer is on; "2 left" is the left half of
+; screen 2. Unknown words are refused, not guessed.
+
+/** Parse a winplace value into {screen, tile, err}. Pure. */
+WinPlaceParse(v) {
+    static TILES := Map("max", 1, "fill", 1, "left", 1, "right", 1, "top", 1,
+        "bottom", 1, "tl", 1, "tr", 1, "bl", 1, "br", 1, "keep", 1, "restore", 1)
+    screen := ""
+    tile := ""
+    for tok in StrSplit(Trim(StrLower(String(v))), [" ", ",", "/"]) {
+        tok := Trim(tok)
+        if (tok = "")
+            continue
+        if (tok = "next" || tok = "prev" || tok = "here"
+            || (IsInteger(tok) && Integer(tok) >= 1 && Integer(tok) <= 9)) {
+            if (screen != "")
+                return {screen: "", tile: "", err: "two screens: " tok}
+            screen := tok
+            continue
+        }
+        if !TILES.Has(tok)
+            return {screen: "", tile: "", err: "unknown word: " tok}
+        if (tile != "")
+            return {screen: "", tile: "", err: "two tiles: " tok}
+        tile := (tok = "fill") ? "max" : tok
+    }
+    if (tile = "")
+        tile := "keep"
+    return {screen: screen, tile: tile, err: ""}
+}
+
+/** The tile rectangle on a screen's work area. Pure. */
+WinTileRect(m, tile) {
+    ww := m.wr - m.wl
+    wh := m.wb - m.wt
+    hw := ww // 2
+    hh := wh // 2
+    switch tile {
+        case "left":   return {x: m.wl, y: m.wt, w: hw, h: wh}
+        case "right":  return {x: m.wl + hw, y: m.wt, w: ww - hw, h: wh}
+        case "top":    return {x: m.wl, y: m.wt, w: ww, h: hh}
+        case "bottom": return {x: m.wl, y: m.wt + hh, w: ww, h: wh - hh}
+        case "tl":     return {x: m.wl, y: m.wt, w: hw, h: hh}
+        case "tr":     return {x: m.wl + hw, y: m.wt, w: ww - hw, h: hh}
+        case "bl":     return {x: m.wl, y: m.wt + hh, w: hw, h: wh - hh}
+        case "br":     return {x: m.wl + hw, y: m.wt + hh, w: ww - hw, h: wh - hh}
+    }
+    return {x: m.wl, y: m.wt, w: ww, h: wh}
+}
+
+WinPlace(v) {
+    p := WinPlaceParse(v)
+    if (p.err != "") {
+        HUD("Window action: " p.err, "warn")
+        return
+    }
+    hwnd := 0
+    try hwnd := WinExist("A")
+    if (!hwnd || g_OurHwnds.Has(hwnd)) {
+        HUD("No application window is active", "warn")
+        return
+    }
+    id := "ahk_id " hwnd
+    try {
+        cls := WinGetClass(id)
+        if (cls = "Shell_TrayWnd" || cls = "Progman" || cls = "WorkerW") {
+            HUD("The desktop is active, not a window", "warn")
+            return
+        }
+        mons := StationMons()
+        n := mons.Length
+        if (n = 0)
+            return
+        WinGetPos(&x, &y, &w, &h, id)
+        cur := MonIndexAt(mons, x + w // 2, y + h // 2)
+        mm := WinGetMinMax(id)
+        switch p.screen {
+            case "":     tgt := cur
+            case "next": tgt := Mod(cur, n) + 1
+            case "prev": tgt := Mod(cur - 2 + n, n) + 1
+            case "here":
+                RM_GetPos(&cx, &cy)
+                tgt := MonIndexAt(mons, cx, cy)
+            default:     tgt := Min(Max(Integer(p.screen), 1), n)
+        }
+        m := mons[tgt]
+        tile := p.tile
+        if (tile = "restore") {
+            if (mm != 0)
+                WinRestore(id)
+            HUD("Window restored", "cyan")
+            return
+        }
+        if (tile = "max") {
+            if (mm = 1 && tgt = cur && p.screen = "") {
+                WinRestore(id)                ; "max" again = give it back
+                HUD("Window restored", "cyan")
+                return
+            }
+            WinMaximizeOn(id, m)
+            HUD("Window fills screen " tgt, "cyan")
+            return
+        }
+        if (tile = "keep") {
+            if (tgt = cur) {
+                HUD("Already on screen " tgt, "mute")
+                return
+            }
+            if (mm = 1) {                    ; maximised there = maximised here
+                WinMaximizeOn(id, m)
+                HUD("Window fills screen " tgt, "cyan")
+                return
+            }
+            src := mons[cur]
+            sww := Max(src.wr - src.wl, 1)
+            swh := Max(src.wb - src.wt, 1)
+            dww := m.wr - m.wl
+            dwh := m.wb - m.wt
+            nw := Min(w, dww)
+            nh := Min(h, dwh)
+            nx := m.wl + Round((x - src.wl) / sww * dww)
+            ny := m.wt + Round((y - src.wt) / swh * dwh)
+            nx := Min(Max(nx, m.wl), m.wr - nw)
+            ny := Min(Max(ny, m.wt), m.wb - nh)
+            if (mm = -1)
+                WinRestore(id)
+            WinMove(nx, ny, nw, nh, id)
+            HUD("Window moved to screen " tgt, "cyan")
+            return
+        }
+        r := WinTileRect(m, tile)
+        if (mm != 0)
+            WinRestore(id)
+        WinMove(r.x, r.y, r.w, r.h, id)
+        HUD("Window: " tile " of screen " tgt, "cyan")
+    } catch as e {
+        Problem("winplace", "window placement failed: " e.Message)
+        HUD("Could not move that window", "warn")
     }
 }
 
@@ -7082,7 +7829,11 @@ RegisterKbHotkeys() {
         [Cfg("hkPanic"),     (*) => PanicRelease()],
         [Cfg("hkClickLock"), (*) => ClickLockToggle("")],
         [Cfg("hkClipboard"), (*) => Shelf.Toggle("clip")],
-        [Cfg("hkScratch"),   (*) => Shelf.Toggle("scratch")]]
+        [Cfg("hkScratch"),   (*) => Shelf.Toggle("scratch")],
+        [Cfg("hkWinNext"),   (*) => WinPlace("next")],
+        [Cfg("hkWinPrev"),   (*) => WinPlace("prev")],
+        [Cfg("hkWinMax"),    (*) => WinPlace("max")],
+        [Cfg("hkWarp"),      (*) => Warp.Toggle()]]
     bad := ""
     mouse := ""
     clash := ""
@@ -7268,6 +8019,7 @@ PanicRelease() {
     g_ClickLock := 0                         ; the blanket Up above released it
     ClickLockWatchStop()                     ; and its watcher must not outlive it
     ScrollPtrStop()
+    try Warp.Close(true)                     ; the keyboard comes back, too
     RadialClose(false)                       ; a menu over the image, firing
                                              ; nothing: panic never commits
     g_Layer := "Base"
@@ -9687,6 +10439,8 @@ Cleanup(*) {
     global g_SpeedSaved, g_Problems
     SetTimer(Watchdog, 0)
     SetTimer(FollowTick, 0)
+    try StationWatchStop()
+    try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     RadialClose(false)
     TeleportSignalStop()
     try ScrollPtrStop()                      ; restores a hidden pointer too
@@ -9727,6 +10481,7 @@ Init() {
                                              ; context, and doing it there
                                              ; could clear theirs mid-register
     SyncFollowFocus()
+    StationWatchStart()                      ; recognise the screens, place windows
     OnExit(Cleanup)
     SetTimer(Watchdog, 750)                  ; physical-state reconciliation
     ; TrayTip is (Text, Title, Options) in v2 -- Text first. (The old
@@ -11417,7 +12172,8 @@ class Atlas {
     ; meaning never depends on which list it was drawn from.
     static SIMPLE_ACTS := ["keys", "text", "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
-        "zoomptr", "radial", "layout", "macro", "guiopen", "none"]
+        "zoomptr", "radial", "layout", "winplace", "warp", "macro", "guiopen",
+        "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -12305,6 +13061,10 @@ class Atlas {
             . "A disabled direction does nothing. Practice never sends a command.`n`n"
             . "Navigation: use the left list. Escape closes the current popup or window. "
             . "For standard Windows controls, use tray > Settings (classic).`n`n"
+            . "Screens: " Atlas.HkWords("hkWarp") " opens the keyboard pointer -- type a "
+            . "grid cell (column letter, then row), refine with Q W E / A S D / Z X C, "
+            . "Space clicks, G drags, Esc closes. The Windows page saves arrangements "
+            . "that follow you to other stations.`n`n"
             . "Recovery: " Atlas.HkWords("hkPanic") " releases held inputs. "
             . Atlas.HkWords("hkToggle") " pauses or resumes RadMapper.",
             "RadMapper quick help", "Owner" Lumi.HwndOf(Atlas.dlg ? Atlas.dlg : Atlas.lyr))
@@ -13771,31 +14531,81 @@ class Atlas {
         Lumi.Label(x, y, 400, "Window arrangements", "title")
         Lumi.Para(x, y + 28, w, 56,
             "Save where every window sits across your monitors, then put the "
-            . "whole arrangement back in one click — or put it on a button. "
-            . "Turn on “keep in place” for an arrangement and RadMapper puts "
-            . "a window back when a program moves or resizes it on its own. "
-            . "It never fights you while you are dragging a window, and it "
-            . "leaves minimised windows alone.", "mute")
+            . "whole arrangement back in one click, on a button, or automatically "
+            . "when RadMapper recognises the screens. An arrangement saved at one "
+            . "station adapts to another: each window keeps its screen (counted "
+            . "left to right) and its place on it, imaging screens are kept for "
+            . "the viewer, and maximised stays maximised. “Keep in place” puts a "
+            . "window back when a program moves it; “new windows” places a window "
+            . "only the first time it appears. Neither fights you while you drag.",
+            "mute")
 
+        here := StationKey()
         rows := []
         Atlas.layoutRefs := []
         for i, lay in MGet(g_Cfg, "layouts", []) {
             nm := MGet(lay, "name", "")
             cnt := MGet(lay, "slots", []).Length
+            g := MGet(lay, "guard", 0)
+            stKey := MGet(lay, "station", "")
             rows.Push({cells: [nm, cnt " window" (cnt = 1 ? "" : "s"),
-                MGet(lay, "guard", 0) ? "on" : "—",
-                (g_LayoutGuard = nm && nm != "") ? "IN USE" : ""]})
+                g = 1 ? "always" : (g = 2 ? "new windows" : "—"),
+                (g_LayoutGuard = nm && nm != "") ? "IN USE" : "",
+                stKey = here ? "this station"
+                    : (stKey = "" ? "?" : StationCount(stKey) " screens")]})
             Atlas.layoutRefs.Push(i)
         }
-        Atlas.list := Lumi.List(x, y + 96, w, h - 214, rows,
-            [{w: 300}, {w: 130, kind: "mute"}, {w: 110, kind: "mono"},
-             {w: 110, kind: "mono"}],
+        Atlas.list := Lumi.List(x, y + 96, w, h - 366, rows,
+            [{w: 230}, {w: 100, kind: "mute"}, {w: 120, kind: "mono"},
+             {w: 80, kind: "mono"}, {w: 130, kind: "mute"}],
             (i, dbl) => (dbl ? Atlas.LayoutApplySel() : 0), 30,
-            ["Arrangement", "Windows", "Keep in place", "Now"])
+            ["Arrangement", "Windows", "Keep in place", "Now", "Saved on"])
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
                 "Nothing saved yet — arrange your windows the way you want "
                 . "them, type a name below, and click Save this one.", "mute")
+
+        ; ── this station ────────────────────────────────────────────────
+        ; The monitor set in front of the engine right now, which arrangement
+        ; belongs on it, and which of its screens are imaging screens.
+        sy := y + h - 262
+        Lumi.Rule(x, sy - 6, w)
+        st := StationEntry(here)
+        reserved := Map()
+        try reserved := ImagingMons(StationMons(), StationImagingRule(st))
+        Lumi.Label(x, sy, 110, "This station", "section")
+        Lumi.Label(x + 110, sy - 1, w - 110,
+            StationLabel(here) "   ·   imaging: " ImagingWords(reserved),
+            "mute", "left", 20)
+        ry := sy + 24
+        names := ["(none)"]
+        idx := 1
+        cur := IsObject(st) ? MGet(st, "layout", "") : ""
+        for i, lay in MGet(g_Cfg, "layouts", []) {
+            names.Push(MGet(lay, "name", ""))
+            if (cur != "" && MGet(lay, "name", "") = cur)
+                idx := i + 1
+        }
+        Lumi.Label(x, ry, 132, "Arrangement here", "dim", "left", 30)
+        Lumi.Select(x + 132, ry, 186, 30, names, idx,
+            (i, *) => Atlas.StationLayoutPick(i))
+        Lumi.Label(x + 332, ry, 112, "Imaging screens", "dim", "left", 30)
+        Lumi.Field(x + 444, ry, 74, 30,
+            IsObject(st) ? String(MGet(st, "imaging", "")) : "",
+            (t) => Atlas.StationImaging(t), "auto", true)
+        Lumi.Toggle(x + 534, ry + 1, "Auto-apply", Cfg("stationAuto"),
+            (v) => Atlas.SetCfgLive("stationAuto", v ? 1 : 0))
+
+        ; ── shortcuts ───────────────────────────────────────────────────
+        ky := ry + 42
+        Atlas.HkRow(x, ky, "Window → next screen", "hkWinNext", 150, 100)
+        Atlas.HkRow(x + 262, ky, "→ previous screen", "hkWinPrev", 128, 100)
+        Atlas.HkRow(x + 502, ky, "Fill screen", "hkWinMax", 80, 100)
+        ky2 := ky + 36
+        Atlas.HkRow(x, ky2, "Keyboard pointer", "hkWarp", 150, 100)
+        Lumi.Para(x + 262, ky2 + 2, w - 262, 30,
+            "A lettered grid over the screen: type a cell, refine with Q W E / "
+            . "A S D / Z X C, Space clicks, G drags, N snaps to a control.", "mute")
 
         by := y + h - 100
         Lumi.Label(x, by, 90, "New name", "dim", "left", 30)
@@ -13813,12 +14623,33 @@ class Atlas {
         b := Atlas.BtnRow(x, Min(w, 640), [0.2, 0.28, 0.28, 0.24])
         Lumi.Btn(b[1].x, by2, b[1].w, 34, "Use it",
             (*) => Atlas.LayoutApplySel(), "accent")
-        Lumi.Btn(b[2].x, by2, b[2].w, 34, "Keep in place on / off",
+        Lumi.Btn(b[2].x, by2, b[2].w, 34, "Keep in place: off / always / new",
             (*) => Atlas.LayoutGuardSel(), "ghost")
         Lumi.Btn(b[3].x, by2, b[3].w, 34, "Save over it",
             (*) => Atlas.LayoutRecapture(), "ghost")
         Lumi.Btn(b[4].x, by2, b[4].w, 34, "Delete",
             (*) => Atlas.LayoutDelete(), "danger")
+    }
+
+    /** The Select on the Windows page: which arrangement this station owns. */
+    static StationLayoutPick(i) {
+        st := StationEntry("", true)
+        name := ""
+        if (i > 1 && g_Cfg.Has("layouts") && g_Cfg["layouts"].Has(i - 1))
+            name := MGet(g_Cfg["layouts"][i - 1], "name", "")
+        st["layout"] := name
+        Atlas.SaveOrWarn()
+        Lumi.Toast(name = "" ? "No arrangement assigned to this station"
+            : ("“" name "” is now this station's arrangement"), "jade")
+    }
+
+    /** The Field on the Windows page: auto | none | 2,3 -- blank = the setting. */
+    static StationImaging(t) {
+        t := Trim(t)
+        st := StationEntry("", true)
+        st["imaging"] := t
+        Atlas.SaveOrWarn()
+        Atlas.Build()
     }
 
     /** g_Cfg["layouts"] index for the selected row, or 0. */
@@ -13891,7 +14722,9 @@ class Atlas {
             return
         }
         name := MGet(lay, "name", "")
-        on := MGet(lay, "guard", 0) ? 0 : 1
+        ; three states, one button: off -> always -> new windows -> off
+        g := MGet(lay, "guard", 0)
+        on := (g = 0) ? 1 : (g = 1 ? 2 : 0)
         lay["guard"] := on
         ; Only one layout can be enforced at a time -- two guards would take
         ; turns dragging the same window between two arrangements.
@@ -13906,8 +14739,9 @@ class Atlas {
         }
         Atlas.SaveOrWarn()
         Atlas.Build()
-        Lumi.Toast(on ? ("Now keeping “" name "” in place")
-                      : ("No longer keeping “" name "” in place"),
+        Lumi.Toast(on = 1 ? ("Now keeping “" name "” in place")
+                 : on = 2 ? ("Now placing NEW windows into “" name "” — once each")
+                 : ("No longer keeping “" name "” in place"),
             on ? "jade" : "magenta")
     }
 
@@ -16525,6 +17359,856 @@ class Chooser {
         Chooser.Close()                      ; close BEFORE acting: the
         if (cb != 0)                         ; callback may open its own window
             try cb(key)
+    }
+}
+
+
+; ══════════════════════════════════════════════════════════════════════════════
+;  §14e  KEYBOARD POINTER ("Warp") -- grid, loupe, click and drag by keys
+; ══════════════════════════════════════════════════════════════════════════════
+;
+;  The pointer is the slowest instrument on a reading station: three or four
+;  screens wide, and the things that need clicking in a PACS viewer are
+;  sixteen pixels tall. This is the keyboard version of the "mouseless" idea:
+;
+;    1. GRID. A lettered grid covers the screen under the pointer. Type a
+;       cell -- column letter, then row letter -- and the pointer jumps to it.
+;       Tab / Shift+Tab / 1-9 change screen; the grid follows.
+;    2. FINE. That cell is now the REGION. Q W E / A S D / Z X C zoom into a
+;       ninth of it (again and again, down to the pixel), arrows nudge, and a
+;       LOUPE beside the pointer shows the region magnified with the same
+;       nine letters drawn over it -- so a 14 px toolbar button is picked by
+;       reading a letter off a picture of it, not by aiming.
+;    3. ACT. Space clicks, R right-clicks, M middle-clicks, F double-clicks,
+;       G grabs (holds the left button) so the next moves DRAG and Space or
+;       G drops, N snaps the pointer onto the control under it (UI
+;       Automation), V just leaves the pointer there. Esc closes.
+;
+;  While it is up, an INVISIBLE InputHook owns the keyboard: nothing typed
+;  reaches the application, which matters because a stray "R" in a viewer is
+;  a ruler and a stray "Q" somewhere else is a question you did not want to
+;  answer. Modifier keys stay visible so the settings hotkeys (the panic
+;  release, this feature's own toggle) still work. Engine key rows are gated
+;  in OnPressHK, because a hooked "*q" would beat the InputHook to the key.
+;  A 45 s idle timeout closes it, so a forgotten hook can never keep the
+;  keyboard for good.
+;
+;  Every layer is click-through, never activated, top-most, registered in
+;  g_PassThru (so the engine never treats one as ours positionally) and --
+;  where Windows allows it, 10 2004+ -- EXCLUDED FROM CAPTURE, which is what
+;  lets the loupe photograph the screen underneath our own overlays without
+;  hiding them first. Where it is not allowed, the overlays that intersect
+;  the capture are hidden for the blink of a BitBlt.
+
+class Warp {
+    static active := false
+    static ih := 0
+    static mons := []
+    static mi := 0                  ; current screen, left-to-right index
+    static mon := 0
+    static stage := "grid"          ; grid | fine
+    static region := 0              ; {x, y, w, h} the area the nine keys refine
+    static stack := []              ; regions to Backspace to
+    static cols := 0
+    static rows := 0
+    static first := ""              ; pending column letter
+    static grab := false            ; left button held by us (dragging)
+    static zoom := 4
+    static loupeOn := true
+    static affinity := true         ; SetWindowDisplayAffinity accepted
+    static L := Map()               ; layers: grid, col, fine, loupe, legend
+    static cx := 0
+    static cy := 0
+    static idleFn := 0
+    static uia := 0
+    static IDLE_MS := 45000
+    static LOUPE := 320             ; magnified square, px
+    static SUB := Map("Q", [1, 1], "W", [2, 1], "E", [3, 1],
+                      "A", [1, 2], "S", [2, 2], "D", [3, 2],
+                      "Z", [1, 3], "X", [2, 3], "C", [3, 3])
+    static SUBKEY := ["Q", "W", "E", "A", "S", "D", "Z", "X", "C"]
+
+    ; ── geometry (pure, unit-tested) ─────────────────────────────────────────
+
+    /** Grid dimensions for a screen of w x h with cells near target px. */
+    static GridDims(w, h, target := 110) {
+        target := Max(target, 40)
+        return {cols: Min(Max(Round(w / target), 2), 24),
+                rows: Min(Max(Round(h / target), 2), 18)}
+    }
+
+    /** The rect of column c, row r of a cols x rows grid over m. */
+    static CellRect(m, cols, rows, c, r) {
+        x1 := m.l + Round((c - 1) * m.w / cols)
+        x2 := m.l + Round(c * m.w / cols)
+        y1 := m.t + Round((r - 1) * m.h / rows)
+        y2 := m.t + Round(r * m.h / rows)
+        return {x: x1, y: y1, w: Max(x2 - x1, 1), h: Max(y2 - y1, 1)}
+    }
+
+    /** The (c, r) ninth of a region, c and r in 1..3. */
+    static SubRect(rg, c, r) {
+        x1 := rg.x + Round((c - 1) * rg.w / 3)
+        x2 := rg.x + Round(c * rg.w / 3)
+        y1 := rg.y + Round((r - 1) * rg.h / 3)
+        y2 := rg.y + Round(r * rg.h / 3)
+        return {x: x1, y: y1, w: Max(x2 - x1, 1), h: Max(y2 - y1, 1)}
+    }
+
+    /** Column/row index of a letter: A = 1 ... Z = 26; 0 for anything else. */
+    static LetterIndex(ch) {
+        o := Ord(StrUpper(ch))
+        return (o >= 65 && o <= 90) ? o - 64 : 0
+    }
+
+    /** Where the loupe goes: beside the pointer, never over the capture. */
+    static LoupePlace(m, rg, cx, cy, half, size) {
+        gap := 16
+        right := Max(rg.x + rg.w, cx + half) + gap
+        left := Min(rg.x, cx - half) - gap - size
+        below := Max(rg.y + rg.h, cy + half) + gap
+        above := Min(rg.y, cy - half) - gap - size
+        y := Min(Max(cy - size // 2, m.t + 8), m.b - size - 8)
+        x := Min(Max(cx - size // 2, m.l + 8), m.r - size - 8)
+        if (right + size <= m.r - 8)
+            return {x: right, y: y}
+        if (left >= m.l + 8)
+            return {x: left, y: y}
+        if (below + size <= m.b - 8)
+            return {x: x, y: below}
+        if (above >= m.t + 8)
+            return {x: x, y: above}
+        return {x: m.r - size - 8, y: m.t + 8}   ; a corner: never the cursor
+    }
+
+    ; ── lifecycle ────────────────────────────────────────────────────────────
+
+    static Toggle() {
+        if Warp.active
+            Warp.Close(true)
+        else
+            Warp.Open()
+    }
+
+    static Open() {
+        if Warp.active
+            return
+        if (!IsSet(Layer) || !IsSet(Lumi)) {
+            HUD("Keyboard pointer needs the overlay kit (not in this build)", "warn")
+            return
+        }
+        try {
+            Warp.mons := StationMons()
+            if (Warp.mons.Length = 0)
+                return
+            Warp.zoom := Min(Max(Cfg("warpZoom"), 2), 12)
+            Warp.loupeOn := Cfg("warpLoupe") ? true : false
+            Warp.grab := false
+            Warp.first := ""
+            Warp.affinity := true
+            RM_GetPos(&x, &y)
+            Warp.cx := x
+            Warp.cy := y
+            Warp.active := true
+            Warp.StartHook()
+            Warp.SetScreen(MonIndexAt(Warp.mons, x, y), false)
+            Warp.Idle()
+        } catch as e {
+            Problem("warp", "keyboard pointer failed to open: " e.Message)
+            HUD("Keyboard pointer could not open: " e.Message, "danger")
+            Warp.Close(true)
+        }
+    }
+
+    /** cancel = true: nothing is clicked; a held drag is dropped in place. */
+    static Close(cancel := false) {
+        Warp.StopHook()
+        if Warp.idleFn
+            SetTimer(Warp.idleFn, 0)
+        if Warp.grab {
+            Warp.grab := false
+            try SendNativeUp("LButton")
+        }
+        for name, lyr in Warp.L.Clone()
+            Warp.Drop(name)
+        Warp.L := Map()
+        Warp.stack := []
+        Warp.first := ""
+        Warp.stage := "grid"
+        Warp.active := false
+    }
+
+    static Idle() {
+        if !Warp.idleFn
+            Warp.idleFn := ObjBindMethod(Warp, "IdleClose")
+        SetTimer(Warp.idleFn, -Warp.IDLE_MS)
+    }
+
+    static IdleClose() {
+        if !Warp.active
+            return
+        Warp.Close(true)
+        HUD("Keyboard pointer closed (idle)", "mute")
+    }
+
+    ; ── keyboard capture ─────────────────────────────────────────────────────
+
+    /**
+     * Invisible: text AND non-text keys are swallowed, and every key notifies
+     * OnKeyDown. Modifiers are made visible again so hotkeys built on them
+     * (panic release, the toggle that opened this) keep working, and so the
+     * OS sees the same Shift the arrow-nudge reads.
+     */
+    static StartHook() {
+        Warp.StopHook()
+        ih := InputHook()
+        ih.VisibleText := false
+        ih.VisibleNonText := false
+        ih.KeyOpt("{All}", "N")
+        ih.KeyOpt("{LShift}{RShift}{LCtrl}{RCtrl}{LAlt}{RAlt}{LWin}{RWin}", "V")
+        ih.OnKeyDown := ObjBindMethod(Warp, "OnDown")
+        ih.Start()
+        Warp.ih := ih
+    }
+
+    static StopHook() {
+        if IsObject(Warp.ih) {
+            try Warp.ih.Stop()
+            Warp.ih := 0
+        }
+    }
+
+    static OnDown(ih, vk, sc) {
+        Warp.Key(vk)
+    }
+
+    /** A key that reached the engine's own hook first (a bound key row). */
+    static FromHook(name) {
+        vk := 0
+        try vk := GetKeyVK(name)
+        if vk
+            Warp.Key(vk)
+    }
+
+    static Key(vk) {
+        if !Warp.active
+            return
+        if (vk = 16 || vk = 17 || vk = 18 || (vk >= 160 && vk <= 165)
+            || vk = 91 || vk = 92)
+            return                           ; modifiers: state, not commands
+        Warp.Idle()
+        shift := GetKeyState("Shift", "P")
+        ctrl := GetKeyState("Ctrl", "P")
+        try {
+            switch vk {
+                case 27: Warp.Close(true)                    ; Esc
+                case 8:  Warp.Back()                         ; Backspace
+                case 9:  Warp.Hop(shift ? -1 : 1)            ; Tab
+                case 13, 32: Warp.Click("LButton", 1)        ; Enter, Space
+                case 36: Warp.SetScreen(Warp.mi, false)      ; Home: start over
+                case 37: Warp.Nudge(-1, 0, shift, ctrl)
+                case 38: Warp.Nudge(0, -1, shift, ctrl)
+                case 39: Warp.Nudge(1, 0, shift, ctrl)
+                case 40: Warp.Nudge(0, 1, shift, ctrl)
+                case 33: Warp.Wheel("WheelUp")               ; PgUp
+                case 34: Warp.Wheel("WheelDown")             ; PgDn
+                case 187, 107: Warp.ZoomStep(1)              ; = / numpad +
+                case 189, 109: Warp.ZoomStep(-1)             ; - / numpad -
+                default:
+                    if (vk >= 48 && vk <= 57)
+                        Warp.HopTo(vk = 48 ? 10 : vk - 48)
+                    else if (vk >= 96 && vk <= 105)
+                        Warp.HopTo(vk = 96 ? 10 : vk - 96)
+                    else if (vk >= 65 && vk <= 90)
+                        Warp.Letter(Chr(vk))
+            }
+        } catch as e {
+            Problem("warp", "keyboard pointer: " e.Message)
+            Warp.Close(true)
+        }
+    }
+
+    static Letter(ch) {
+        if (Warp.stage = "grid") {
+            Warp.Label(ch)
+            return
+        }
+        if Warp.SUB.Has(ch) {
+            Warp.Sub(ch)
+            return
+        }
+        switch ch {
+            case "R": Warp.Click("RButton", 1)
+            case "M": Warp.Click("MButton", 1)
+            case "F": Warp.Click("LButton", 2)
+            case "G": Warp.Grab()
+            case "V": Warp.Close(false)
+            case "N": Warp.Snap()
+            case "L":
+                Warp.loupeOn := !Warp.loupeOn
+                Warp.DrawFine()
+        }
+    }
+
+    ; ── stages ───────────────────────────────────────────────────────────────
+
+    static SetScreen(idx, centre := true) {
+        n := Warp.mons.Length
+        idx := Min(Max(idx, 1), n)
+        Warp.mi := idx
+        m := Warp.mons[idx]
+        Warp.mon := m
+        Warp.region := {x: m.l, y: m.t, w: m.w, h: m.h}
+        Warp.stack := []
+        Warp.stage := "grid"
+        Warp.first := ""
+        d := Warp.GridDims(m.w, m.h, Cfg("warpCell"))
+        Warp.cols := d.cols
+        Warp.rows := d.rows
+        if centre
+            Warp.MoveTo((m.l + m.r) // 2, (m.t + m.b) // 2)
+        Warp.Drop("col")
+        Warp.Drop("fine")
+        Warp.Drop("loupe")
+        Warp.DrawGrid()
+        Warp.DrawLegend()
+    }
+
+    static Label(ch) {
+        ci := Warp.LetterIndex(ch)
+        if (Warp.first = "") {
+            if (ci < 1 || ci > Warp.cols)
+                return
+            Warp.first := ch
+            Warp.DrawCol(ci)
+            Warp.DrawLegend()
+            return
+        }
+        if (ci < 1 || ci > Warp.rows)
+            return
+        c0 := Warp.LetterIndex(Warp.first)
+        Warp.first := ""
+        Warp.Drop("col")
+        Warp.EnterFine(Warp.CellRect(Warp.mon, Warp.cols, Warp.rows, c0, ci))
+    }
+
+    static EnterFine(rect) {
+        Warp.stack.Push(Warp.region)
+        Warp.region := rect
+        Warp.stage := "fine"
+        Warp.MoveTo(rect.x + rect.w // 2, rect.y + rect.h // 2)
+        if Warp.L.Has("grid")
+            try Warp.L["grid"].Hide()
+        Warp.DrawFine()
+        Warp.DrawLegend()
+    }
+
+    static Sub(ch) {
+        cr := Warp.SUB[ch]
+        rg := Warp.region
+        sub := Warp.SubRect(rg, cr[1], cr[2])
+        if (rg.w <= 3 && rg.h <= 3) {       ; nothing left to divide
+            Warp.MoveTo(sub.x, sub.y)
+            Warp.DrawFine()
+            return
+        }
+        Warp.stack.Push(rg)
+        Warp.region := sub
+        Warp.MoveTo(sub.x + sub.w // 2, sub.y + sub.h // 2)
+        Warp.DrawFine()
+    }
+
+    static Back() {
+        if (Warp.stage = "grid") {
+            if (Warp.first != "") {
+                Warp.first := ""
+                Warp.Drop("col")
+                Warp.DrawLegend()
+            }
+            return
+        }
+        if (Warp.stack.Length = 0) {
+            Warp.SetScreen(Warp.mi, false)
+            return
+        }
+        rg := Warp.stack.Pop()
+        Warp.region := rg
+        if (Warp.stack.Length = 0) {        ; back to the whole screen
+            Warp.stage := "grid"
+            Warp.Drop("fine")
+            Warp.Drop("loupe")
+            if Warp.L.Has("grid")
+                try Warp.L["grid"].Show()
+            else
+                Warp.DrawGrid()
+            Warp.DrawLegend()
+            return
+        }
+        Warp.MoveTo(rg.x + rg.w // 2, rg.y + rg.h // 2)
+        Warp.DrawFine()
+    }
+
+    static Nudge(dx, dy, shift, ctrl) {
+        step := ctrl ? 40 : (shift ? 10 : 1)
+        m := Warp.mon
+        nx := Min(Max(Warp.cx + dx * step, m.l), m.r - 1)
+        ny := Min(Max(Warp.cy + dy * step, m.t), m.b - 1)
+        ddx := nx - Warp.cx
+        ddy := ny - Warp.cy
+        if (ddx = 0 && ddy = 0)
+            return
+        Warp.MoveTo(nx, ny)
+        if (Warp.stage = "fine") {
+            ; the region travels with the pointer, so the nine keys always
+            ; refine around where the pointer IS
+            rg := Warp.region
+            Warp.region := {x: rg.x + ddx, y: rg.y + ddy, w: rg.w, h: rg.h}
+            Warp.DrawFine()
+        }
+    }
+
+    static Hop(step) {
+        n := Warp.mons.Length
+        if (n < 2)
+            return
+        Warp.SetScreen(Mod(Warp.mi - 1 + step + n, n) + 1, true)
+    }
+
+    static HopTo(k) {
+        if (k >= 1 && k <= Warp.mons.Length && k != Warp.mi)
+            Warp.SetScreen(k, true)
+    }
+
+    static ZoomStep(d) {
+        z := Min(Max(Warp.zoom + d, 2), 12)
+        if (z = Warp.zoom)
+            return
+        Warp.zoom := z
+        if (Warp.stage = "fine")
+            Warp.DrawFine()
+    }
+
+    ; ── pointer, clicks, drag ────────────────────────────────────────────────
+
+    /**
+     * SetCursorPos is enough for a plain move (the app still gets its
+     * WM_MOUSEMOVE). During a GRAB it is not: a drag is real input or it is
+     * nothing, so the move is sent as input, absolute, over the whole
+     * virtual desktop (SendMode Input does that; Event mode would not).
+     */
+    static MoveTo(x, y) {
+        Warp.cx := x
+        Warp.cy := y
+        if Warp.grab {
+            prevMode := A_SendMode
+            try {
+                SendMode("Input")
+                MouseMove(x, y, 0)
+            } finally {
+                SendMode(prevMode)
+            }
+        } else {
+            DllCall("SetCursorPos", "int", x, "int", y)
+        }
+    }
+
+    static Click(btn, n) {
+        if Warp.grab {
+            Warp.Release()
+            return
+        }
+        Warp.Close(false)                    ; overlays down first, then the
+        SendNativeClick(btn, n)              ; click lands on the application
+    }
+
+    static Grab() {
+        if Warp.grab {
+            Warp.Release()
+            return
+        }
+        SendNativeDown("LButton")
+        Warp.grab := true
+        Warp.DrawLegend()
+        Warp.DrawFine()
+    }
+
+    static Release() {
+        Warp.grab := false
+        try SendNativeUp("LButton")
+        Warp.Close(false)
+    }
+
+    static Wheel(dir) {
+        SafeSend("{Blind}{" dir " 3}")
+        if (Warp.stage = "fine" && Warp.loupeOn)
+            SetTimer(ObjBindMethod(Warp, "DrawFine"), -120)   ; after it scrolls
+    }
+
+    ; ── snap to the control under the pointer (UI Automation) ────────────────
+
+    /**
+     * IUIAutomation::ElementFromPoint, then the element's bounding rectangle.
+     * Works for anything that exposes itself to UIA -- WPF and WinForms
+     * toolbars, ribbons, dialogs; NOT for buttons painted inside a DirectX
+     * image canvas, which is why the loupe exists. Refused when the element
+     * is big (the canvas, the window): snapping to the middle of a viewport
+     * is never what N meant. 64-bit only (a POINT by value is one int64).
+     */
+    static ControlRectAt(x, y) {
+        if (A_PtrSize != 8)
+            return 0
+        el := 0
+        try {
+            if !Warp.uia
+                Warp.uia := ComObject("{FF48DBA4-60EF-4201-AA87-54103EEF594E}",
+                                      "{30CBE57D-D9D0-452A-AB13-7AC5AC4825EE}")
+            pt := (x & 0xFFFFFFFF) | ((y & 0xFFFFFFFF) << 32)
+            ComCall(7, Warp.uia, "int64", pt, "ptr*", &el)     ; ElementFromPoint
+            if !el
+                return 0
+            rc := Buffer(16, 0)
+            ComCall(43, el, "ptr", rc)                          ; get_CurrentBoundingRectangle
+            name := ""
+            bstr := 0
+            try {
+                ComCall(23, el, "ptr*", &bstr)                  ; get_CurrentName
+                if bstr {
+                    name := StrGet(bstr, "UTF-16")
+                    DllCall("OleAut32\SysFreeString", "ptr", bstr)
+                }
+            }
+            l := NumGet(rc, 0, "int"), t := NumGet(rc, 4, "int")
+            r := NumGet(rc, 8, "int"), b := NumGet(rc, 12, "int")
+            return {x: l, y: t, w: r - l, h: b - t, name: name}
+        } catch as e {
+            Problem("warp-snap", "UI Automation lookup failed: " e.Message)
+            return 0
+        } finally {
+            if el
+                try ObjRelease(el)
+        }
+    }
+
+    static Snap() {
+        r := Warp.ControlRectAt(Warp.cx, Warp.cy)
+        if (!IsObject(r) || r.w < 2 || r.h < 2 || r.w > 420 || r.h > 420) {
+            HUD("No small control under the pointer to snap to", "warn")
+            return
+        }
+        Warp.stack.Push(Warp.region)
+        Warp.region := {x: r.x, y: r.y, w: r.w, h: r.h}
+        Warp.stage := "fine"
+        if Warp.L.Has("grid")
+            try Warp.L["grid"].Hide()
+        Warp.MoveTo(r.x + r.w // 2, r.y + r.h // 2)
+        Warp.DrawFine()
+        Warp.DrawLegend()
+        if (r.name != "")
+            HUD("Snapped to: " SubStr(r.name, 1, 60), "cyan")
+    }
+
+    ; ── layers ───────────────────────────────────────────────────────────────
+
+    /** Common setup for every overlay we draw. */
+    static Setup(lyr) {
+        lyr.ClickThrough := true
+        lyr.NoActivate()
+        lyr.TopMost(true)
+        g_PassThru[lyr.hwnd] := 1
+        if Warp.affinity {
+            ok := 0
+            try ok := DllCall("user32\SetWindowDisplayAffinity", "ptr", lyr.hwnd,
+                "uint", 0x11, "int")                            ; WDA_EXCLUDEFROMCAPTURE
+            if !ok
+                Warp.affinity := false
+        }
+    }
+
+    /** A layer by name, reused when the size is unchanged, moved into place. */
+    static Surface(name, x, y, w, h) {
+        w := Max(Round(w), 1)
+        h := Max(Round(h), 1)
+        if Warp.L.Has(name) {
+            lyr := Warp.L[name]
+            if (lyr.w = w && lyr.h = h) {
+                lyr.Clear()
+                lyr.Move(Round(x), Round(y))
+                return lyr
+            }
+            Warp.Drop(name)
+        }
+        lyr := Layer(Round(x), Round(y), w, h, "RadWarp" name)
+        Warp.Setup(lyr)
+        Warp.L[name] := lyr
+        return lyr
+    }
+
+    static Drop(name) {
+        if !Warp.L.Has(name)
+            return
+        lyr := Warp.L[name]
+        Warp.L.Delete(name)
+        try g_PassThru.Delete(lyr.hwnd)
+        try lyr.Dispose()
+    }
+
+    static Txt(x, y, w, h, s, col, size, bold := true) {
+        t := bold ? Text(x, y, w, h, s, col, size, Lumi.Face, "Bold")
+                  : Text(x, y, w, h, s, col, size, Lumi.Face)
+        return t.TextAlign("center", "middle")
+    }
+
+    /** Draw into a layer with the active-layer bookkeeping the kit expects. */
+    static Paint(lyr, fn) {
+        prev := LayerStack.ActiveLayer
+        LayerStack.ActiveLayer := lyr
+        try {
+            fn()
+            lyr.Draw()
+        } finally {
+            if (IsObject(prev) && !Lumi.Same(prev, lyr))
+                LayerStack.ActiveLayer := prev
+        }
+    }
+
+    static DrawGrid() {
+        m := Warp.mon
+        cols := Warp.cols
+        rows := Warp.rows
+        lyr := Warp.Surface("grid", m.l, m.t, m.w, m.h)
+        lyr.alwaysFullErase := true
+        Warp.Paint(lyr, () => Warp.__Grid(m, cols, rows))
+        try lyr.Show()
+    }
+
+    static __Grid(m, cols, rows) {
+        w := m.w
+        h := m.h
+        line := Lumi.Alpha(Lumi.C["cyan"], 0x58)
+        edge := Lumi.Alpha(Lumi.C["cyan"], 0xB0)
+        pill := Lumi.Alpha(Lumi.C["abyss"], 0xB4)
+        Rectangle(0, 0, w, h, Lumi.Alpha(Lumi.C["abyss"], 0x22), true)
+        border := Rectangle(1, 1, w - 2, h - 2, edge, false)
+        border.penwidth := 2
+        loop cols - 1 {
+            x := Round(A_Index * w / cols)
+            Line(x, 0, x, h, line, 1)
+        }
+        loop rows - 1 {
+            y := Round(A_Index * h / rows)
+            Line(0, y, w, y, line, 1)
+        }
+        cw := w / cols
+        ch := h / rows
+        fs := Min(Max(Round(Min(cw, ch) * 0.24), 11), 22)
+        pw := Round(fs * 1.9) + 8
+        ph := fs + 8
+        loop rows {
+            r := A_Index
+            rl := Chr(64 + r)
+            y := Round((r - 1) * ch) + 4
+            loop cols {
+                c := A_Index
+                x := Round((c - 1) * cw) + 4
+                Rectangle(x, y, pw, ph, pill, true)
+                Warp.Txt(x, y, pw, ph, Chr(64 + c) rl, Lumi.C["ink"], fs)
+            }
+        }
+    }
+
+    /** The chosen column, washed, with the row letters drawn large. */
+    static DrawCol(ci) {
+        m := Warp.mon
+        cell := Warp.CellRect(m, Warp.cols, Warp.rows, ci, 1)
+        rows := Warp.rows
+        lyr := Warp.Surface("col", cell.x, m.t, cell.w, m.h)
+        lyr.alwaysFullErase := true
+        Warp.Paint(lyr, () => Warp.__Col(cell.w, m.h, rows))
+    }
+
+    static __Col(w, h, rows) {
+        Rectangle(0, 0, w, h, Lumi.Alpha(Lumi.C["cyan"], 0x38), true)
+        border := Rectangle(1, 0, w - 2, h, Lumi.Alpha(Lumi.C["cyan"], 0xC0), false)
+        border.penwidth := 2
+        ch := h / rows
+        fs := Min(Max(Round(Min(w, ch) * 0.42), 14), 44)
+        loop rows {
+            y := Round((A_Index - 1) * ch)
+            Warp.Txt(0, y, w, Round(ch), Chr(64 + A_Index), Lumi.C["ink"], fs)
+        }
+    }
+
+    /** The fine stage: the region outline on the screen, and the loupe. */
+    static DrawFine() {
+        if (!Warp.active || Warp.stage != "fine")
+            return
+        rg := Warp.region
+        pad := 6
+        if (rg.w >= 6 || rg.h >= 6) {
+            lyr := Warp.Surface("fine", rg.x - pad, rg.y - pad,
+                rg.w + pad * 2, rg.h + pad * 2)
+            lyr.alwaysFullErase := true
+            Warp.Paint(lyr, () => Warp.__Region(pad, pad, rg.w, rg.h, 1, true))
+        } else {
+            Warp.Drop("fine")
+        }
+        if Warp.loupeOn
+            Warp.DrawLoupe()
+        else
+            Warp.Drop("loupe")
+    }
+
+    /**
+     * The region as drawn ANYWHERE: outline, the thirds, the nine letters
+     * when there is room. On screen at scale 1; inside the loupe at the
+     * zoom. letters = whether to draw them at all.
+     */
+    static __Region(x, y, w, h, z, letters) {
+        mag := Warp.grab ? Lumi.C["jade"] : Lumi.C["magenta"]
+        box := Rectangle(x, y, w, h, mag, false)
+        box.penwidth := 2
+        if (w < 12 && h < 12)
+            return
+        third := Lumi.Alpha(Lumi.C["cyan"], 0x90)
+        loop 2 {
+            gx := x + Round(A_Index * w / 3)
+            gy := y + Round(A_Index * h / 3)
+            Line(gx, y, gx, y + h, third, 1)
+            Line(x, gy, x + w, gy, third, 1)
+        }
+        cw := w / 3
+        ch := h / 3
+        if (!letters || Min(cw, ch) < 20)
+            return
+        fs := Min(Max(Round(Min(cw, ch) * 0.42), 11), 26)
+        pill := Lumi.Alpha(Lumi.C["abyss"], 0xA8)
+        loop 9 {
+            i := A_Index
+            c := Mod(i - 1, 3)
+            r := (i - 1) // 3
+            lx := x + Round(c * cw)
+            ly := y + Round(r * ch)
+            pw := Min(Round(fs * 1.3) + 6, Round(cw))
+            ph := Min(fs + 6, Round(ch))
+            Rectangle(lx + Round((cw - pw) / 2), ly + Round((ch - ph) / 2),
+                pw, ph, pill, true)
+            Warp.Txt(lx, ly, Round(cw), Round(ch), Warp.SUBKEY[i],
+                Lumi.C["ink"], fs)
+        }
+    }
+
+    static DrawLoupe() {
+        m := Warp.mon
+        rg := Warp.region
+        z := Warp.zoom
+        LW := Warp.LOUPE
+        sw := Max(Round(LW / z), 8)          ; source square, screen px
+        sx := Warp.cx - sw // 2
+        sy := Warp.cy - sw // 2
+        frame := 6
+        cap := 22
+        size := LW + frame * 2
+        p := Warp.LoupePlace(m, rg, Warp.cx, Warp.cy, sw // 2 + 4, size)
+        ; photograph the screen -- without our own overlays in the picture
+        hidden := []
+        if !Warp.affinity {
+            for name in ["fine", "col", "grid", "loupe", "legend"] {
+                if Warp.L.Has(name) {
+                    try Warp.L[name].Hide()
+                    hidden.Push(Warp.L[name])
+                }
+            }
+            Sleep(15)
+        }
+        bmp := 0
+        try bmp := GdipBitmap.FromScreen(sx, sy, sw, sw)
+        for lyr in hidden
+            try lyr.Show()
+        lyr := Warp.Surface("loupe", p.x, p.y, size, size + cap)
+        lyr.alwaysFullErase := true
+        cx := Warp.cx, cy := Warp.cy
+        grab := Warp.grab
+        Warp.Paint(lyr, () => Warp.__Loupe(bmp, sx, sy, sw, z, LW, frame, cap,
+            rg, cx, cy, grab))
+    }
+
+    static __Loupe(bmp, sx, sy, sw, z, LW, frame, cap, rg, cx, cy, grab) {
+        size := LW + frame * 2
+        Rectangle(0, 0, size, size + cap, Lumi.Alpha(Lumi.C["surface"], 0xF0), true)
+        Rectangle(0, 0, size, size + cap, Lumi.C["hair"], false)
+        if IsObject(bmp) {
+            pic := Picture(frame, frame, LW, LW, bmp)
+            ; the kit centres an unscaled bitmap in its box and grows it by
+            ; bmpW/bmpH; pull it back to the corner and grow it to the box
+            pic.bmpX := -((LW - sw) // 2)
+            pic.bmpY := -((LW - sw) // 2)
+            pic.bmpW := LW - sw
+            pic.bmpH := LW - sw
+        } else {
+            Rectangle(frame, frame, LW, LW, Lumi.C["abyss"], true)
+            Warp.Txt(frame, frame, LW, LW, "no picture", Lumi.C["inkMute"], 12, false)
+        }
+        ; the region, magnified, with its thirds and letters
+        rx := frame + (rg.x - sx) * z
+        ry := frame + (rg.y - sy) * z
+        Warp.__Region(rx, ry, rg.w * z, rg.h * z, z, true)
+        ; crosshair on the pointer's pixel
+        lx := frame + (cx - sx) * z + z // 2
+        ly := frame + (cy - sy) * z + z // 2
+        cross := Lumi.C["cyan"]
+        Line(lx - 18, ly, lx - 5, ly, cross, 1)
+        Line(lx + 5, ly, lx + 18, ly, cross, 1)
+        Line(lx, ly - 18, lx, ly - 5, cross, 1)
+        Line(lx, ly + 5, lx, ly + 18, cross, 1)
+        Rectangle(lx - z // 2, ly - z // 2, Max(z, 2), Max(z, 2),
+            grab ? Lumi.C["jade"] : Lumi.C["magenta"], false)
+        ; caption
+        Rectangle(0, size, size, cap, Lumi.C["raised"], true)
+        Lumi.Label(8, size, size - 16,
+            z "×   ·   " (grab ? "DRAGGING — Space or G drops it here"
+                               : "N snaps to the control here   ·   + − zoom"),
+            "mute", "left", cap)
+    }
+
+    static DrawLegend() {
+        m := Warp.mon
+        w := Min(m.w - 40, 1180)
+        h := 56
+        lyr := Warp.Surface("legend", m.l + (m.w - w) // 2, m.b - h - 14, w, h)
+        lyr.alwaysFullErase := true
+        stage := Warp.stage
+        first := Warp.first
+        grab := Warp.grab
+        n := Warp.mons.Length
+        mi := Warp.mi
+        Warp.Paint(lyr, () => Warp.__Legend(w, h, stage, first, grab, n, mi))
+    }
+
+    static __Legend(w, h, stage, first, grab, n, mi) {
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Rectangle(0, 0, 3, h, grab ? Lumi.C["jade"] : Lumi.C["magenta"], true)
+        scr := (n > 1) ? ("screen " mi " of " n "   ·   ") : ""
+        if (stage = "grid") {
+            if (first != "") {
+                l1 := "Column " first " — now type the ROW letter"
+                l2 := "Backspace clears the column   ·   Esc closes"
+            } else {
+                l1 := "KEYBOARD POINTER   ·   " scr
+                    . "type a cell: column letter, then row letter"
+                l2 := "Space / Enter click here   ·   Tab next screen, Shift+Tab back, 1-9 pick one"
+                    . "   ·   arrows nudge   ·   PgUp / PgDn scroll   ·   Esc closes"
+            }
+        } else if grab {
+            l1 := "DRAGGING   ·   Q W E / A S D / Z X C jump   ·   arrows move 1 px (Shift 10, Ctrl 40)"
+            l2 := "Space or G drops it here   ·   Esc drops and closes"
+        } else {
+            l1 := scr "Q W E / A S D / Z X C zoom into a ninth   ·   arrows nudge 1 px (Shift 10, Ctrl 40)"
+                . "   ·   Backspace back   ·   Home restart"
+            l2 := "Space click · R right · M middle · F double   ·   G grab to drag"
+                . "   ·   N snap to control   ·   L loupe · + − zoom   ·   V leave pointer here   ·   Esc"
+        }
+        Lumi.Label(16, 6, w - 28, l1, "body", "left", 22)
+        Lumi.Label(16, 28, w - 28, l2, "mute", "left", 22)
     }
 }
 
