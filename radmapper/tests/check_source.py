@@ -130,6 +130,43 @@ pairs += [(ink, ground) for ink in ['dangerInk', 'magenta', 'jade', 'cyan']
 for ink, ground in pairs:
     a,b = sorted([luminance(tokens[ink]),luminance(tokens[ground])])
     assert (b+.05)/(a+.05) >= 4.5, (ink, ground, round((b+.05)/(a+.05), 2))
-print('PASS: UI member references, case-insensitive collisions, timer identity, '
+# ---- nested function names vs enclosing parameters -------------------------
+# AHK v2 refuses to load when a nested function (including a fat-arrow
+# closure) has the same name, case-insensitively, as a parameter of the
+# function it sits in: "This function declaration conflicts with an existing
+# parameter". RadialIcon(name, x, y, ...) once declared X(d) => ... inside
+# itself; the workstation refused to start. Passing a nested function by name
+# (KPSection(..., ins)) is fine and is not what this checks.
+_head = re.compile(r'^\s*(?:static\s+)?([A-Za-z_]\w*)\(([^)]*)\)\s*\{\s*$')
+_nest = re.compile(r'^\s+([A-Za-z_]\w*)\(([^)]*)\)\s*(?:=>|\{\s*$)')
+_kw = {'if', 'while', 'for', 'loop', 'switch', 'case', 'try', 'catch',
+       'return', 'else', 'finally', 'until', 'throw'}
+_lines = s.split('\n')
+_clashes = []
+_i = 0
+while _i < len(_lines):
+    _m = _head.match(_lines[_i])
+    if not _m:
+        _i += 1
+        continue
+    _indent = len(_lines[_i]) - len(_lines[_i].lstrip())
+    _params = {p.strip().lstrip('&').split(':=')[0].split(' ')[0].strip().lower()
+               for p in _m.group(2).split(',') if p.strip()}
+    _depth = 0
+    _j = _i
+    while _j < len(_lines):
+        _depth += _lines[_j].count('{') - _lines[_j].count('}')
+        if _j > _i:
+            _n = _nest.match(_lines[_j])
+            if _n and (len(_lines[_j]) - len(_lines[_j].lstrip())) > _indent \
+                    and _n.group(1).lower() in _params and _n.group(1).lower() not in _kw:
+                _clashes.append((_j + 1, _m.group(1), _n.group(1)))
+        if _depth <= 0 and _j > _i:
+            break
+        _j += 1
+    _i = _j + 1
+assert not _clashes, ('Nested function name conflicts with an enclosing parameter', _clashes)
+
+print('PASS: UI member references, case-insensitive collisions, nested-name clashes, timer identity, '
       f'Windows page fit (max HkRow offset {max(_offs)} <= 460), '
       f'{len(pairs)} text/background contrast pairs')

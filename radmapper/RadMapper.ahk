@@ -22,6 +22,11 @@
 ;
 ;  v0.6.4a (review pass 4) -- every item here is a fix to code that has
 ;  still never run on Windows:
+;    * LOAD FIX (first workstation run): RadialIcon(name, x, y, ...) declared
+;      nested closures X/Y/S; AHK v2 treats X and the parameter x as one name
+;      and refuses to load ("conflicts with an existing parameter"). Renamed to
+;      gX/gY/gS. tests/check_source.py now asserts no nested function shares a
+;      name with an enclosing parameter.
 ;
 ;    * THE SCRIPT DID NOT LOAD. `class Warp` declared `static grab` beside
 ;      `static Grab()` and `static SUB` beside `static Sub()`. AHK property
@@ -8707,78 +8712,78 @@ RadialFireSlice(act, label, target, targetPid := 0, *) {
  * costs one multiply per coordinate rather than a second copy of the table.
  */
 RadialIcon(name, x, y, col, sc := 1.0) {
-    X(d) => Round(x + d * sc)
-    Y(d) => Round(y + d * sc)
-    S(d) => Max(1, Round(d * sc))
+    gX(d) => Round(x + d * sc)
+    gY(d) => Round(y + d * sc)
+    gS(d) => Max(1, Round(d * sc))
     try {
         switch name {
             case "next":                     ; play triangle + end bar
-                FilledTriangle(X(-8), Y(-8), X(3), Y(0), X(-8), Y(8), col)
-                Rectangle(X(5), Y(-8), S(3), S(16), col, true)
+                FilledTriangle(gX(-8), gY(-8), gX(3), gY(0), gX(-8), gY(8), col)
+                Rectangle(gX(5), gY(-8), gS(3), gS(16), col, true)
             case "prev":
-                FilledTriangle(X(8), Y(-8), X(-3), Y(0), X(8), Y(8), col)
-                Rectangle(X(-8), Y(-8), S(3), S(16), col, true)
+                FilledTriangle(gX(8), gY(-8), gX(-3), gY(0), gX(8), gY(8), col)
+                Rectangle(gX(-8), gY(-8), gS(3), gS(16), col, true)
             case "delete":                   ; a lidded bin
-                Rectangle(X(-6), Y(-4), S(12), S(12), col, false)
-                Rectangle(X(-8), Y(-7), S(16), S(2), col, true)
-                Rectangle(X(-2), Y(-10), S(4), S(2), col, true)
-                Line(X(-2), Y(-1), X(-2), Y(5), col, 1)
-                Line(X(2), Y(-1), X(2), Y(5), col, 1)
+                Rectangle(gX(-6), gY(-4), gS(12), gS(12), col, false)
+                Rectangle(gX(-8), gY(-7), gS(16), gS(2), col, true)
+                Rectangle(gX(-2), gY(-10), gS(4), gS(2), col, true)
+                Line(gX(-2), gY(-1), gX(-2), gY(5), col, 1)
+                Line(gX(2), gY(-1), gX(2), gY(5), col, 1)
             case "ruler":                    ; a rule with graduations
-                Rectangle(X(-11), Y(-4), S(22), S(9), col, false)
+                Rectangle(gX(-11), gY(-4), gS(22), gS(9), col, false)
                 for k in [-7, -3, 1, 5]
-                    Line(X(k), Y(-4), X(k), Y(-1), col, 1)
-                Line(X(9), Y(-4), X(9), Y(1), col, 1)
+                    Line(gX(k), gY(-4), gX(k), gY(-1), col, 1)
+                Line(gX(9), gY(-4), gX(9), gY(1), col, 1)
             case "roi":                      ; dashed frame around a blob
                 for k in [-9, -3, 3]
-                    Line(X(k), Y(-8), X(k + 3), Y(-8), col, 1)
+                    Line(gX(k), gY(-8), gX(k + 3), gY(-8), col, 1)
                 for k in [-9, -3, 3]
-                    Line(X(k), Y(8), X(k + 3), Y(8), col, 1)
+                    Line(gX(k), gY(8), gX(k + 3), gY(8), col, 1)
                 for k in [-8, -2, 4]
-                    Line(X(-9), Y(k), X(-9), Y(k + 3), col, 1)
+                    Line(gX(-9), gY(k), gX(-9), gY(k + 3), col, 1)
                 for k in [-8, -2, 4]
-                    Line(X(9), Y(k), X(9), Y(k + 3), col, 1)
-                Ellipse(X(-5), Y(-3), S(10), S(7), col, true)
+                    Line(gX(9), gY(k), gX(9), gY(k + 3), col, 1)
+                Ellipse(gX(-5), gY(-3), gS(10), gS(7), col, true)
             case "clahe":                    ; half-filled disc: contrast
-                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
-                FilledPie(X(-9), Y(-9), S(18), S(18), 90.0, 180.0, col)
+                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
+                FilledPie(gX(-9), gY(-9), gS(18), gS(18), 90.0, 180.0, col)
             case "window":                   ; a window pane: W/L
-                Rectangle(X(-9), Y(-8), S(18), S(16), col, false)
-                Line(X(0), Y(-8), X(0), Y(8), col, 1)
-                Line(X(-9), Y(0), X(9), Y(0), col, 1)
+                Rectangle(gX(-9), gY(-8), gS(18), gS(16), col, false)
+                Line(gX(0), gY(-8), gX(0), gY(8), col, 1)
+                Line(gX(-9), gY(0), gX(9), gY(0), col, 1)
             case "magnify":                  ; lens and handle
-                Ellipse(X(-10), Y(-10), S(14), S(14), col, false)
-                Ellipse(X(-9), Y(-9), S(12), S(12), col, false)
-                Line(X(3), Y(3), X(9), Y(9), col, S(3))
+                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
+                Ellipse(gX(-9), gY(-9), gS(12), gS(12), col, false)
+                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
             case "series":                   ; a stack of slices
-                Rectangle(X(-9), Y(-3), S(12), S(10), col, false)
-                Rectangle(X(-6), Y(-6), S(12), S(10), col, false)
-                Rectangle(X(-3), Y(-9), S(12), S(10), col, false)
+                Rectangle(gX(-9), gY(-3), gS(12), gS(10), col, false)
+                Rectangle(gX(-6), gY(-6), gS(12), gS(10), col, false)
+                Rectangle(gX(-3), gY(-9), gS(12), gS(10), col, false)
             case "menu":                     ; a ring with a hub: another wheel
-                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
-                Ellipse(X(-3), Y(-3), S(6), S(6), col, true)
-                Line(X(0), Y(-9), X(0), Y(-5), col, 1)
-                Line(X(0), Y(5), X(0), Y(9), col, 1)
-                Line(X(-9), Y(0), X(-5), Y(0), col, 1)
-                Line(X(5), Y(0), X(9), Y(0), col, 1)
+                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
+                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
+                Line(gX(0), gY(-9), gX(0), gY(-5), col, 1)
+                Line(gX(0), gY(5), gX(0), gY(9), col, 1)
+                Line(gX(-9), gY(0), gX(-5), gY(0), col, 1)
+                Line(gX(5), gY(0), gX(9), gY(0), col, 1)
             case "zoom":                     ; lens with a plus
-                Ellipse(X(-10), Y(-10), S(14), S(14), col, false)
-                Line(X(-3), Y(-6), X(-3), Y(0), col, 1)
-                Line(X(-6), Y(-3), X(0), Y(-3), col, 1)
-                Line(X(3), Y(3), X(9), Y(9), col, S(3))
+                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
+                Line(gX(-3), gY(-6), gX(-3), gY(0), col, 1)
+                Line(gX(-6), gY(-3), gX(0), gY(-3), col, 1)
+                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
             case "invert":                   ; two half discs swapped
-                Ellipse(X(-9), Y(-9), S(18), S(18), col, false)
-                FilledPie(X(-9), Y(-9), S(18), S(18), -90.0, 180.0, col)
+                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
+                FilledPie(gX(-9), gY(-9), gS(18), gS(18), -90.0, 180.0, col)
             case "reset":                    ; a counter-clockwise arrow
-                Arc(X(-8), Y(-8), S(16), S(16), col, 2, -60.0, 300.0)
-                FilledTriangle(X(-2), Y(-12), X(-2), Y(-4), X(-9), Y(-8), col)
+                Arc(gX(-8), gY(-8), gS(16), gS(16), col, 2, -60.0, 300.0)
+                FilledTriangle(gX(-2), gY(-12), gX(-2), gY(-4), gX(-9), gY(-8), col)
             case "dictate":                  ; a microphone
-                Rectangle(X(-3), Y(-10), S(6), S(11), col, true)
-                Arc(X(-6), Y(-6), S(12), S(12), col, 1, 0.0, 180.0)
-                Line(X(0), Y(6), X(0), Y(9), col, 1)
-                Line(X(-4), Y(9), X(4), Y(9), col, 1)
+                Rectangle(gX(-3), gY(-10), gS(6), gS(11), col, true)
+                Arc(gX(-6), gY(-6), gS(12), gS(12), col, 1, 0.0, 180.0)
+                Line(gX(0), gY(6), gX(0), gY(9), col, 1)
+                Line(gX(-4), gY(9), gX(4), gY(9), col, 1)
             default:
-                Ellipse(X(-3), Y(-3), S(6), S(6), col, true)
+                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
         }
     } catch as e {
         Problem("radial", "icon '" name "' failed: " e.Message)
