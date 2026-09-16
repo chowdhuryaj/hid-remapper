@@ -1,175 +1,29 @@
 # RadMapper Radiology — Stream Deck MK.2 profile
 
 A 15-key Stream Deck profile for the PowerScribe + IntelliSpace reading room,
-built from the shortcuts RadMapper already knows about. Every button has a
-drawn icon (dark navy, RadMapper's palette) with its name baked into the image,
-so nothing has to be read from a Stream Deck title.
+built from the shortcuts RadMapper already knows about. Every button carries a
+drawn icon with its name baked into the picture, so there is nothing to read
+from a Stream Deck title.
 
-**Files**
+![preview](preview.png)
 
-| File | What it is |
-|---|---|
-| `RadMapper Radiology.streamDeckProfile` | Import this: double-click it, or Stream Deck > Preferences > Profiles > ⋯ > Import. Pick your Stream Deck MK.2 when asked. |
-| `preview.png` | Every page rendered as a contact sheet |
-| `keymap.md` | Every button, the key(s) it sends, and where that key came from |
-| `build_profile.py` | Regenerates all of the above (`python3 build_profile.py`; needs Pillow) |
+## 1. Import it
 
-## Navigation
+1. Double-click `RadMapper Radiology.streamDeckProfile` — or open the Stream
+   Deck app and go to **Preferences > Profiles > ⋯ > Import**.
+2. When it asks which device the profile is for, pick your **Stream Deck MK.2**.
+3. Confirm the **Home** page appears on the deck: Number pad, Prev field, Next
+   field, Switch app, Impression along the top row.
 
-Home is the launch pad. Every other page ends in a **strip** (bottom row) whose
-columns never move, so a section is always under the same finger:
+## 2. Before it does anything: assign eight shortcuts
 
-| | | | | |
-|---|---|---|---|---|
-| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+Eight buttons send a function key that nothing on the machine currently
+listens for. Until you assign them in IntelliSpace and PowerScribe, those eight
+keys do nothing at all.
 
-On one of those four section pages its own column holds **📁 Number pad**
-instead, since you are already there — except on PACS tools, where that column
-holds **📁 PACS more**, the only way through to it. System is reached from
-Home, and the Number pad links back to Home and Web & windows. PACS more itself
-shows the full strip, so PACS tools is back in column 2 there.
-
-**Dictate is at (4,1) — the last key of the middle row — on every page except
-Home and the Number pad.** Wherever you are, the one key you always need is
-under the same finger.
-
-**Home** is a Switch Profile action: it switches back to the profile root, so
-it returns from any depth rather than popping one folder. **This has not been
-tested on hardware.** If it does nothing, or lands on the last-open page
-instead of the root, then either (a) change the Home key's action to
-**Navigation > Back to Parent** in the Stream Deck app and press it once per
-level, or (b) report which of the two happened, so the generator can be
-switched to emit Back to Parent for every Home key.
-
-### Test on hardware first
-
-Three things in this profile have never run on a device. Check them before you
-rely on the profile in a live list:
-
-1. **The Home key** — press it from PACS more (two levels down) and see whether
-   you land on Home.
-2. **One F13+ assignment in each app** — try recording F13 in IntelliSpace and
-   F19 in PowerScribe One before assigning the rest (see below).
-3. **One Multi Action** — press **Dictate + next field** in a scratch report and
-   check both steps land, and that 150 ms is enough of a pause.
-
-## Pages
-
-**Home**
-
-| | | | | |
-|---|---|---|---|---|
-| Dictate (F4) | Prev field (Shift+Tab) | Next field (Tab) | Switch app (Alt+Tab) | Impression ⚙ (F20) |
-| Prev series (F7) | Next series (F8) | Undo (Ctrl+Z) | Redo (Ctrl+Y) | 📁 Number pad |
-| 📁 System | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
-
-**Editing (PowerScribe)**
-
-| | | | | |
-|---|---|---|---|---|
-| Prev field (Shift+Tab) | Next field (Tab) | **Dictate + next field** ⛓ | Impression ⚙ (F20) | Paste (Ctrl+V) |
-| Undo (Ctrl+Z) | Redo (Ctrl+Y) | **Report → Claude** ⛓ | Sign ⚙ (F19) | Dictate (F4) |
-| strip | | | | |
-
-Report → Claude sends Ctrl+A, Ctrl+C, Left and then opens claude.ai: the report
-is on the clipboard, ready to paste, and the Left collapses the selection so
-nothing can be overtyped. Paste sits in the other row, at the far end, so it is
-never next to it. Dictate takes the (4,1) slot here as on every other page, so
-this page has no separate Dictate in the top-left corner.
-
-**PACS tools**: Ruler (R), ROI (Shift+R), Magnify (Y), CLAHE (Shift+C), Delete
-measurement (Delete); Prev series (F7), Next series (F8), W/L 8 Lung (8), W/L 1
-Soft tissue (1), Dictate (F4); strip — and its own column holds
-📁 **PACS more** rather than Number pad, since that is the only link to it.
-
-**PACS more**: Spine labeling ⚙ (F13), Localizer ⚙ (F14), Scout lines ⚙ (F15),
-Invert ⚙ (F18), Zoom in ⚙ (F16); Zoom out ⚙ (F17), W/L 2 Bone (2), W/L 3 Brain
-(3), Next series (F8), Dictate (F4); the full strip, so PACS tools is back in
-column 2.
-
-**Windowing**: the nine RadMapper presets on digits 1–9 (Soft tissue, Bone, Brain,
-C-spine soft tissue, CTA, Infarct, Liver, Lung, Lung wide), Dictate (F4), strip.
-
-**Number pad**
-
-| | | | | |
-|---|---|---|---|---|
-| Backspace | 7 | 8 | 9 | Enter |
-| . | 4 | 5 | 6 | 0 |
-| 🏠 Home | 1 | 2 | 3 | 📁 Web & windows |
-
-The digits are a 3×3 block in the middle three columns; 0 finishes the middle
-row and `.` starts it, so neither sits where a keyboard numpad puts it — this
-is a Stream Deck layout, not a numpad copy. Backspace and Enter are the top
-corners, Home and Web & windows the bottom corners. Column 4 still holds the
-Web key the strip would put there, so only columns 1–3 deviate from the usual
-page shape, and it is the one page without Dictate at (4,1).
-
-The keys send the top-row digits, not the numeric keypad, so they work with
-NumLock off (RadMapper uses NumLock as its pause key). These are the same keystrokes as the Windowing digits, so with
-IntelliSpace in front any digit is read as a window preset, not as a number —
-type numbers only into PowerScribe.
-
-**Web & windows**: mail.umn.edu, claude.ai, openevidence.com, umnradiology.com,
-**Open all sites** ⛓; Snap left/right (Win+←/→), window to left / right monitor
-(Win+Shift+←/→), Dictate (F4); strip.
-
-**System**: RadMapper Settings (Ctrl+Alt+Shift+F9), Pause/resume engine
-(Ctrl+Alt+Shift+F11), Unstick buttons (Ctrl+Alt+Q), Clipboard history
-(Ctrl+Alt+C), Scratchpad (Ctrl+Alt+N); Task view (Win+Tab), Show desktop
-(Win+D), Maximize (Win+↑), Minimize (Win+↓), Dictate (F4); strip. Close window
-(Alt+F4) is deliberately not on the deck — one stray press closes PowerScribe.
-
-⛓ = a Stream Deck **Multi Action**: several steps in one press, run by the
-Stream Deck software itself.
-
-## Native keys, and where RadMapper still helps
-
-The buttons send the apps' own shortcuts, so they work with or without
-RadMapper running. The catch is that a Stream Deck keystroke goes to whatever
-window is in front:
-
-- **PowerScribe keys** (F4, Tab, Shift+Tab, Undo/Redo/Copy/Paste, Impression, Sign)
-  need PowerScribe to be the active window. If you want Dictate and field
-  navigation to work while the PACS viewer has the cursor, set
-  `ROUTE_PS_VIA_RADMAPPER = True` at the top of the key-routing section in
-  `build_profile.py` and rebuild. That reroutes every Dictate, Prev field and
-  Next field key — the three on Home and the three on Editing — plus the first
-  step of **Dictate + next field**, so they send RadMapper's global `` ` ``
-  `[` `]` bindings instead, and RadMapper brings PowerScribe forward, delivers
-  the key and returns focus. (Or bind the same keys yourself on RadMapper's
-  Keyboard page.) The backtick / bracket bindings are RadMapper's shipped
-  defaults, but `SeedDefaultBindings` returns early once any binding exists, so
-  they are seeded **only on a fresh config**. On a config you have already
-  edited, add them on RadMapper's Keyboard page first — otherwise these keys
-  just type `` ` `` `[` `]` into the report. They are distinct from the blank
-  `hkDictate` / `hkPrevField` / `hkNextField` hotkey settings, which stay empty.
-- **PACS keys** (R, Shift+R, Y, Shift+C, F7, F8, Delete, digits 1–9) are the values
-  in RadMapper's shipped PACS wheel and Window-preset ring and go straight to
-  IntelliSpace, so the viewer must be in front. To fire them from PowerScribe,
-  bind the same key on RadMapper's Keyboard page to **PACS: send keys** with
-  the same value.
-- The **System** page's RadMapper keys are its default hotkeys from Settings.
-  If you changed them there, change them here (or in `build_profile.py`).
-
-F4 is PowerScribe's default dictation toggle and is user-configurable in
-PowerScribe; if yours differs, edit the Dictate buttons in the Stream Deck app.
-
-### Keys that act on whatever window is in front
-
-These two do something destructive to the front window, so check what has
-focus first:
-
-| Button | Sends | With the PACS viewer in front | With PowerScribe in front |
-|---|---|---|---|
-| Delete measurement | Delete | deletes the selected measurement | **deletes report text** (the selection, or the character after the cursor) |
-| Report → Claude ⛓ | Ctrl+A, Ctrl+C, Left, open claude.ai | selects everything the viewer will select and copies it | selects the report, copies it, then Left collapses the selection: the caret ends up at the **top of the report with nothing selected**, not in a field. Press **Next field** to get back into a field before dictating. |
-
-## Buttons marked with the gear badge ⚙
-
-IntelliSpace and PowerScribe One shortcuts are configured per user, and
-RadMapper deliberately does not guess them. Assign the key to the function once
-in the app and the button is live:
+**Test F13 in IntelliSpace and F19 in PowerScribe One first; if a recorder
+refuses F13 and above, pick any unused combination it does accept and edit that
+key in the Stream Deck app.**
 
 | Button | Sends | Where to assign it |
 |---|---|---|
@@ -183,20 +37,231 @@ in the app and the button is live:
 | Impression | F20 | PowerScribe One > Settings > Quick Keys |
 
 **Why F13–F20.** These keys exist in the keyboard protocol but on no keyboard
-you own, so nothing else on the machine sends them and they can never type a
-character into a report — which is exactly what a bare letter or a digit would
-do if the wrong window had focus. The catch is that some shortcut recorders
-refuse to record F13 and above: **test one in each app before assigning all of
-them** (try F13 in IntelliSpace and F19 in PowerScribe One). If a recorder
-refuses, pick any unused combination it does accept and edit that one key in
-the Stream Deck app.
+you own, so nothing else sends them and they can never type a character into a
+report — which is exactly what a bare letter or digit would do if the wrong
+window had focus.
 
-If your site already has a shortcut for one of these, edit that button in the
-Stream Deck app instead (click the key, change the hotkey) or change the key
-name in `build_profile.py` and rebuild.
+If your site already has a shortcut for one of these functions, edit that
+button in the Stream Deck app instead (click the key, change the hotkey), or
+change the key name in `build_profile.py` and rebuild.
 
-## Editing the icons
+**Symbols used below and in the pictures:**
 
-`build_profile.py` draws each icon with a few primitives (`ic_ruler`,
-`ic_spine`, ...). Change a drawing function, run the script, re-import the
-profile. Icons are 288×288 PNG, drawn at 4× and downsampled.
+- **⚙** — a gear badge in the corner of the icon: this button needs one of the
+  eight assignments above before it does anything.
+- **⛓** — a Stream Deck **Multi Action**: one press runs several steps, driven
+  by the Stream Deck software itself.
+
+## 3. The one rule
+
+**A Stream Deck keystroke goes to whatever window is in front.** The deck has
+no idea which application you meant. PowerScribe keys need PowerScribe in
+front; PACS keys need the viewer in front. Three cases are worth knowing before
+you press them in a live list:
+
+| Button | Sends | With the PACS viewer in front | With PowerScribe in front |
+|---|---|---|---|
+| Delete measurement | Delete | deletes the selected measurement | **deletes report text** — the selection, or the character after the cursor |
+| Report → Claude ⛓ | Ctrl+A, 150 ms, Ctrl+C, 150 ms, Left, open claude.ai | selects and copies whatever the viewer selects | selects the report, copies it, then Left leaves the caret at the **top of the report with nothing selected** — not in a field. Press **Next field** before you dictate again. And you still have to press **Ctrl+V** yourself once the browser is open. |
+| Windowing digits / Number pad digits | 1–9, 0 | a digit **changes the window preset** | types a digit into the report |
+
+The Windowing page and the Number pad send the same keystrokes — the top-row
+digits, not the numeric keypad, so they work with NumLock off (RadMapper uses
+NumLock as its pause key). With IntelliSpace in front, any digit is read as a
+window preset; type numbers only into PowerScribe.
+
+**Dictate sends F4**, PowerScribe's default dictation toggle as shipped by
+RadMapper. If your PowerScribe uses another key, change the Dictate keys in the
+Stream Deck app (or in `build_profile.py`).
+
+Close window (Alt+F4) is deliberately not on the deck — one stray press would
+close PowerScribe.
+
+## 4. The layout
+
+**Home** is the launch pad: the keys used in every case on the top two rows,
+and the way into every section along the bottom.
+
+Every other page ends in the same **strip** along the bottom row, and the
+columns never move, so a section is always under the same finger:
+
+| col 0 | col 1 | col 2 | col 3 | col 4 |
+|---|---|---|---|---|
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+On a page that is itself one of those sections, its own column would only lead
+back to itself, so it holds **📁 Number pad** instead — except on PACS tools,
+where that column holds **📁 PACS more**, the only way through to it. Number
+pad, PACS more and System are not strip sections, so they show the plain strip;
+that is why Number pad is reachable from Home, Editing, Windowing and Web &
+windows, and why PACS tools is back in column 2 on PACS more.
+
+**Dictate sits at (4,1) — the last key of the middle row — on every page except
+the Number pad**, where 0 holds that slot. Wherever you are, the one key you
+always need is under the same finger.
+
+**Home** is a Switch Profile action: it switches back to the profile root, so
+it returns from any depth rather than popping one folder at a time.
+
+### Home
+
+| | | | | |
+|---|---|---|---|---|
+| 📁 Number pad | Prev field (Shift+Tab) | Next field (Tab) | Switch app (Alt+Tab) | Impression ⚙ (F20) |
+| Prev series (F7) | Next series (F8) | Undo (Ctrl+Z) | Redo (Ctrl+Y) | Dictate (F4) |
+| 📁 System | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+### Editing (PowerScribe)
+
+| | | | | |
+|---|---|---|---|---|
+| Sign ⚙ (F19) | Prev field (Shift+Tab) | Next field (Tab) | **Dictate + next field** ⛓ | Impression ⚙ (F20) |
+| Undo (Ctrl+Z) | Redo (Ctrl+Y) | **Report → Claude** ⛓ | Paste (Ctrl+V) | Dictate (F4) |
+| 🏠 Home | 📁 Number pad | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+Sign is the one irreversible key on the deck, so it is drawn amber inside an
+amber frame and sits in the corner, a full row away from the keys you press by
+the dozen. **Dictate + next field** toggles dictation, waits 150 ms, then
+presses Tab.
+
+### PACS tools
+
+| | | | | |
+|---|---|---|---|---|
+| Ruler (R) | ROI (Shift+R) | Magnify (Y) | CLAHE (Shift+C) | Delete measurement (Delete) |
+| Prev series (F7) | Next series (F8) | W/L 8 Lung (8) | W/L 1 Soft tissue (1) | Dictate (F4) |
+| 🏠 Home | 📁 Editing | 📁 **PACS more** | 📁 Windowing | 📁 Web & windows |
+
+### PACS more
+
+| | | | | |
+|---|---|---|---|---|
+| Spine labeling ⚙ (F13) | Localizer ⚙ (F14) | Scout lines ⚙ (F15) | Invert ⚙ (F18) | Zoom in ⚙ (F16) |
+| Zoom out ⚙ (F17) | Prev series (F7) | Next series (F8) | Delete measurement (Delete) | Dictate (F4) |
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+### Windowing
+
+| | | | | |
+|---|---|---|---|---|
+| 1 Soft tissue | 2 Bone | 3 Brain | 4 C-spine | 5 CTA |
+| 6 Infarct | 7 Liver | 8 Lung | 9 Lung wide | Dictate (F4) |
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Number pad | 📁 Web & windows |
+
+The nine RadMapper window presets, on the digits 1–9 its preset ring uses.
+
+### Number pad
+
+| | | | | |
+|---|---|---|---|---|
+| Backspace | 7 | 8 | 9 | Enter |
+| decimal (.) | 4 | 5 | 6 | 0 |
+| 🏠 Home | 1 | 2 | 3 | 📁 Web & windows |
+
+The digits are a 3×3 block in the middle three columns; 0 finishes the middle
+row and `.` starts it, so neither sits where a keyboard numpad puts it — this
+is a Stream Deck layout, not a numpad copy. Backspace and Enter are the top
+corners, Home and Web & windows the bottom corners. This is the one page
+without Dictate at (4,1).
+
+### Web & windows
+
+| | | | | |
+|---|---|---|---|---|
+| UMN Mail | Claude | OpenEvidence | UMN Radiology | **Open all sites** ⛓ |
+| Snap left (Win+←) | Snap right (Win+→) | To left monitor (Win+Shift+←) | To right monitor (Win+Shift+→) | Dictate (F4) |
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Number pad |
+
+### System
+
+| | | | | |
+|---|---|---|---|---|
+| RadMapper settings (Ctrl+Alt+Shift+F9) | Pause/resume (Ctrl+Alt+Shift+F11) | Unstick buttons (Ctrl+Alt+Q) | Clipboard history (Ctrl+Alt+C) | Scratchpad (Ctrl+Alt+N) |
+| Task view (Win+Tab) | Show desktop (Win+D) | Maximize (Win+↑) | Minimize (Win+↓) | Dictate (F4) |
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+The five RadMapper keys are its default hotkeys from Settings. If you changed
+them there, change them here (or in `build_profile.py`).
+
+`keymap.md` lists every button on every page with the exact keystroke it sends.
+
+## 5. If a key does nothing
+
+- **Nothing happens at all.** Check which window is in front — the keystroke
+  went there. If it is one of the ⚙ keys, it is not assigned yet (section 2).
+- **A literal `` ` `` `[` or `]` appears in the report.** The profile was built
+  with `ROUTE_PS_VIA_RADMAPPER = True` but RadMapper has no bindings for those
+  keys. Add them on RadMapper's Keyboard page (section 7), or rebuild with the
+  flag off.
+- **The shortcut recorder in IntelliSpace or PowerScribe refuses F13.** Pick
+  any unused combination it does accept, and edit that one key in the Stream
+  Deck app.
+- **A Multi Action runs only its first step.** Please report it. The step
+  nesting follows a real Stream Deck export, but it has not been confirmed on a
+  device.
+- **The 150 ms pause seems to be missing** (the second step lands too early).
+  Open the Multi Action in the Stream Deck app and add a **Delay** between the
+  steps; the generated delay step is untested.
+- **A digit changes the window instead of typing a number.** IntelliSpace is in
+  front. Click into PowerScribe first.
+- **Home does nothing, or lands on the last-open page.** Change that key's
+  action to **Navigation > Back to Parent** in the Stream Deck app (then it
+  takes one press per level), and please report which of the two happened.
+- **The profile landed on the wrong device.** Import it again and pick the
+  MK.2 in the device dialog.
+
+## 6. Not yet tested on hardware
+
+Four things in this profile have never run on a device. Treat them as likely,
+not certain:
+
+1. **The Home key.** It is a Switch Profile action pointing at this profile's
+   root page. Press it from PACS more, two levels down, and see whether you
+   land on Home.
+2. **The keystrokes themselves.** Each hotkey carries a Windows virtual-key
+   code, copied from a macOS export where that field held the Mac key code.
+   Test: open Notepad and press **Ruler** on the PACS tools page — a lowercase
+   `r` must appear. If nothing does, the key codes need revisiting and none of
+   the letter keys will work.
+3. **The Delay step** inside the three Multi Actions. It follows a published
+   reference, not an export we have seen. Press **Dictate + next field** in a
+   scratch report and check both steps land.
+4. **Whether F13 can be recorded** in your build of IntelliSpace and
+   PowerScribe One (section 2).
+
+## 7. RadMapper interop (advanced)
+
+The buttons send the applications' own shortcuts, so they work with or without
+RadMapper running. RadMapper can still help in two ways:
+
+- **`ROUTE_PS_VIA_RADMAPPER`.** Set it to `True` at the top of the key-routing
+  section in `build_profile.py` and rebuild. Every Dictate, Prev field and Next
+  field key — and the first step of **Dictate + next field** — then sends
+  RadMapper's global `` ` `` `[` `]` bindings instead, and RadMapper brings
+  PowerScribe forward, delivers the key and returns focus, so those keys work
+  while the PACS viewer has the cursor.
+- **The seeding caveat.** Those backtick and bracket bindings are RadMapper's
+  shipped defaults, but `SeedDefaultBindings` returns early once any binding
+  exists, so they are seeded **only on a fresh config**. On a config you have
+  already edited, add them on RadMapper's Keyboard page first — otherwise these
+  keys just type `` ` `` `[` `]` into the report. They are distinct from the
+  blank `hkDictate` / `hkPrevField` / `hkNextField` hotkey settings, which stay
+  empty.
+- **PACS: send keys.** The PACS keys (R, Shift+R, Y, Shift+C, F7, F8, Delete,
+  digits 1–9) go straight to whatever is in front, so the viewer must have
+  focus. To fire them from PowerScribe, bind the same key on RadMapper's
+  Keyboard page to **PACS: send keys** with the same value.
+
+## 8. Rebuilding and editing the icons
+
+`python3 build_profile.py` regenerates the profile bundle, `preview.png` and
+`keymap.md`. It needs Pillow (`pip install pillow`) and nothing else.
+
+Each icon is drawn by a small `ic_*` function (`ic_ruler`, `ic_spine`, …) from a
+handful of primitives, at 288×288, 4× supersampled. Change a drawing function,
+run the script, re-import the profile.
+
+Captions are drawn into the image, so they have to fit the key. On Windows they
+render in Segoe UI rather than the DejaVu used here; the build shrinks a caption
+to fit and **fails loudly, naming the caption**, if it still does not fit at the
+minimum size. If that happens, shorten the caption.

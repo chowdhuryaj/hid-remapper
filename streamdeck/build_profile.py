@@ -149,8 +149,16 @@ class Icon:
 
     def label(self, s, fill=DIM, size=30):
         """Small caption along the bottom edge (baked in, so no Stream Deck title is needed)."""
-        # every caption fits the 248 px key width at size 30 (checked with textlength)
-        self.text((144, 262), s.upper(), size=size, fill=fill)
+        # Captions are drawn into the image, so they must fit the 248 px safe
+        # width here.  Metrics differ per machine (DejaVu here, Segoe UI on
+        # Windows), so shrink to fit rather than trusting one machine's widths,
+        # and fail loudly rather than ship a caption clipped at the key edge.
+        t = s.upper()
+        while size > 22 and self.d.textlength(t, font=font(size)) > 248 * S:
+            size -= 1
+        if self.d.textlength(t, font=font(size)) > 248 * S:
+            raise SystemExit(f"caption too wide for a key even at size 22: {s!r}")
+        self.text((144, 262), t, size=size, fill=fill)
 
     def arrow(self, p0, p1, fill=CYAN, width=12, head=26):
         (x0, y0), (x1, y1) = p0, p1
@@ -303,10 +311,11 @@ def ic_spine(ic):
 
 
 def ic_localizer(ic):
-    ic.rect([56, 44, 232, 220], outline=DIM, width=6)
-    ic.line([(144, 38), (144, 226)], fill=CYAN, width=6)
-    ic.line([(44, 132), (244, 132)], fill=CYAN, width=6)
-    ic.ell([116, 104, 172, 160], outline=OLIVE, width=8)
+    # a crosshair laid over an axial body outline: where the other plane is cut
+    ic.ell([44, 66, 244, 198], outline=INK, width=7)
+    ic.line([(144, 34), (144, 230)], fill=CYAN, width=7)
+    ic.line([(34, 132), (254, 132)], fill=CYAN, width=7)
+    ic.ell([124, 112, 164, 152], outline=OLIVE, width=8)
     ic.label("localizer")
 
 
@@ -346,9 +355,9 @@ def ic_preset(ic, n, organ, name):
         for y in (gy - 48, gy - 12, gy + 24):
             ic.rect([gx - 26, y, gx + 26, y + 26], outline=INK, width=w, radius=6)
     elif organ == "cta":     # branching vessel
-        ic.line([(gx, gy + 48), (gx, gy - 6), (gx - 32, gy - 46)], fill=RED, width=w)
-        ic.line([(gx, gy - 6), (gx + 32, gy - 46)], fill=RED, width=w)
-        ic.line([(gx, gy + 20), (gx + 28, gy - 4)], fill=RED, width=w)
+        ic.line([(gx, gy + 48), (gx, gy - 6), (gx - 32, gy - 46)], fill=OLIVE, width=w)
+        ic.line([(gx, gy - 6), (gx + 32, gy - 46)], fill=OLIVE, width=w)
+        ic.line([(gx, gy + 20), (gx + 28, gy - 4)], fill=OLIVE, width=w)
     elif organ == "infarct":  # brain with a solid wedge of low density
         box = [gx - 44, gy - 48, gx + 44, gy + 44]
         ic.ell(box, outline=INK, width=w)
@@ -370,8 +379,9 @@ def ic_preset(ic, n, organ, name):
 
 def ic_digit(ic, s, color=INK):
     if s == ".":
-        ic.text((144, 128), ".", size=150, fill=color)
-        ic.label("point")
+        # a glyph period is a few pixels at 72 px: draw the dot instead
+        ic.dot(144, 188, 30, fill=color)
+        ic.label("decimal")
     else:
         ic.text((144, 128), s, size=150 if len(s) == 1 else 90, fill=color)
 
@@ -383,8 +393,9 @@ def ic_backspace(ic, lbl="backspace", forward=False):
     else:
         ic.poly([(44, 144), (108, 72), (244, 72), (244, 216), (108, 216)], fill=BG2, outline=INK, width=8)
         cx = 178
-    ic.line([(cx - 28, 116), (cx + 28, 172)], fill=RED, width=10)
-    ic.line([(cx + 28, 116), (cx - 28, 172)], fill=RED, width=10)
+    # the X is INK, not RED: RED is reserved for Delete measurement
+    ic.line([(cx - 28, 116), (cx + 28, 172)], fill=INK, width=10)
+    ic.line([(cx + 28, 116), (cx - 28, 172)], fill=INK, width=10)
     ic.label(lbl)
 
 
@@ -416,7 +427,7 @@ def ic_undo(ic, redo=False):
     if redo:
         curved_arrow(ic, 144, 144, 76, 200, 360, fill=OLIVE, width=16, head=36)
     else:
-        curved_arrow(ic, 144, 144, 76, 20, 180, fill=OLIVE, width=16, head=36)
+        curved_arrow(ic, 144, 144, 76, 20, 180, fill=CYAN, width=16, head=36)
     ic.label("redo" if redo else "undo")
 
 
@@ -431,17 +442,11 @@ def ic_paste(ic):
 
 
 def ic_sign(ic):
-    ic.line([(48, 200), (100, 130), (130, 200), (170, 110), (200, 190), (244, 150)], fill=PINK, width=10)
-    ic.line([(40, 226), (248, 226)], fill=DIM, width=6)
+    # the one irreversible key on the deck: amber signature inside an amber frame
+    ic.rect([14, 14, 274, 274], outline=AMBER, width=5, radius=14)
+    ic.line([(48, 200), (100, 130), (130, 200), (170, 110), (200, 190), (240, 152)], fill=AMBER, width=10)
+    ic.line([(44, 226), (244, 226)], fill=DIM, width=6)
     ic.label("sign")
-
-
-def ic_globe(ic, lbl):
-    ic.ell([56, 44, 232, 220], outline=CYAN, width=8)
-    ic.ell([112, 44, 176, 220], outline=CYAN, width=6)
-    ic.line([(56, 132), (232, 132)], fill=CYAN, width=6)
-    ic.arc([56, 80, 232, 184], 0, 360, fill=CYAN, width=5)
-    ic.label(lbl)
 
 
 def ic_mail(ic):
@@ -499,6 +504,14 @@ def ic_folder(ic, kind, lbl):
         ic.line([(76, 144), (212, 144)], fill=DIM, width=6)
         ic.ell([108, 108, 180, 180], outline=DIM, width=8)
         ic.ell([70, 70, 218, 218], outline=DIM, width=4)
+    elif kind == "pacs2":
+        # the same crosshair, with an ellipsis under it: the rest of the tools
+        ic.line([(144, 60), (144, 176)], fill=DIM, width=6)
+        ic.line([(86, 118), (202, 118)], fill=DIM, width=6)
+        ic.ell([112, 86, 176, 150], outline=DIM, width=8)
+        ic.ell([80, 54, 208, 182], outline=DIM, width=4)
+        for x in (114, 144, 174):
+            ic.dot(x, 206, 11, fill=DIM)
     elif kind == "window":
         for i in range(10):
             g = int(30 + i * (150 - 30) / 9)  # capped at 150: a DIM-ish tint ramp
@@ -793,12 +806,14 @@ FIELD_AND_DICTATE = multi("Dictate + next field", ic_field_dictate,
                           note="F4 toggles dictation, so this starts or stops it, then moves to the next "
                                "field after RadMapper's 150 ms settle")
 COPY_REPORT = multi("Report → Claude", lambda ic: ic_copy_all(ic, True, "rpt→claude"),  # "report→claude" is 292 px, wider than a key
-                    [(HK, hotkey_settings("a", ctrl=True)), (HK, hotkey_settings("c", ctrl=True)),
+                    [(HK, hotkey_settings("a", ctrl=True)), (DELAY, 150),
+                     (HK, hotkey_settings("c", ctrl=True)), (DELAY, 150),
                      (HK, hotkey_settings("left")),
                      (WEB, {"openInBrowser": True, "path": "https://claude.ai"})],
-                    "Ctrl+A, Ctrl+C, Left, open claude.ai",
-                    note="select the whole report, copy it, collapse the selection to the start of the "
-                         "report so nothing can be overtyped, then open claude.ai")
+                    "Ctrl+A, 150 ms, Ctrl+C, 150 ms, Left, open claude.ai",
+                    note="select the whole report, copy it (150 ms after each step so a long report has "
+                         "time to select and reach the clipboard), collapse the selection to the start of "
+                         "the report so nothing can be overtyped, then open claude.ai")
 OPEN_ALL_SITES = multi("Open all sites", ic_open_all,
                        [(WEB, {"openInBrowser": True, "path": url}) for _, _, url in SITES],
                        ", ".join(url for _, _, url in SITES), note="")
@@ -807,7 +822,7 @@ OPEN_ALL_SITES = multi("Open all sites", ic_open_all,
 FOLDERS = {
     "ps":    ("PowerScribe editing", "ps",      "editing"),
     "pacs":  ("PACS tools",          "pacs",    "pacs tools"),
-    "pacs2": ("PACS more",           "pacs",    "more tools"),
+    "pacs2": ("PACS more",           "pacs2",   "more tools"),
     "wl":    ("Windowing",           "window",  "windowing"),
     "num":   ("Number pad",          "numpad",  "number pad"),
     "web":   ("Web & windows",       "desktop", "web"),
@@ -828,9 +843,12 @@ STRIP_SLOTS = ["ps", "pacs", "wl", "web"]
 def strip(page_key, own="num"):
     """Bottom-row navigation: Home, Editing, PACS tools, Windowing, Web & windows.
 
-    On a page that is itself one of the strip sections, that column holds
-    ``own`` instead (Number pad, except on PACS tools where it is the only way
-    through to PACS more).
+    ``page_key`` is the page the strip is being drawn on.  If that page is one
+    of STRIP_SLOTS, its own column would only lead back to itself, so it holds
+    ``own`` instead: Number pad, except on PACS tools where that slot is the
+    only way through to PACS more.  A page outside STRIP_SLOTS (Number pad,
+    PACS more, System) matches no column and gets the plain five-key strip, so
+    Number pad is reachable from Home, Editing, Windowing and Web & windows.
     """
     return [home()] + [go(own if k == page_key else k) for k in STRIP_SLOTS]
 
@@ -841,16 +859,17 @@ PAGES = {}  # key -> (name, 3x5 grid)
 # the folder strip. Every folder page ends in a strip too, so any section is
 # one press from any other.
 PAGES["home"] = ("RadMapper Radiology", [
-    [DICTATE, PREV_FIELD, NEXT_FIELD, SWITCH_APP, IMPRESSION],
-    [PREV_SERIES, NEXT_SERIES, UNDO, REDO, go("num")],
+    [go("num"), PREV_FIELD, NEXT_FIELD, SWITCH_APP, IMPRESSION],
+    [PREV_SERIES, NEXT_SERIES, UNDO, REDO, DICTATE],
     [go("sys"), go("ps"), go("pacs"), go("wl"), go("web")],
 ])
 
-# Every page below Home keeps Dictate on the last key of the middle row (4,1),
-# so the one key you always need is under the same finger everywhere.
+# Every page keeps Dictate on the last key of the middle row (4,1), Home
+# included, so the one key you always need is under the same finger
+# everywhere.  The Number pad is the only exception: 0 holds that slot.
 PAGES["ps"] = ("PowerScribe editing", [
-    [PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION, PASTE],
-    [UNDO, REDO, COPY_REPORT, SIGN, DICTATE],
+    [SIGN, PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION],
+    [UNDO, REDO, COPY_REPORT, PASTE, DICTATE],
     strip("ps"),
 ])
 
@@ -862,7 +881,7 @@ PAGES["pacs"] = ("PACS tools", [
 
 PAGES["pacs2"] = ("PACS more", [
     [SPINE, LOCALIZER, SCOUT, INVERT, ZOOM_IN],
-    [ZOOM_OUT, preset_btn(2), preset_btn(3), NEXT_SERIES, DICTATE],
+    [ZOOM_OUT, PREV_SERIES, NEXT_SERIES, DELETE, DICTATE],
     strip("pacs2"),
 ])
 
@@ -1037,6 +1056,7 @@ def build(out_dir):
 
     with open(os.path.join(out_dir, "keymap.md"), "w") as f:
         f.write("# Every button and the key it sends\n\nGenerated by build_profile.py.\n\n")
+        f.write("Key = column,row counted from the top-left key (0,0).\n\n")
         f.write("| Page | Key | Button | Sends | Note |\n|---|---|---|---|---|\n")
         for row in all_rows:
             f.write("| " + " | ".join(str(x).replace("|", "\\|") for x in row) + " |\n")
