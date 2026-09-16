@@ -277,6 +277,93 @@ try {
     Check(EventLabelOf("weird") = "weird" && EventCodeOf("weird") = "weird",
         "An unknown event passes through unchanged")
 
+    ; v0.6.3: the input-taking actions. The Details dropdown shows LABELS and
+    ; the save path writes CODES, so a label that does not round-trip rewrites
+    ; the button a row presses -- silently, and into a config file.
+    for t in ["native", "dblclick", "dragmove", "clicklock", "moddrag"]
+        Check(TakesInputValue(t), "Input-taking action lost " t)
+    for t in ["keys", "text", "radial", "winplace", "stock", "none"]
+        Check(!TakesInputValue(t), "Free-text action " t " must keep its field")
+    for code in INPUT_VALUE_CODES
+        Check(InputCodeFromLabel(InputLabel(code)) = code,
+            "Input label round trip lost " code)
+    for code in MODDRAG_CODES
+        Check(ModifierCodeFromLabel(ModifierLabel(code)) = code,
+            "Modifier label round trip lost " code)
+    ; Blank is an answer, and it is a DIFFERENT answer in each list: click
+    ; lock offers it first ("whichever button is held"), everything else last
+    ; ("same as this input"), and moddrag does not offer it at all.
+    lock := InputValueChoices("clicklock", "")
+    Check(lock.codes[1] = "" && lock.labels[1] = "Whichever button is held",
+        "Click lock must offer the held button first")
+    nat := InputValueChoices("native", "")
+    Check(nat.codes[nat.codes.Length] = ""
+        && nat.labels[nat.labels.Length] = "Same as this input",
+        "Every other input list ends on “same as this input”")
+    for ch in [lock, nat] {
+        Check(ch.codes.Length = ch.labels.Length, "Labels and codes must pair up")
+        for i, code in ch.codes
+            Check(code = "" || InputLabel(code) = ch.labels[i],
+                "Input option " i " does not name its own code")
+    }
+    Check(Atlas.IndexOfText(lock.codes, "MButton") > 1
+        && lock.codes[Atlas.IndexOfText(lock.codes, "MButton")] = "MButton",
+        "The middle button must be selectable as a click-lock output")
+    md := InputValueChoices("moddrag", "")
+    Check(md.codes.Length = 4 && md.codes[1] = "LAlt",
+        "Modifier + left-drag takes modifiers, and starts on one")
+    ; A value the list does not offer (a key name, a tilt, a hand-edited
+    ; code) is added at the front rather than quietly replaced.
+    odd := InputValueChoices("native", "Numpad1")
+    Check(odd.codes[1] = "Numpad1", "An unlisted value must survive the editor")
+    Check(InputValueChoices("native", "RButton").codes[1] != "RButton",
+        "A value the list already offers is not duplicated")
+
+    ; The wizard's five tiles: label -> action + value, and the sentence each
+    ; one produces. "Click lock" is the one that asks a fourth question, so
+    ; its value is the answer to that question, not the tile's.
+    for tile in [["native", "LButton"], ["native", "RButton"],
+                 ["native", "MButton"], ["dblclick", "LButton"],
+                 ["clicklock", "MButton"]] {
+        Check(ACT_CODES[ActIndexOf(tile[1])] = tile[1],
+            "Wizard tile names a real action: " tile[1])
+        Check(Atlas.HasCode(Atlas.SIMPLE_ACTS, tile[1]),
+            "Simple mode must offer " tile[1] ", the wizard sets it")
+        ok := true
+        Check(ValidateActionValue(0, tile[1], tile[2], &ok) = tile[2] && ok,
+            "Wizard tile value rejected: " tile[1] " " tile[2])
+    }
+    ; The three labels a person reads when choosing one of these.
+    Check(ActLabelOf("native") = "Act like another button"
+        && ActLabelOf("dblclick") = "Double-click a button"
+        && ActLabelOf("clicklock")
+            = "Click lock (hold a button down until pressed again)",
+        "The mouse-output actions must say what they do in plain words")
+    Check(Atlas.DefaultValueFor("clicklock") = "MButton",
+        "Click lock defaults to the middle button")
+    Check(Atlas.WizWhat({act: "clicklock", value: "MButton"})
+        = "lock the middle button down until pressed again",
+        "The click-lock summary must be a sentence")
+    Check(Atlas.WizWhat({act: "clicklock", value: ""})
+        = "lock whichever button you are holding down until pressed again",
+        "A blank click lock still says what it does")
+    Check(Atlas.WizWhat({act: "native", value: "MButton"})
+        = "act like the middle button", "The native summary must be a sentence")
+    Check(Atlas.WizWhat({act: "keys", value: "^c"}) = "",
+        "Everything else falls back to the action table")
+    ; Which Details WIDGET an action wants. Two actions share one only when
+    ; this matches; anything else has to rebuild the dialog around it.
+    Check(Atlas.ValueFamily("keys") = "text"
+        && Atlas.ValueFamily("native") = "input"
+        && Atlas.ValueFamily("dblclick") = "input"
+        && Atlas.ValueFamily("moddrag") = "mod"
+        && Atlas.ValueFamily("clicklock") = "lock",
+        "An action must ask for the right Details widget")
+    ; A click-lock OUTPUT is not a middle-button hold: the warning is about
+    ; what you PRESS, not about what the action presses for you.
+    Check(!MButtonHoldRisk("XButton1", "tap"),
+        "Locking the middle button from button 4 must not warn")
+
     ; Elide is pure arithmetic over Lumi.Size -- no layer, no GpGFX.
     Check(Lumi.Elide("short", 400, "body") = "short", "Elide cut a string that fits")
     long := "PowerScribe: previous field, in every program"
@@ -290,7 +377,8 @@ try {
     FileAppend("PASS: JSON, config shape, radial geometry, rename, pause, persistence, "
         . "stations, adaptive layouts, imaging fallbacks, layout validation, "
         . "float round-trip, window placement, keyboard pointer geometry, "
-        . "clamped thresholds, hold/repeat action classes, event labels, elision`n", "*")
+        . "clamped thresholds, hold/repeat action classes, event labels, elision, "
+        . "input-value options, wizard tiles, Details widget families`n", "*")
     ExitApp(0)
 } catch as e {
     FileAppend("FAIL: " e.Message " (line " e.Line ")`n", "**")

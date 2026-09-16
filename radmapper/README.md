@@ -1,4 +1,4 @@
-# RadMapper 0.6.2-preview
+# RadMapper 0.6.3-preview
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -59,6 +59,25 @@ In Simple view the add button is **Set a button…** on the Mouse page and
 Advanced view both become **Add new** and open the full editor. Settings ▸
 **Restore shipped defaults…** puts everything back the way it arrived (it
 asks first, and it cannot be undone).
+
+A mouse button can be **another mouse button**: choose *Left click*, *Right
+click*, *Middle click*, *Double-click* or *Click lock* in the wizard, or pick
+the action in the full editor and take the button out of the **Details**
+dropdown — no codes to type. For a latch, choose **Click lock**, then choose
+the button it should hold (middle, by default); "Whichever button is held"
+keeps the original behaviour of latching whatever is already down.
+
+## Setting up without the mouse
+
+The settings window can be driven from the keyboard alone. **Tab** and
+**Shift+Tab** move between controls and draw a cyan ring around the one you
+are on, **Enter** or **Space** presses it, **Left** and **Right** step a
+dropdown, nudge a slider and flip a switch, **Up** and **Down** move a list's
+selection, and **Escape** closes the current popup, dialog or window — one
+level at a time. A dialog opens with its first control already focused; a page
+shows no ring until you press Tab, so nothing changes if you only ever click.
+Typing into a field is never interrupted: while the caret is in one, the keys
+above are just keys, and Enter commits what you typed and moves on.
 
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.

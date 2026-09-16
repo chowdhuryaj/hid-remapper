@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.2-preview  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.3-preview  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,37 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.3 (setup by keyboard, mouse buttons as outputs):
+;
+;    * THE WHOLE SETTINGS WINDOW WORKS FROM THE KEYBOARD. The widget kit
+;      keeps a focus ring per layer (Lumi.Focus): every button, switch,
+;      field, dropdown, slider and list registers itself as it is built, in
+;      the order it was built. Tab and Shift+Tab walk it and draw a 2 px cyan
+;      ring around what is focused, Enter or Space presses it, Left/Right
+;      steps a dropdown, nudges a slider and flips a switch, Up/Down moves a
+;      list's selection, and Escape keeps the meaning it always had. The ring
+;      is not drawn until Tab is pressed, so nothing changes for a mouse; a
+;      dialog opens with its first control focused. Muted (nothing-selected)
+;      buttons are skipped. The keys are `~`-prefixed and inert while a Field
+;      owns the keyboard, while an option list is open and while Rec is
+;      capturing -- typing a space types a space, and the key you record is
+;      never also the key that pressed Rec.
+;    * MOUSE BUTTONS ARE OUTPUTS. The wizard's third question gained five
+;      one-click answers -- Left click, Right click, Middle click,
+;      Double-click, Click lock -- and the Simple action list gained the
+;      three actions behind them, so "make button 4 the middle button" is
+;      two clicks rather than a typed code.
+;    * CLICK LOCK IS PROGRAMMABLE FROM THE UI. The five actions that take an
+;      INPUT as their value (native, dblclick, dragmove, clicklock, moddrag)
+;      no longer show a free-text Details field: the binding editor shows a
+;      dropdown of plain names, and the wizard asks a fourth question --
+;      "Which button should it hold?" -- when Click lock is chosen. Blank
+;      still means what it always meant, and it is spelled out: "Whichever
+;      button is held" for the lock, "Same as this input" for the rest.
+;      Nothing changed in the engine: ClickLockToggle has always resolved a
+;      named input through ResolveInputValue, and the middle-button warning
+;      is about middle-button TRIGGERS, not middle-button outputs.
 ;
 ;  v0.6.2c (review pass 3, stations + keyboard pointer) -- everything here
 ;  is a fix to v0.6.2 code that has still never run on Windows:
@@ -884,7 +915,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.2-preview"
+global RM_VERSION := "0.6.3-preview"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -974,6 +1005,41 @@ global EVENT_LABELS := Map(
     "taphold", "Tap, then hold",
     "turn", "Turn the wheel")
 
+; --- MOUSE BUTTONS AS OUTPUTS (v0.6.3) ---------------------------------------
+; Five actions do not take a shortcut or a name: they take an INPUT -- the
+; button this one should press, double-click, drag or latch instead. Until now
+; that was free text ("type RButton"), which is why "make button 4 lock the
+; middle button down" was a sentence in a hint rather than something you could
+; pick. The editors show a dropdown built from the lists below, and the codes
+; are exactly what the config stores, so nothing about the file format moves.
+global INPUT_VALUE_ACTS := ["native", "dblclick", "dragmove", "clicklock",
+                            "moddrag"]
+; The outputs offered, in the order a hand reaches them. The two tilt
+; directions are deliberately absent: a tilt wheel is not on every trackball
+; and this list is meant to be read at a glance, not to be complete -- a
+; config that names one keeps it (InputValueChoices puts it back in the list).
+global INPUT_VALUE_CODES := ["LButton", "RButton", "MButton", "XButton1",
+                             "XButton2", "WheelUp", "WheelDown"]
+; "Modifier + left-drag" is picked the same way, but the thing it picks is a
+; MODIFIER, so it has its own four.
+global MODDRAG_CODES := ["LAlt", "LCtrl", "LShift", "LWin"]
+global MODDRAG_LABELS := Map("LAlt", "Alt", "LCtrl", "Ctrl",
+                             "LShift", "Shift", "LWin", "Windows key")
+; The same inputs said MID-SENTENCE, for the wizard's one-line summary:
+; "... will lock the middle button down until pressed again". INPUT_LABELS is
+; the LABEL vocabulary and stays exactly as it is -- "lock the Button 3
+; (wheel click) down" is not a sentence anyone says.
+global INPUT_PHRASES := Map(
+    "LButton", "left button",
+    "RButton", "right button",
+    "MButton", "middle button",
+    "XButton1", "button 4",
+    "XButton2", "button 5",
+    "WheelUp", "wheel up",
+    "WheelDown", "wheel down",
+    "WheelLeft", "wheel tilted left",
+    "WheelRight", "wheel tilted right")
+
 ; Action type codes <-> GUI labels (parallel arrays; keep in sync)
 ; v1.0 (E1): the "layer"/"layertoggle" actions are RETIRED -- layers are now
 ; button-holds (a button hosts a layer just by having rows scoped to it; hold
@@ -992,7 +1058,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "macro", "run", "guiopen", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
-    "Double click",
+    "Double-click a button",
     "Modifier + left-drag (hold)",
     "Native drag after move (hold)", "PowerScribe: toggle dictation",
     "PowerScribe: next field", "PowerScribe: previous field",
@@ -1004,7 +1070,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Boost speed (hold=momentary, tap=toggle)",
     "Drag scroll — pointer moves the wheel (hold=momentary, tap=toggle)",
     "Drag zoom — pointer zooms with Ctrl+wheel (hold=momentary, tap=toggle)",
-    "Click lock (latch a held button down)",
+    "Click lock (hold a button down until pressed again)",
     "W/L dial step (+1 / -1)",
     "Switch window (+1 / -1) — scroll a list, release to pick",
     ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i]. These
@@ -1025,13 +1091,13 @@ global ACT_HINTS := Map(
     "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
     "keysrepeat", "AHK Send syntax; fires once on press, repeats while held",
     "text", "Literal text typed as-is",
-    "native", "Input to press (blank = this input), e.g. RButton",
+    "native", "The button or key this one presses instead.",
     "stock", "No value needed — this input reaches the app untouched, so the "
            . "app's own binding runs. Scope it to one app or layer to carve "
            . "an exception out of a broader remap.",
-    "dblclick", "Input to double-click (blank = left button), e.g. LButton",
-    "moddrag", "Modifier held with left-drag: LAlt, LCtrl, LShift or LWin",
-    "dragmove", "Button dragged once cursor moves (blank = this button)",
+    "dblclick", "The button this one double-clicks.",
+    "moddrag", "The modifier held down while the left button drags.",
+    "dragmove", "The button that starts dragging once the cursor moves.",
     "ps_dictate", "No value needed (uses the dictate key from Settings)",
     "ps_next", "No value needed",
     "ps_prev", "No value needed",
@@ -1045,9 +1111,9 @@ global ACT_HINTS := Map(
     "scrollptr", "No value needed (px per notch + invert set in the Pointer page (turn on “Show advanced pages” on Home))",
     "zoomptr", "No value needed — same engine as drag scroll, emitting "
              . "Ctrl+wheel, so it zooms wherever Ctrl+wheel zooms",
-    "clicklock", "Blank = whichever mouse button is held (nothing held = "
-               . "nothing happens); or name one, e.g. LButton. There is also "
-               . "a global lock key on the Pointer page (turn on “Show advanced pages” on Home).",
+    "clicklock", "The button it holds down until pressed again. There is "
+               . "also a global lock key on the Pointer page (turn on “Show "
+               . "advanced pages” on Home).",
     "wldial", "+1 or -1 (sends W/L preset digits 1..9,0 on a ring)",
     "layout", "Leave BLANK to pick from a list at the cursor, or name one "
             . "layout from the Windows page to apply it directly (turn on “Show advanced pages” on Home)",
@@ -1610,6 +1676,88 @@ IsModifierName(v) {
             return m
     }
     return ""
+}
+
+; True for the five actions whose value names an INPUT (or, for moddrag, a
+; modifier) rather than free text. Where this is true the editors swap the
+; Details field for a dropdown, so a mouse button is never typed by hand.
+TakesInputValue(atype) {
+    for t in INPUT_VALUE_ACTS {
+        if (t = atype)
+            return true
+    }
+    return false
+}
+
+; Mid-sentence name for an input ("the middle button"), for the wizard's
+; one-line summary. Falls back to the label for anything not on the list.
+InputPhrase(code) {
+    for c, ph in INPUT_PHRASES {
+        if (c = code)
+            return ph
+    }
+    return InputLabel(code)
+}
+
+; Plain name for one of the four drag modifiers.
+ModifierLabel(code) {
+    for c, l in MODDRAG_LABELS {
+        if (c = code)
+            return l
+    }
+    return code
+}
+
+ModifierCodeFromLabel(label) {
+    for code, l in MODDRAG_LABELS {
+        if (l = label)
+            return code
+    }
+    return label
+}
+
+/**
+ * The option list for an input-taking action: {labels, codes}, parallel.
+ *
+ * Blank is a real answer here and it means two different things, so it is
+ * said twice: for click lock it is "whichever button is held" and it goes
+ * FIRST, because that is the behaviour the action shipped with; everywhere
+ * else it is "the same input you pressed" and it goes last, after the
+ * explicit buttons. `cur` is the value the row already has -- anything this
+ * list does not offer (a key name, a tilt direction, a hand-edited code) is
+ * put at the front, so opening the editor can never quietly rewrite it.
+ */
+InputValueChoices(atype, cur := "") {
+    labels := []
+    codes := []
+    if (atype = "moddrag") {
+        for m in MODDRAG_CODES {
+            labels.Push(ModifierLabel(m))
+            codes.Push(m)
+        }
+        if (cur = "")                        ; a new row starts on the first
+            return {labels: labels, codes: codes}
+    } else {
+        if (atype = "clicklock") {
+            labels.Push("Whichever button is held")
+            codes.Push("")
+        }
+        for c in INPUT_VALUE_CODES {
+            labels.Push(InputLabel(c))
+            codes.Push(c)
+        }
+        if (atype != "clicklock") {
+            labels.Push("Same as this input")
+            codes.Push("")
+        }
+    }
+    for c in codes {
+        if (c = cur)
+            return {labels: labels, codes: codes}
+    }
+    labels.InsertAt(1, InputLabel(cur))
+    codes.InsertAt(1, cur)
+    return {labels: labels, codes: codes}
 }
 
 ; Ordered display-label array for an ordered code array (dropdown items).
@@ -11737,6 +11885,167 @@ class Lumi {
     static liveField := 0          ; the Field currently capturing keys
     static editBeat := 0           ; heartbeat of the live edit loop
 
+    ; ── FOCUS RING ──────────────────────────────────────────────────────────
+    /**
+     * Keyboard focus for a kit that has no window controls to give it.
+     *
+     * GpGFX shapes are pixels with click handlers -- there is no HWND per
+     * control, so Windows has nothing to Tab between and the whole settings
+     * window was mouse-only. The order a person Tabs through an interface is
+     * the order the interface was written in, so that is exactly what this
+     * records: every widget registers itself AS IT IS BUILT, into a list
+     * that belongs to the layer being built.
+     *
+     * Two rules keep it honest:
+     *
+     *   * Only the layer currently being built registers. A widget on a
+     *     dropdown popup, a toast, the Chooser or the radial wheel is built
+     *     into its own layer while that layer is the construction target,
+     *     and those have their own keys -- so Add() simply ignores them
+     *     rather than quietly appending an unreachable entry to whatever
+     *     list was last opened.
+     *   * The ring is NOT DRAWN until Tab is pressed. A person who never
+     *     touches the keyboard sees exactly the interface they saw before.
+     *     A dialog is the one exception: it opens focused on its first
+     *     control, because a dialog is a place you were sent to answer
+     *     something.
+     *
+     * The ring itself is four 2 px bars, created as ordinary shapes on the
+     * layer so a Draw() keeps them, and disposed the way List disposes its
+     * rows. They sit OUTSIDE the widget's rectangle, so they never cover the
+     * thing they point at and they never take its clicks.
+     */
+    class Focus {
+        static items := []         ; [{x, y, w, h, kind, activate?, left?, ...}]
+        static layer := 0          ; the layer these belong to
+        static idx := 0            ; 1-based; 0 = nothing focused
+        static armed := false      ; has the keyboard been used yet?
+        static ring := []          ; the four bars, so they can be disposed
+
+        /** True when the ring is up and there is something to act on. */
+        static HasFocus() {
+            return (this.armed && this.items.Length > 0)
+        }
+
+        /**
+         * Start a fresh list for a layer that is being (re)built.
+         *
+         * A rebuild of the SAME layer keeps the position: the main window
+         * repaints itself from a 700 ms tick whenever the engine's status
+         * line changes, and losing the focused control every time the layer
+         * name changed would make Tab useless on the page that shows it.
+         */
+        static Reset(lyr := 0, startFocused := false) {
+            same := (IsObject(lyr) && Lumi.Same(this.layer, lyr))
+            this.items := []
+            this.ring := []          ; the layer's Clear() disposed them
+            this.layer := IsObject(lyr) ? lyr : 0
+            if startFocused {
+                this.armed := true
+                this.idx := 1
+            } else if !same {
+                this.armed := false
+                this.idx := 0
+            }
+        }
+
+        /** Re-draw the ring after a rebuild, clamped to the new list. */
+        static Restore() {
+            n := this.items.Length
+            if (n < 1) {
+                this.idx := 0
+                return
+            }
+            if !this.armed
+                return
+            this.idx := Min(Max(this.idx, 1), n)
+            this.Paint()
+        }
+
+        /** Register a focusable widget. Ignored off the layer being built. */
+        static Add(entry) {
+            if (!IsObject(this.layer)
+                || !Lumi.Same(this.layer, LayerStack.ActiveLayer))
+                return 0
+            this.items.Push(entry)
+            return entry
+        }
+
+        static Cur() {
+            return this.items.Has(this.idx) ? this.items[this.idx] : 0
+        }
+
+        /** Walk the ring, wrapping. The first press arms it. */
+        static Move(d) {
+            n := this.items.Length
+            if (n < 1)
+                return
+            if !this.armed {
+                this.armed := true
+                this.idx := (d < 0) ? n : 1
+            } else {
+                this.idx := Mod(this.idx - 1 + d + n, n) + 1
+            }
+            this.Paint()
+        }
+
+        static Next() {
+            this.Move(1)
+        }
+
+        static Prev() {
+            this.Move(-1)
+        }
+
+        /**
+         * Run one of the focused widget's callbacks ("activate", "left",
+         * "right", "up", "down"). A widget that has no answer for a key
+         * simply does not move -- a Select has no Up, a List has no Left.
+         */
+        static Do(what) {
+            e := this.Cur()
+            if !IsObject(e)
+                return false
+            fn := (IsObject(e) && e.HasProp(what)) ? e.%what% : 0
+            if !IsObject(fn)
+                return false
+            fn()
+            return true
+        }
+
+        static Paint() {
+            for shp in this.ring {
+                try shp.Hide()
+                try shp.Dispose()
+            }
+            this.ring := []
+            e := this.Cur()
+            lyr := this.layer
+            if (!this.armed || !IsObject(e) || !IsObject(lyr))
+                return
+            prev := LayerStack.ActiveLayer
+            LayerStack.ActiveLayer := lyr
+            try {
+                col := Lumi.C["cyan"]
+                rx := e.x - 3
+                ry := e.y - 3
+                rw := e.w + 6
+                rh := e.h + 6
+                this.ring.Push(Rectangle(rx, ry, rw, 2, col, true))
+                this.ring.Push(Rectangle(rx, ry + rh - 2, rw, 2, col, true))
+                this.ring.Push(Rectangle(rx, ry, 2, rh, col, true))
+                this.ring.Push(Rectangle(rx + rw - 2, ry, 2, rh, col, true))
+            } catch {
+                this.ring := []
+            } finally {
+                if IsObject(prev)
+                    LayerStack.ActiveLayer := prev
+            }
+            Lumi.FullErase(lyr)
+            Lumi.Refresh(lyr)
+        }
+    }
+
     /** The layer a widget is being built into, captured at construction. */
     static Own() {
         return LayerStack.ActiveLayer
@@ -12094,8 +12403,14 @@ class Lumi {
                 Lumi.Label(x, y, w, label, "dim", "center", h)
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
         }
-        if (onClick != 0)
+        if (onClick != 0) {
             hit.OnEvent("Click", onClick)
+            ; A muted button has already had its handler taken away above, so
+            ; it is skipped here by the same test -- there is nothing on the
+            ; other side of it to Tab to.
+            Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "btn",
+                            activate: onClick})
+        }
         return hit
     }
 
@@ -12135,8 +12450,13 @@ class Lumi {
         state := {value: value, x: x, w: w, h: h,
                   track: track, edge: edge, knob: knob, onChange: onChange}
         ; both visible parts take the click; neither needs an overlay
-        track.OnEvent("Click", ObjBindMethod(Lumi, "__ToggleFlip", state))
-        knob.OnEvent("Click", ObjBindMethod(Lumi, "__ToggleFlip", state))
+        flip := ObjBindMethod(Lumi, "__ToggleFlip", state)
+        track.OnEvent("Click", flip)
+        knob.OnEvent("Click", flip)
+        ; Left and Right flip it as well as Enter: a switch has two states
+        ; and every arrow key a person tries should land on the other one.
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "toggle",
+                        activate: flip, left: flip, right: flip})
         return state
     }
 
@@ -12180,6 +12500,9 @@ class Lumi {
         strip := Container(x - 8, y, w + 16, h)   ; never drawn, only hit-tested
         strip.OnEvent("LeftMouseDown", ObjBindMethod(Lumi, "__SliderDrag", state, false))
         strip.OnEvent("MouseMove", ObjBindMethod(Lumi, "__SliderDrag", state, true))
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "slider",
+                        left: Lumi.__SliderNudger(state, -1),
+                        right: Lumi.__SliderNudger(state, 1)})
         return state
     }
 
@@ -12187,7 +12510,17 @@ class Lumi {
         if (needButton && !GetKeyState("LButton", "P"))
             return
         f := Min(Max((mx - state.x) / state.w, 0), 1)
-        v := Round(state.min + f * state.span)
+        Lumi.SliderSet(state, state.min + f * state.span)
+    }
+
+    /**
+     * Move a slider to a value, from wherever the value came from -- a drag,
+     * or an arrow key on the focus ring. Clamped, and silent when it lands
+     * on the value it already had, so a held arrow at the end of the track
+     * does not re-fire onChange (which writes the config) once per tick.
+     */
+    static SliderSet(state, v) {
+        v := Min(Max(Round(v), state.min), state.max)
         if (v = state.value)
             return
         state.value := v
@@ -12199,6 +12532,11 @@ class Lumi {
         state.fill.RedrawLayer()
         if (state.onChange != 0)
             (state.onChange)(v)
+    }
+
+    /** Factory: one closure per direction, capturing the step by VALUE. */
+    static __SliderNudger(state, d) {
+        return (*) => Lumi.SliderSet(state, state.value + d)
     }
 
     /** Read-only bar: flat olive fill in a flat well. */
@@ -12229,6 +12567,11 @@ class Lumi {
         box.Hover(Lumi.C["raised2"], Lumi.C["raised"])
         box.OnEvent("Click", ObjBindMethod(Lumi, "__FieldEdit", state))
         state.Focus := ObjBindMethod(Lumi, "__FieldEdit", state)
+        ; Enter or Space on a focused field starts the same edit a click
+        ; does -- and from there the field owns the keyboard, which is why
+        ; Atlas.DoFocusKey stands down entirely while Lumi.editing is up.
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "field",
+                        activate: state.Focus})
         return state
     }
 
@@ -12417,7 +12760,38 @@ class Lumi {
         Line(cx, cy + 3, cx + 5, cy - 2, Lumi.C["inkMute"], 2)
         box.Hover(Lumi.C["raised2"], Lumi.C["raised"])
         box.OnEvent("Click", ObjBindMethod(Lumi, "__SelectOpen", state))
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "select",
+                        activate: ObjBindMethod(Lumi, "__SelectOpen", state),
+                        left: Lumi.__SelectNudger(state, -1),
+                        right: Lumi.__SelectNudger(state, 1)})
         return state
+    }
+
+    /**
+     * Step a Select by one item WITHOUT opening it -- Left / Right on the
+     * focus ring, the way a native combo box behaves when it has focus.
+     *
+     * __SelectStep is the same walk the open list does, so the two can never
+     * disagree about clamping or scrolling; the only difference is that a
+     * closed control has to repaint its own label and announce the change
+     * itself, because there is no row click to do it.
+     */
+    static SelectNudge(state, d) {
+        before := state.index
+        Lumi.__SelectStep(state, d)
+        if (state.index = before || IsObject(state.pop))
+            return
+        Lumi.__SelectLabel(state)
+        Lumi.FullErase(state.owner)
+        Lumi.Refresh(state.owner)
+        if (state.onChange != 0)
+            (state.onChange)(state.index,
+                state.items.Has(state.index) ? state.items[state.index] : "")
+    }
+
+    /** Factory: one closure per direction, capturing the step by VALUE. */
+    static __SelectNudger(state, d) {
+        return (*) => Lumi.SelectNudge(state, d)
     }
 
     static __SelectLabel(state) {
@@ -12746,6 +13120,12 @@ class Lumi {
                  rows: rows, cols: cols, rowH: rowH, onPick: onPick,
                  shapes: [], layer: LayerStack.ActiveLayer}
         Lumi.__ListPaint(view)
+        ; Up / Down move the selection, Enter is the double-click -- which on
+        ; every list in this program means "open what is selected".
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "list",
+                        up: Lumi.__ListMover(view, -1),
+                        down: Lumi.__ListMover(view, 1),
+                        activate: Lumi.__ListOpener(view)})
         return view
     }
 
@@ -12857,7 +13237,41 @@ class Lumi {
         }
     }
 
+    /**
+     * Move the selection by one row, scrolling the window to keep it in
+     * view, and tell the owner -- an arrow key selects a row exactly as a
+     * click on it does, including whatever the owner rebuilds because of it.
+     */
+    static ListMove(view, d) {
+        n := view.rows.Length
+        if (n < 1)
+            return
+        i := (view.sel < 1) ? ((d > 0) ? 1 : n)
+                            : Min(Max(view.sel + d, 1), n)
+        vis := Lumi.__ListVisible(view)
+        if (i < view.top)
+            view.top := i
+        else if (i > view.top + vis - 1)
+            view.top := i - vis + 1
+        view.top := Min(Max(view.top, 1), Max(n - vis + 1, 1))
+        Lumi.__ListDo(view, i, false)
+    }
+
+    /** Enter on a list is its double-click, and only when a row is picked. */
+    static ListOpen(view) {
+        if (view.sel >= 1 && view.sel <= view.rows.Length)
+            Lumi.__ListDo(view, view.sel, true)
+    }
+
     /** Factories -- one closure per row, capturing idx by VALUE. */
+    static __ListMover(view, d) {
+        return (*) => Lumi.ListMove(view, d)
+    }
+
+    static __ListOpener(view) {
+        return (*) => Lumi.ListOpen(view)
+    }
+
     static __ListPick(view, idx, dbl) {
         return (*) => Lumi.__ListDo(view, idx, dbl)
     }
@@ -13306,7 +13720,12 @@ class Atlas {
     ; them here offered an action whose value could not be created. ActView
     ; still keeps an existing row's own action, so nothing already bound is
     ; lost -- turn advanced pages on to add a new one.
-    static SIMPLE_ACTS := ["keys", "text", "ps_dictate", "ps_next", "ps_prev",
+    ; v0.6.3: "native", "dblclick" and "clicklock" are ON this list. A mouse
+    ; button is the most ordinary output a mouse button can have, and all
+    ; three now have an editor Simple mode can show -- a dropdown of buttons
+    ; (TakesInputValue), not a field wanting a code.
+    static SIMPLE_ACTS := ["keys", "text", "native", "dblclick", "clicklock",
+        "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
         "zoomptr", "radial", "winplace", "warp", "guiopen",
         "none"]
@@ -13415,6 +13834,25 @@ class Atlas {
             Hotkey("^!Right", (*) => Atlas.SizeNudge(40, 0), "On")
             Hotkey("^!Up",    (*) => Atlas.SizeNudge(0, -40), "On")
             Hotkey("^!Down",  (*) => Atlas.SizeNudge(0, 40), "On")
+            ; SETTING UP WITHOUT THE MOUSE (v0.6.3). Tab walks the kit's
+            ; focus ring, Enter and Space press what it is on, the arrows
+            ; step a dropdown, nudge a slider, flip a switch or move a
+            ; list's selection. Same context as Escape, so all eight are
+            ; completely native everywhere except our own window.
+            ;
+            ; EVERY ONE IS `~`-PREFIXED, and that is not a detail: a live
+            ; Lumi.Field runs its own InputHook, a Rec capture runs another,
+            ; and a suppressing hotkey would take the keystroke away from
+            ; both. The handler stands down in those cases instead (see
+            ; DoFocusKey), so the key reaches whoever actually owns it.
+            ; Shift+Tab needs its own registration -- without "+Tab" the
+            ; bare "Tab" variant answers for it and focus only ever moves
+            ; forwards.
+            for hk, what in Map("~Tab", "next", "~+Tab", "prev",
+                "~Enter", "activate", "~Space", "activate",
+                "~Left", "left", "~Right", "right",
+                "~Up", "up", "~Down", "down")
+                Hotkey(hk, Atlas.FocusKey(what), "On")
             Atlas.escBound := true
         } catch {
         } finally {
@@ -13439,6 +13877,57 @@ class Atlas {
             return
         }
         Atlas.Hide()
+    }
+
+    static FocusKey(what) {
+        return (*) => Atlas.DoFocusKey(what)
+    }
+
+    /**
+     * One keyboard step in the settings window.
+     *
+     * Deliberately INERT whenever something else already owns the keyboard:
+     *
+     *   * a Rec capture is running -- the key being recorded must not also
+     *     press the button that started the recording, which is the whole
+     *     reason activation waits for its own key to come back up below;
+     *   * an option list is open -- __SelectDismiss polls Up / Down / Enter
+     *     for itself, and two walkers would move two rows per press;
+     *   * a Field is in edit mode -- typing a space must type a space.
+     *     Enter is the one key that still means something there: it is what
+     *     commits the field, so it commits and moves on. The move is
+     *     deferred, because the field's edit loop is still unwinding on the
+     *     thread underneath this one and it repaints on the way out.
+     *
+     * Escape is not here at all: it still unwinds one level (EscKey).
+     */
+    static DoFocusKey(what) {
+        if (IsObject(g_RecHook) || IsObject(Lumi.openSel))
+            return
+        if (Lumi.editing > 0) {
+            if (what != "activate" || !GetKeyState("Enter", "P"))
+                return
+            Lumi.EndEdit()
+            SetTimer(() => Lumi.Focus.Next(), -120)
+            return
+        }
+        if (what = "next") {
+            Lumi.Focus.Next()
+            return
+        }
+        if (what = "prev") {
+            Lumi.Focus.Prev()
+            return
+        }
+        if !Lumi.Focus.HasFocus()            ; the ring appears on Tab, never
+            return                           ; on an arrow key out of nowhere
+        if (what = "activate") {
+            key := GetKeyState("Space", "P") ? "Space" : "Enter"
+            try KeyWait(key, "T1")           ; see Rec, above
+            Lumi.Focus.Do("activate")
+            return
+        }
+        Lumi.Focus.Do(what)
     }
 
     static IsFront(*) {
@@ -13914,6 +14403,10 @@ class Atlas {
             Atlas.savedSel := IsObject(Atlas.list) ? Atlas.list.sel : 0
             lyr.Clear()
             Atlas.list := 0
+            ; The focus ring is rebuilt with the frame. Same layer, so the
+            ; position survives -- a status tick must not move the keyboard
+            ; focus out from under someone mid-sentence.
+            Lumi.Focus.Reset(lyr)
 
         w := Atlas.W
         h := Atlas.H
@@ -14004,6 +14497,11 @@ class Atlas {
         } catch as e {
             Problem("ui", "grip failed: " e.Message)
         }
+            try {
+                Lumi.Focus.Restore()   ; the ring, back where it was
+            } catch as e {
+                Problem("ui", "focus ring failed: " e.Message)
+            }
             Lumi.FullErase(lyr)      ; no ghosts of the frame we just replaced
             lyr.Draw()
         } catch as e {
@@ -14245,10 +14743,12 @@ class Atlas {
             . "your viewer settings. A disabled direction does nothing, and "
             . "practice never sends a command.`n`n"
             . "Getting around`n"
-            . "Use the list on the left. Escape closes the current popup or "
-            . "window. Full keyboard operation -- Tab, arrows and Enter "
-            . "through every control -- is available in the older window, "
-            . "at tray ▸ Settings (classic).`n`n"
+            . "Use the list on the left, or set the whole thing up from the "
+            . "keyboard: Tab and Shift+Tab move between controls and ring "
+            . "the one you are on, Enter or Space presses it, the arrows "
+            . "step a dropdown, nudge a slider, flip a switch or move a "
+            . "list's selection, and Escape closes the current popup or "
+            . "window.`n`n"
             . "Screens`n"
             . Atlas.HkWords("hkWarp") " opens the keyboard pointer: type a "
             . "grid cell (column letter, then row), refine with Q W E / "
@@ -15409,7 +15909,11 @@ class Atlas {
             d.btn := ""
         }
         w := 660
-        h := 560
+        ; Click lock is the one answer that asks a question of its own --
+        ; "which button should it hold?" -- so the dialog grows a fourth
+        ; step rather than hiding the answer behind a typed code.
+        askLock := (d.act = "clicklock")
+        h := askLock ? 664 : 620
         Lumi.CloseSelect()
         Lumi.EndEdit()
         if IsObject(Atlas.dlg) {
@@ -15423,14 +15927,19 @@ class Atlas {
                      w, h, "RadMapperWizard")
         Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
+        ; A dialog opens FOCUSED on its first control: it is a place you were
+        ; sent to answer something, so the ring is useful before Tab is
+        ; pressed. A page is not, which is why Build() does not do this.
+        Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
         dlg.Drag()
 
-        st := {dlg: dlg, d: d}
+        st := {dlg: dlg, d: d, actCode: d.act}
         Lumi.Card(0, 0, w, h, "surface", 0)
         Lumi.Label(24, 16, 520, "Set a button", "title")
-        Lumi.Label(24, 40, w - 48,
-            "Three questions. Nothing changes until you press Save.", "mute", "left", 20)
+        Lumi.Label(24, 40, w - 48, (askLock ? "Four questions" : "Three questions")
+            . ". Nothing changes until you press Save."
+            . "   ·   Tab, arrows and Enter work here too.", "mute", "left", 20)
         Lumi.Rule(24, 64, w - 48)
 
         ; 1 -- which button
@@ -15461,28 +15970,76 @@ class Atlas {
             Atlas.WizPick(st, "event", "hold"), d.event = "hold" ? "accent" : "ghost")
 
         ; 3 -- what
+        ; THE FIVE ONE-CLICK ANSWERS, first. A mouse button doing another
+        ; mouse button's job is the most ordinary thing on this dialog and it
+        ; used to be the hardest: choose "Act like another button" out of
+        ; sixteen, then type "MButton" into a box labelled Details. Each tile
+        ; sets the action AND its value in one press.
         Lumi.Label(24, 244, 400, "3 · What should it do?", "section")
-        st.act := Atlas.ActSelect(24, 266, 380, 32, d.act, Atlas.ActPicked(st))
-        Lumi.Label(24, 310, 120, "Details", "dim", "left", 30)
-        st.value := Lumi.Field(150, 310, 300, 30, d.value, 0,
-            "shortcut, text or menu name", true)
-        st.ed := FieldEdit(st.value)         ; the Keys picker writes here
-        Lumi.Btn(456, 310, 60, 30, "Rec", Atlas.RecValue(st), "accent")
-        Lumi.Btn(522, 310, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
-        st.hint := Lumi.Label(24, 346, w - 48,
-            ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute", "left", 22)
+        acts3 := [["Left click", "native", "LButton"],
+                  ["Right click", "native", "RButton"],
+                  ["Middle click", "native", "MButton"],
+                  ["Double-click", "dblclick", "LButton"],
+                  ["Click lock", "clicklock", "MButton"]]
+        tw3 := (w - 48 - 4 * 8) // 5
+        tx := 24
+        for a in acts3 {
+            on := (d.act = a[2]) && (a[2] = "clicklock" || d.value = a[3])
+            Lumi.Btn(tx, 264, tw3, 38, a[1], Atlas.WizAct(st, a[2], a[3]),
+                on ? "accent" : "ghost")
+            tx += tw3 + 8
+        }
+        Lumi.Label(24, 310, 110, "or choose", "mute", "left", 32)
+        st.act := Atlas.ActSelect(140, 310, 390, 32, d.act,
+            Atlas.WizActPicked(st))
+        ; Click lock's value is question 4, below -- asking for it twice on
+        ; one dialog would be two controls writing the same field.
+        if !askLock {
+            Lumi.Label(24, 350, 120, "Details", "dim", "left", 30)
+            if TakesInputValue(d.act) {
+                ch := InputValueChoices(d.act, d.value)
+                st.valueCodes := ch.codes
+                st.value := Lumi.Select(150, 350, 380, 30, ch.labels,
+                    Atlas.IndexOfText(ch.codes, d.value),
+                    Atlas.WizValuePicked(st))
+            } else {
+                st.value := Lumi.Field(150, 350, 300, 30, d.value, 0,
+                    "shortcut, text or menu name", true)
+                st.ed := FieldEdit(st.value)     ; the Keys picker writes here
+                Lumi.Btn(456, 350, 60, 30, "Rec", Atlas.RecValue(st), "accent")
+                Lumi.Btn(522, 350, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
+            }
+        }
+        ; WRAPPED, not clipped: several of these hints are a sentence and a
+        ; half, and a Label is one line that paints past its own box.
+        st.hint := Lumi.Para(24, 384, w - 48, 36,
+            ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute")
+
+        progY := 428
+        if askLock {
+            ; 4 -- which button the lock holds
+            Lumi.Label(24, 428, 460, "4 · Which button should it hold?", "section")
+            ch := InputValueChoices("clicklock", d.value)
+            st.valueCodes := ch.codes
+            st.value := Lumi.Select(24, 448, 380, 30, ch.labels,
+                Atlas.IndexOfText(ch.codes, d.value),
+                Atlas.WizValuePicked(st))
+            progY := 492
+        }
 
         apps := AppChoices()
-        Lumi.Label(24, 386, 120, "In program", "dim", "left", 30)
-        st.app := Lumi.Select(150, 386, 300, 30, apps,
+        Lumi.Label(24, progY, 120, "In program", "dim", "left", 30)
+        st.app := Lumi.Select(150, progY, 300, 30, apps,
             Atlas.IndexOfText(apps, AppDisp(d.app)))
-        Lumi.Label(24, 420, w - 48,
+        Lumi.Label(24, progY + 34, w - 48,
             "Global means everywhere. Pick a program to limit it there.",
             "mute", "left", 20)
 
         ; One plain sentence for what Save is about to do. Three tiles and
-        ; two dropdowns do not add up to a sentence on their own.
-        Lumi.Label(24, h - 106, w - 48, Atlas.WizSummary(d),
+        ; two dropdowns do not add up to a sentence on their own -- and the
+        ; sentence follows the button dropdown live, because "which button
+        ; should it hold?" is exactly the word that changes in it.
+        st.summary := Lumi.Label(24, h - 106, w - 48, Atlas.WizSummary(d),
             d.btn = "" ? "body" : "dim", "left", 24)
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Btn(24, h - 60, 130, 36, "All options…",
@@ -15493,6 +16050,7 @@ class Atlas {
             Atlas.WizSave(st), d.btn = "" ? "ghost" : "primary")
 
         Atlas.dstate := st
+        Lumi.Focus.Restore()
         Lumi.FullErase(dlg)
         dlg.Draw()
         dlg.Activate()
@@ -15504,21 +16062,51 @@ class Atlas {
             return "Pick a button to finish."
         ev := EventLabelOf(d.event)
         ev := StrLower(SubStr(ev, 1, 1)) SubStr(ev, 2)
-        what := DescribeAction(Map("type", d.act, "value", d.value))
-        ; lower-case the opening word unless it is a proper noun
-        ; ("PowerScribe", "PACS", "W/L") -- those carry an inner capital
-        word := RegExMatch(what, "^\w+", &m) ? m[0] : ""
-        if !RegExMatch(SubStr(word, 2), "[A-Z]")
-            what := StrLower(SubStr(what, 1, 1)) SubStr(what, 2)
+        what := Atlas.WizWhat(d)
+        if (what = "") {
+            what := DescribeAction(Map("type", d.act, "value", d.value))
+            ; lower-case the opening word unless it is a proper noun
+            ; ("PowerScribe", "PACS", "W/L") -- those carry an inner capital
+            word := RegExMatch(what, "^\w+", &m) ? m[0] : ""
+            if !RegExMatch(SubStr(word, 2), "[A-Z]")
+                what := StrLower(SubStr(what, 1, 1)) SubStr(what, 2)
+        }
         where := (d.app = "*") ? "in every program" : "in " AppDisp(d.app)
         return InputLabel(d.btn) ", when you " ev ", will " what " — " where "."
+    }
+
+    /**
+     * The middle of the summary sentence, for the actions that press a
+     * BUTTON.
+     *
+     * DescribeAction speaks the table's language -- "Click lock (hold a
+     * button down until pressed again): Button 3 (wheel click)" -- which is
+     * right for a column and wrong for a sentence. These three are the ones
+     * a person would say out loud, so they are written out: "will lock the
+     * middle button down until pressed again". "" means "not one of mine",
+     * and WizSummary falls back to the table.
+     */
+    static WizWhat(d) {
+        switch d.act {
+            case "clicklock":
+                return (d.value = "")
+                    ? "lock whichever button you are holding down until pressed again"
+                    : "lock the " InputPhrase(d.value) " down until pressed again"
+            case "native":
+                return (d.value = "") ? "act like the input you pressed"
+                    : "act like the " InputPhrase(d.value)
+            case "dblclick":
+                return "double-click the "
+                    . InputPhrase(d.value = "" ? "LButton" : d.value)
+        }
+        return ""
     }
 
     /** Snapshot the editable fields into the draft before a reopen. */
     static WizDraft(st) {
         d := st.d
         try d.act := Atlas.ActCode(st.act)
-        try d.value := Lumi.FieldValue(st.value)
+        try d.value := Atlas.DlgValue(st)
         try {
             apps := AppChoices()
             d.app := AppCodeFromDisp(apps.Has(st.app.index)
@@ -15538,6 +16126,68 @@ class Atlas {
         ; unwind the click before the layer it came from is disposed
         SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
     }
+    /** One of the five tiles under question 3: an action AND its value. */
+    static WizAct(st, act, value) {
+        return (*) => Atlas.DoWizAct(st, act, value)
+    }
+
+    static DoWizAct(st, act, value) {
+        if !Atlas.DlgAlive(st)
+            return
+        Lumi.EndEdit()
+        d := Atlas.WizDraft(st)
+        d.act := act
+        d.value := value
+        ; unwind the click before the layer it came from is disposed
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
+    }
+
+    /**
+     * The wizard's action dropdown.
+     *
+     * An action whose Details widget is the same shape only needs its hint
+     * refreshed. One that crosses the line -- into or out of the button
+     * dropdown, or into or out of click lock's fourth question -- reopens
+     * the dialog around the answers already given, which is the wizard's
+     * standing pattern for every tile.
+     */
+    static WizActPicked(st) {
+        return (i, t) => Atlas.DoWizActPicked(st)
+    }
+
+    static DoWizActPicked(st) {
+        if !Atlas.DlgAlive(st)
+            return
+        code := Atlas.ActCode(st.act)
+        if (Atlas.ValueFamily(code) = Atlas.ValueFamily(st.d.act)) {
+            Atlas.ActHint(st, 0)
+            return
+        }
+        Lumi.EndEdit()
+        d := Atlas.WizDraft(st)
+        d.act := code
+        d.value := Atlas.DefaultValueFor(code)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
+    }
+
+    /** The Details dropdown changed: re-say the sentence at the bottom. */
+    static WizValuePicked(st) {
+        return (i, t) => Atlas.WizRestate(st)
+    }
+
+    static WizRestate(st) {
+        if !Atlas.DlgAlive(st)
+            return
+        try {
+            st.summary.str := Atlas.WizSummary(Atlas.WizDraft(st))
+            ; Full erase: the new sentence is usually SHORTER than the old
+            ; one, and GpGFX exempts Text from the clipping that would keep
+            ; the tail of the old one inside the erased box.
+            Lumi.FullErase(st.dlg)
+            Lumi.Refresh(st.dlg)
+        }
+    }
+
     static WizRecKey(st) {
         return (*) => Atlas.DoWizRecKey(st)
     }
@@ -16672,7 +17322,13 @@ class Atlas {
      * in the engine it always was.
      */
     static BindDlg(idx, keyMode := false, seed := 0) {
-        row := idx ? g_Cfg["bindings"][idx] : seed
+        ; A seed WINS over the stored row, for an edit as well as for a new
+        ; one: changing the action between the free-text family and the
+        ; input-picking family swaps the Details widget, and the only honest
+        ; way to swap a widget in this kit is to rebuild the dialog around
+        ; the answers already given. st.original still holds the row as it
+        ; is ON DISK, which is what the concurrent-edit guard compares.
+        row := IsObject(seed) ? seed : (idx ? g_Cfg["bindings"][idx] : 0)
         w := 660
         h := 486
         Lumi.CloseSelect()
@@ -16687,6 +17343,10 @@ class Atlas {
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperEdit")
         Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
+        ; A dialog opens FOCUSED on its first control: it is a place you were
+        ; sent to answer something, so the ring is useful before Tab is
+        ; pressed. A page is not, which is why Build() does not do this.
+        Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
         dlg.Drag()               ; it is borderless too -- it needs a caption
 
@@ -16698,7 +17358,8 @@ class Atlas {
         apps := AppChoices()
         layers := LayerChoices()
         events := Atlas.EventChoices(keyMode)
-        st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg, original: row}
+        st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg,
+               original: idx ? g_Cfg["bindings"][idx] : row}
 
         Lumi.Label(24, 70, 120, "In program", "dim", "left", 30)
         st.app := Lumi.Select(150, 70, 240, 30, apps,
@@ -16753,21 +17414,36 @@ class Atlas {
         st.win := Lumi.Toggle(504, 242, "Win", InStr(mods, "#") ? 1 : 0, 0, 44, 24)
 
         actCode := row ? row["action"]["type"] : "keys"
+        st.actCode := actCode            ; what the Details widget was built for
         Lumi.Label(24, 280, 120, "It does", "dim", "left", 30)
         st.act := Atlas.ActSelect(150, 280, 380, 30, actCode, Atlas.ActPicked(st))
 
+        actVal := row ? MGet(row["action"], "value", "") : ""
         Lumi.Label(24, 322, 120, "Details", "dim", "left", 30)
-        st.value := Lumi.Field(150, 322, 306, 30,
-            row ? MGet(row["action"], "value", "") : "", 0, "action value", true)
-        ; The three tools, back where they belong. Rec records a live combo,
-        ; Keys is the visual keycode picker (so a function key is never
-        ; entered as bare "F7", which types F then 7), Input picks the button
-        ; or key a native / drag / click-lock row points at.
-        ed := FieldEdit(st.value)
-        st.ed := ed
-        Lumi.Btn(462, 322, 54, 30, "Rec", Atlas.RecValue(st), "accent")
-        Lumi.Btn(522, 322, 54, 30, "Keys", Atlas.PickKeys(st), "ghost")
-        Lumi.Btn(582, 322, 54, 30, "Input", Atlas.PickInput(st), "ghost")
+        if TakesInputValue(actCode) {
+            ; THIS ACTION TAKES A BUTTON, so it offers buttons. It used to
+            ; offer an empty text box and a hint naming one code, which is
+            ; why "click lock the middle button" was something you had to be
+            ; told rather than something you could see. The codes ride along
+            ; on st.valueCodes, exactly as ActSelect carries its own.
+            ch := InputValueChoices(actCode, actVal)
+            st.valueCodes := ch.codes
+            st.value := Lumi.Select(150, 322, 380, 30, ch.labels,
+                Atlas.IndexOfText(ch.codes, actVal))
+        } else {
+            st.value := Lumi.Field(150, 322, 306, 30, actVal, 0,
+                "action value", true)
+            ; The three tools, back where they belong. Rec records a live
+            ; combo, Keys is the visual keycode picker (so a function key is
+            ; never entered as bare "F7", which types F then 7), and Input
+            ; picks a button or key by name -- it stays here for the actions
+            ; that can still name one in free text.
+            ed := FieldEdit(st.value)
+            st.ed := ed
+            Lumi.Btn(462, 322, 54, 30, "Rec", Atlas.RecValue(st), "accent")
+            Lumi.Btn(522, 322, 54, 30, "Keys", Atlas.PickKeys(st), "ghost")
+            Lumi.Btn(582, 322, 54, 30, "Input", Atlas.PickInput(st), "ghost")
+        }
 
         st.hint := Lumi.Label(150, 358, w - 174,
             ACT_HINTS.Has(actCode) ? ACT_HINTS[actCode] : "", "mute", "left", 34)
@@ -16782,6 +17458,7 @@ class Atlas {
             Atlas.SaveDlg(st), "primary")
 
         Atlas.dstate := st
+        Lumi.Focus.Restore()
         Lumi.FullErase(dlg)      ; rebuilt in place -- no ghosts
         dlg.Draw()
         dlg.Activate()
@@ -16817,18 +17494,109 @@ class Atlas {
         return IsKeyInput(Atlas.keySel) ? Atlas.keySel : ""
     }
 
-    /** Action changed: refresh the hint line, exactly as the classic dialog does. */
+    /**
+     * Action changed: refresh the hint line -- or rebuild the dialog, when
+     * the new action needs a different Details WIDGET.
+     *
+     * Five actions take an input and get a dropdown; everything else takes
+     * free text and gets a field. This kit cannot turn one into the other in
+     * place, and it does not need to: the dialog reopens around the answers
+     * already given, the way the wizard has always reopened around a tile.
+     */
     static ActPicked(st) {
         return (i, t) => Atlas.ActHint(st, i)
     }
 
     static ActHint(st, i) {
         code := Atlas.ActCode(st.act)
+        if (Atlas.ValueFamily(code) != Atlas.ValueFamily(st.actCode)) {
+            Lumi.EndEdit()
+            seed := Atlas.BindDraft(st, code)
+            SetTimer(() => Atlas.OpenDlg(()
+                => Atlas.BindDlg(st.idx, st.keyMode, seed)), -1)
+            return
+        }
         txt := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
         try {
             st.hint.str := txt
             Lumi.Refresh(st.dlg)
         }
+    }
+
+    /** True while this dialog's Details widget is a dropdown, not a field. */
+    static HasValueList(st) {
+        return (IsObject(st) && st.HasProp("valueCodes")
+                && IsObject(st.valueCodes))
+    }
+
+    /**
+     * Which Details widget an action wants.
+     *
+     * Not a boolean: "input" and "mod" are both dropdowns but they offer
+     * different things, and "lock" is a dropdown whose blank entry means
+     * something else again ("whichever button is held", and in the wizard it
+     * is a question of its own). Two actions share a widget only when this
+     * string matches, and anything else has to be rebuilt.
+     */
+    static ValueFamily(atype) {
+        if (atype = "moddrag")
+            return "mod"
+        if (atype = "clicklock")
+            return "lock"
+        return TakesInputValue(atype) ? "input" : "text"
+    }
+
+    /**
+     * The Details value RIGHT NOW, whichever widget is showing it.
+     *
+     * Not st.value.value and not st.value.index: a Select stores a code
+     * beside its label and a Field may still be mid-edit (Lumi.FieldValue is
+     * the only honest read of one), and the save path must not have to know
+     * which of the two it is looking at.
+     */
+    static DlgValue(st) {
+        if Atlas.HasValueList(st) {
+            i := st.value.index
+            return st.valueCodes.Has(i) ? st.valueCodes[i] : ""
+        }
+        return Lumi.FieldValue(st.value)
+    }
+
+    /**
+     * What an action starts on when the Details widget changes under it.
+     *
+     * A shortcut is not a button and a button is not a shortcut, so carrying
+     * the old value across the line would put "^c" in a list of mouse
+     * buttons. Each input-taking action starts on the answer it is almost
+     * always given instead.
+     */
+    static DefaultValueFor(atype) {
+        switch atype {
+            case "dblclick": return "LButton"
+            case "clicklock": return "MButton"
+            case "moddrag": return "LAlt"
+        }
+        return ""
+    }
+
+    /** Snapshot the binding editor's fields into a row, for a reopen. */
+    static BindDraft(st, atype) {
+        apps := AppChoices()
+        layers := LayerChoices()
+        app := AppCodeFromDisp(apps.Has(st.app.index)
+            ? apps[st.app.index] : "Global (all apps)")
+        lay := LayerCodeFromLabel(layers.Has(st.layer.index)
+            ? layers[st.layer.index] : LAYER_BASE_LABEL)
+        event := st.events.Has(st.event.index) ? st.events[st.event.index] : "tap"
+        mods := (st.ctrl.value ? "^" : "") (st.alt.value ? "!" : "")
+              . (st.shift.value ? "+" : "") (st.win.value ? "#" : "")
+        if st.keyMode
+            btn := CanonicalInputName(NormalizeInputName(Lumi.FieldValue(st.input)))
+        else
+            btn := InputCodeFromLabel(st.input.items.Has(st.input.index)
+                ? st.input.items[st.input.index] : "")
+        return NewBinding(app, lay, mods, btn, event, atype,
+            Atlas.DefaultValueFor(atype))
     }
 
     ; ── VALUE TOOLS ─────────────────────────────────────────────────────────
@@ -16937,7 +17705,7 @@ class Atlas {
             btn := InputCodeFromLabel(st.input.items.Has(st.input.index)
                 ? st.input.items[st.input.index] : "")
         atype := Atlas.ActCode(st.act)
-        val := Lumi.FieldValue(st.value)
+        val := Atlas.DlgValue(st)
         hwnd := Lumi.HwndOf(st.dlg)
 
         if (btn = "") {
@@ -17096,6 +17864,10 @@ class Atlas {
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperWheelDeck")
         Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
+        ; A dialog opens FOCUSED on its first control: it is a place you were
+        ; sent to answer something, so the ring is useful before Tab is
+        ; pressed. A page is not, which is why Build() does not do this.
+        Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
         dlg.Drag()
 
@@ -17177,6 +17949,7 @@ class Atlas {
             Atlas.SaveWheel(st), "primary")
 
         Atlas.dstate := st
+        Lumi.Focus.Restore()
         Lumi.FullErase(dlg)      ; rebuilt in place -- no ghosts
         dlg.Draw()
         dlg.Activate()
@@ -17341,9 +18114,16 @@ class Atlas {
             Atlas.dlg := 0
         }
         Atlas.dstate := 0
+        ; Every entry in the focus ring points at a shape that has just been
+        ; disposed. Drop them, and rebuild the window so it registers its own
+        ; again -- deferred, because this runs inside the click handler of a
+        ; button on the layer being torn down.
+        Lumi.Focus.Reset(0)
+        Atlas.lastSig := ""
         if IsObject(Atlas.lyr) {
             LayerStack.ActiveLayer := Atlas.lyr
             try Atlas.lyr.Activate()
+            SetTimer(() => Atlas.Build(), -1)
         }
     }
 
@@ -17380,6 +18160,10 @@ class Atlas {
                      w, h, "RadMapperMenuEdit")
         Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
+        ; A dialog opens FOCUSED on its first control: it is a place you were
+        ; sent to answer something, so the ring is useful before Tab is
+        ; pressed. A page is not, which is why Build() does not do this.
+        Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
         dlg.Drag()
 
@@ -17456,6 +18240,7 @@ class Atlas {
             Atlas.SaveMenu(st), "primary")
 
         Atlas.dstate := st
+        Lumi.Focus.Restore()
         Lumi.FullErase(dlg)
         dlg.Draw()
         dlg.Activate()
