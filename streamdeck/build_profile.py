@@ -14,7 +14,6 @@ badge and are listed in README.md with the key they send.
 Usage:  python3 build_profile.py [--out DIR]
 """
 import argparse
-import io
 import json
 import math
 import os
@@ -46,9 +45,13 @@ MOD_ALT, MOD_CTRL, MOD_SHIFT, MOD_WIN = 1, 2, 4, 8
 def hotkey_settings(key, ctrl=False, shift=False, alt=False, win=False):
     vk, qt = KEYS[key]
     mods = (MOD_ALT if alt else 0) | (MOD_CTRL if ctrl else 0) | (MOD_SHIFT if shift else 0) | (MOD_WIN if win else 0)
+    # Stream Deck stores four hotkey slots per key; the unused three are blank.
+    blank = {"KeyCmd": False, "KeyCtrl": False, "KeyModifiers": 0, "KeyOption": False,
+             "KeyShift": False, "NativeCode": -1, "QTKeyCode": 33554431, "VKeyCode": -1}
     return {"Coalesce": True, "Hotkeys": [{
         "KeyCmd": win, "KeyCtrl": ctrl, "KeyModifiers": mods, "KeyOption": alt,
-        "KeyShift": shift, "NativeCode": vk, "QTKeyCode": qt, "VKeyCode": vk}]}
+        "KeyShift": shift, "NativeCode": vk, "QTKeyCode": qt, "VKeyCode": vk}]
+        + [dict(blank) for _ in range(3)]}
 
 
 def combo_text(key, ctrl=False, shift=False, alt=False, win=False):
@@ -79,9 +82,27 @@ GREEN = (74, 190, 130)
 S = 4                      # supersampling factor
 PX = 288                   # Stream Deck key image size
 W = PX * S
-FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
-FONT_B = FONT_DIR + "DejaVuSans-Bold.ttf"
-FONT_R = FONT_DIR + "DejaVuSans.ttf"
+# The first (bold, regular) pair that exists on this machine.  Set FONT_B /
+# FONT_R by hand below if your fonts live somewhere else.
+FONT_CANDIDATES = [
+    ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+    ("C:/Windows/Fonts/segoeuib.ttf", "C:/Windows/Fonts/segoeui.ttf"),
+    ("C:/Windows/Fonts/arialbd.ttf", "C:/Windows/Fonts/arial.ttf"),
+    ("/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+     "/System/Library/Fonts/Supplemental/Arial.ttf"),
+]
+FONT_B = FONT_R = None
+for _b, _r in FONT_CANDIDATES:
+    if os.path.exists(_b) and os.path.exists(_r):
+        FONT_B, FONT_R = _b, _r
+        break
+if FONT_B is None:
+    raise SystemExit(
+        "No usable font found.  Looked for:\n  "
+        + "\n  ".join(f"{b}  +  {r}" for b, r in FONT_CANDIDATES)
+        + "\nSet FONT_B / FONT_R at the top of build_profile.py to a bold and a "
+          "regular TrueType font that exist on this machine.")
 
 
 def font(size, bold=True):
@@ -126,8 +147,8 @@ class Icon:
     def label(self, s, fill=DIM, size=30):
         """Small caption along the bottom edge (baked in, so no Stream Deck title is needed)."""
         s = s.upper()
-        while size > 20 and self.d.textlength(s, font=font(size)) / S > 248:
-            size -= 1  # last resort: a caption no shortening got under the key width
+        while size > 28 and self.d.textlength(s, font=font(size)) / S > 248:
+            size -= 1  # "dictate + next" is the only caption wide enough to need this
         self.text((144, 262), s, size=size, fill=fill)
 
     def arrow(self, p0, p1, fill=CYAN, width=12, head=26):
@@ -183,7 +204,10 @@ def ic_field(ic, direction):
     ic.rect([44, 150, 204, 206], outline=DIM if prev else CYAN, width=6 if prev else 8, radius=8)
     cy = 100 if prev else 178
     ic.line([(68, cy - 16), (68, cy + 16)], fill=INK, width=8)
-    ic.chevron(248, 139, 28, "up" if prev else "down", fill=PINK)
+    if prev:
+        ic.arrow((236, 200), (236, 72), fill=PINK, width=14, head=30)
+    else:
+        ic.arrow((236, 72), (236, 200), fill=PINK, width=14, head=30)
     ic.label("prev field" if prev else "next field")
 
 
@@ -244,15 +268,18 @@ def ic_magnify(ic):
 
 
 def ic_zoom(ic, sign):
-    # an image frame whose corners pull outward (in) or inward (out)
-    ic.rect([44, 48, 244, 216], outline=DIM, width=6, radius=6)
-    for dx in (-1, 1):
-        for dy in (-1, 1):
-            near = (144 + dx * 42, 132 + dy * 34)
-            far = (144 + dx * 80, 132 + dy * 62)
-            ic.arrow(near, far, fill=CYAN, width=10, head=20) if sign == "+" else \
-                ic.arrow(far, near, fill=CYAN, width=10, head=20)
-    ic.text((144, 132), "+" if sign == "+" else "−", size=48, fill=INK)
+    # a big +/- with one diagonal pair of corner arrows, pulling out or in
+    cx, cy, h = 144, 130, 60
+    ic.line([(cx - h, cy), (cx + h, cy)], fill=INK, width=22)
+    if sign == "+":
+        ic.line([(cx, cy - h), (cx, cy + h)], fill=INK, width=22)
+    for dx, dy in ((-1, -1), (1, 1)):
+        near = (cx + dx * 86, cy + dy * 74)
+        far = (cx + dx * 118, cy + dy * 100)
+        if sign == "+":
+            ic.arrow(near, far, fill=CYAN, width=10, head=22)
+        else:
+            ic.arrow(far, near, fill=CYAN, width=10, head=22)
     ic.label("zoom in" if sign == "+" else "zoom out")
 
 
@@ -272,11 +299,10 @@ def ic_trash(ic):
 
 
 def ic_spine(ic):
-    # a column of vertebral bodies with labels beside them
-    for i, y in enumerate((44, 92, 140, 188)):
-        ic.rect([100, y, 172, y + 36], fill=BG2, outline=INK, width=6, radius=8)
-        ic.ell([120, y + 36, 152, y + 50], fill=DIM)
-        ic.text((208, y + 18), f"L{i + 1}", size=22, fill=OLIVE)
+    # three vertebral bodies with a disc between each: big enough to read at 72 px
+    for y in (52, 116, 180):
+        ic.rect([106, y, 182, y + 44], fill=BG2, outline=INK, width=7, radius=8)
+        ic.ell([118, y + 44, 170, y + 64], fill=DIM)
     ic.label("spine label")
 
 
@@ -330,7 +356,7 @@ def ic_preset(ic, n, organ, name):
     elif organ == "infarct":  # brain with a solid wedge of low density
         box = [gx - 44, gy - 48, gx + 44, gy + 44]
         ic.ell(box, outline=INK, width=w)
-        ic.d.pieslice(ic._s(box), 288, 356, fill=(8, 12, 22), outline=DIM, width=4 * S)
+        ic.d.pieslice(ic._s(box), 288, 356, fill=DIM, outline=INK, width=4 * S)
         ic.line([(gx, gy - 48), (gx, gy + 44)], fill=INK, width=w)
     elif organ == "liver":
         ic.poly([(gx - 46, gy - 26), (gx + 18, gy - 42), (gx + 46, gy - 8), (gx + 28, gy + 44), (gx - 28, gy + 28)],
@@ -348,7 +374,7 @@ def ic_preset(ic, n, organ, name):
 
 def ic_digit(ic, s, color=INK):
     if s == ".":
-        ic.dot(144, 190, 13, fill=color)
+        ic.dot(144, 170, 30, fill=color)
         ic.label("point")
     else:
         ic.text((144, 128), s, size=150 if len(s) == 1 else 90, fill=color)
@@ -388,12 +414,13 @@ def curved_arrow(ic, cx, cy, r, a0, a1, fill=CYAN, width=14, head=30):
 
 
 def ic_undo(ic, redo=False):
-    # redo: arc from lower-left over the top, head coming down on the right.
-    # undo is its mirror image, so both heads are drawn by the same code.
-    curved_arrow(ic, 144, 140, 76, 120, 360, fill=CYAN)
-    if not redo:
-        ic.im = ic.im.transpose(Image.FLIP_LEFT_RIGHT)
-        ic.d = ImageDraw.Draw(ic.im)
+    # undo: the arc sweeps round to the left and the head lands at 9 o'clock.
+    # redo: the arc sweeps round to the right, head at 3 o'clock.  Different
+    # arcs, not one image flipped, so the two never read as the same key.
+    if redo:
+        curved_arrow(ic, 144, 144, 76, 200, 360, fill=OLIVE, width=16, head=36)
+    else:
+        curved_arrow(ic, 144, 144, 76, 20, 180, fill=CYAN, width=16, head=36)
     ic.label("redo" if redo else "undo")
 
 
@@ -604,14 +631,14 @@ def ic_clipboard(ic):
 
 def ic_field_dictate(ic):
     # the same field grammar as ic_field, plus a mic: two steps in one press
-    ic.rect([28, 76, 150, 128], outline=DIM, width=6, radius=8)
-    ic.rect([28, 150, 150, 202], outline=CYAN, width=8, radius=8)
+    ic.rect([28, 76, 140, 128], outline=DIM, width=6, radius=8)
+    ic.rect([28, 150, 140, 202], outline=CYAN, width=8, radius=8)
     ic.line([(50, 160), (50, 192)], fill=INK, width=8)
-    ic.chevron(180, 139, 24, "down", fill=PINK)
-    ic.rect([232, 56, 258, 106], fill=PINK, radius=13)
-    ic.arc([218, 66, 272, 120], 0, 180, fill=INK, width=7)
-    ic.line([(245, 120), (245, 142)], fill=INK, width=7)
-    ic.line([(228, 142), (262, 142)], fill=INK, width=7)
+    ic.arrow((236, 72), (236, 200), fill=PINK, width=14, head=30)
+    ic.rect([173, 60, 199, 110], fill=PINK, radius=13)
+    ic.arc([159, 70, 213, 124], 0, 180, fill=INK, width=7)
+    ic.line([(186, 124), (186, 146)], fill=INK, width=7)
+    ic.line([(169, 146), (203, 146)], fill=INK, width=7)
     ic.label("dictate + next")
 
 
@@ -628,17 +655,6 @@ def ic_open_all(ic):
         ic.rect([x, y, x + 78, y + 66], fill=BG2, outline=(CYAN, ORANGE, GREEN, GOLD)[i], width=6, radius=6)
         ic.line([(x, y + 16), (x + 78, y + 16)], fill=(CYAN, ORANGE, GREEN, GOLD)[i], width=4)
     ic.label("all sites")
-
-
-def ic_clear_next(ic):
-    ic.rect([56, 74, 128, 190], fill=BG2, outline=RED, width=7, radius=8)
-    ic.line([(44, 74), (140, 74)], fill=RED, width=8)
-    for x in (76, 92, 108):
-        ic.line([(x, 96), (x, 170)], fill=RED, width=5)
-    for i, y in enumerate((92, 120, 148, 176)):
-        ic.ell([164, y - 14, 240, y + 14], outline=CYAN if i == 3 else DIM, width=6)
-    ic.arrow((256, 84), (256, 200), fill=PINK, width=8, head=18)
-    ic.label("clear+next")
 
 
 def ic_scratch(ic):
@@ -724,6 +740,7 @@ RULER = hk("Ruler", ic_ruler, "r", note="RadMapper PACS wheel")
 ROI = hk("ROI", ic_roi, "r", shift=True, note="RadMapper PACS wheel")
 MAGNIFY = hk("Magnifying glass", ic_magnify, "y", note="RadMapper PACS wheel")
 UNDO = hk("Undo", ic_undo, "z", ctrl=True)
+REDO = hk("Redo", lambda ic: ic_undo(ic, True), "y", ctrl=True)
 CLAHE = hk("CLAHE", ic_clahe, "c", shift=True, note="RadMapper PACS wheel")
 DELETE = hk("Delete measurement", ic_trash, "delete", note="RadMapper PACS wheel")
 INVERT = hk("Invert", ic_invert, "i", shift=True, needs_setup=True, note="Assign Shift+I to Invert in IntelliSpace preferences")
@@ -757,29 +774,30 @@ SITES = [("UMN Mail", ic_mail, "https://mail.umn.edu"), ("Claude", ic_claude, "h
          ("UMN Radiology", ic_umnrad, "https://umnradiology.com")]
 
 # Multi Actions (Stream Deck native, several steps per press) ------------------
-FIELD_AND_DICTATE = multi("Next field & dictate", ic_field_dictate,
+FIELD_AND_DICTATE = multi("Dictate + next field", ic_field_dictate,
                           [(HK, DICTATE.action[1]), (HK, NEXT_FIELD.action[1])],
                           "Dictate, then Next field",
                           note="stop dictation, then jump to the next field; RadMapper's macro adds a 150 ms pause "
                                "between the two, which a Stream Deck Multi Action does not")
 COPY_REPORT = multi("Copy whole report", ic_copy_all,
-                    [(HK, hotkey_settings("a", ctrl=True)), (HK, hotkey_settings("c", ctrl=True))],
-                    "Ctrl+A, Ctrl+C", note="select the whole report and copy it (e.g. to paste into Claude)")
+                    [(HK, hotkey_settings("a", ctrl=True)), (HK, hotkey_settings("c", ctrl=True)),
+                     (HK, hotkey_settings("end", ctrl=True))],
+                    "Ctrl+A, Ctrl+C, Ctrl+End",
+                    note="select the whole report, copy it (e.g. to paste into Claude), then drop the "
+                         "selection so the next keystroke cannot overwrite the report")
 OPEN_ALL_SITES = multi("Open all sites", ic_open_all,
                        [(WEB, {"openInBrowser": True, "path": url}) for _, _, url in SITES],
                        "opens all four sites", note="")
-CLEAR_AND_NEXT = multi("Clear & next series", ic_clear_next,
-                       [(HK, hotkey_settings("delete")), (HK, hotkey_settings("f8"))],
-                       "Delete, F8", note="drop the measurement, move to the next series")
 
 # ─── folder strip ───────────────────────────────────────────────────────────
 FOLDERS = {
-    "ps":   ("PowerScribe editing", "ps",      "editing"),
-    "pacs": ("PACS tools",          "pacs",    "pacs tools"),
-    "wl":   ("Windowing",           "window",  "windowing"),
-    "num":  ("Number pad",          "numpad",  "number pad"),
-    "web":  ("Web & windows",       "desktop", "web & windows"),
-    "sys":  ("System",              "system",  "system"),
+    "ps":    ("PowerScribe editing", "ps",      "editing"),
+    "pacs":  ("PACS tools",          "pacs",    "pacs tools"),
+    "pacs2": ("PACS more",           "pacs",    "more tools"),
+    "wl":    ("Windowing",           "window",  "windowing"),
+    "num":   ("Number pad",          "numpad",  "number pad"),
+    "web":   ("Web & windows",       "desktop", "web"),
+    "sys":   ("System",              "system",  "system"),
 }
 
 
@@ -788,61 +806,74 @@ def go(key):
     return folder(name, kind, lbl, key)
 
 
-def strip(*others):
-    """Bottom-row navigation: Home first, then the listed sections."""
-    return [home()] + [go(k) for k in others]
+# Fixed strip columns, so a section always sits under the same finger.  On a
+# page that is itself one of these sections, its own column holds Number pad.
+STRIP_SLOTS = ["ps", "pacs", "wl", "web"]
+
+
+def strip(page_key):
+    """Bottom-row navigation: Home, Editing, PACS tools, Windowing, Web & windows."""
+    return [home()] + [go("num" if k == page_key else k) for k in STRIP_SLOTS]
 
 
 PAGES = {}  # key -> (name, 3x5 grid)
 
-# Home: the five every-case keys, the four most common window moves, and the
-# folder strip. Every folder page ends in a strip too, so any section is one
-# press from any other.
+# Home: the five every-case keys, the four edit keys used in every report, and
+# the folder strip. Every folder page ends in a strip too, so any section is
+# one press from any other.
 PAGES["home"] = ("RadMapper Radiology", [
-    [DICTATE, PREV_FIELD, NEXT_FIELD, SWITCH_APP, SHOW_DESKTOP],
-    [PREV_SERIES, NEXT_SERIES, UNDO, IMPRESSION, go("sys")],
-    [go("ps"), go("pacs"), go("wl"), go("num"), go("web")],
+    [DICTATE, PREV_FIELD, NEXT_FIELD, SWITCH_APP, IMPRESSION],
+    [PREV_SERIES, NEXT_SERIES, UNDO, REDO, go("num")],
+    [go("sys"), go("ps"), go("pacs"), go("wl"), go("web")],
 ])
 
 PAGES["ps"] = ("PowerScribe editing", [
     [DICTATE, PREV_FIELD, NEXT_FIELD, FIELD_AND_DICTATE, IMPRESSION],
-    [UNDO, hk("Redo", lambda ic: ic_undo(ic, True), "y", ctrl=True),
-     COPY_REPORT, hk("Paste", ic_paste, "v", ctrl=True),
+    [UNDO, REDO, COPY_REPORT,
      hk("Sign report", ic_sign, "s", ctrl=True, shift=True, needs_setup=True,
-        note="Assign Ctrl+Shift+S to Sign in PowerScribe One > Settings > Quick Keys")],
-    strip("pacs", "wl", "num", "web"),
+        note="Assign Ctrl+Shift+S to Sign in PowerScribe One > Settings > Quick Keys"),
+     hk("Paste", ic_paste, "v", ctrl=True)],
+    strip("ps"),
 ])
 
 PAGES["pacs"] = ("PACS tools", [
     [RULER, ROI, MAGNIFY, CLAHE, DELETE],
+    [PREV_SERIES, NEXT_SERIES,
+     hk("Zoom in", lambda ic: ic_zoom(ic, "+"), "=", needs_setup=True, note="Assign = (plus key) to Zoom In in IntelliSpace preferences"),
+     hk("Zoom out", lambda ic: ic_zoom(ic, "-"), "-", needs_setup=True, note="Assign - to Zoom Out in IntelliSpace preferences"),
+     go("pacs2")],
+    strip("pacs"),
+])
+
+PAGES["pacs2"] = ("PACS more", [
     [hk("Spine labeling", ic_spine, "s", shift=True, needs_setup=True, note="Assign Shift+S to Spine Labeling in IntelliSpace > Preferences > Keyboard shortcuts"),
      hk("Localizer mode", ic_localizer, "l", needs_setup=True, note="Assign L to Localizer Mode in IntelliSpace preferences"),
      hk("Scout line mode", ic_scout, "l", shift=True, needs_setup=True, note="Assign Shift+L to Scout Lines in IntelliSpace preferences"),
-     hk("Zoom in", lambda ic: ic_zoom(ic, "+"), "=", needs_setup=True, note="Assign = (plus key) to Zoom In in IntelliSpace preferences"),
-     hk("Zoom out", lambda ic: ic_zoom(ic, "-"), "-", needs_setup=True, note="Assign - to Zoom Out in IntelliSpace preferences")],
-    strip("ps", "wl", "num", "web"),
+     INVERT, preset_btn(8)],
+    [preset_btn(1), preset_btn(2), preset_btn(3), PREV_SERIES, NEXT_SERIES],
+    strip("pacs"),
 ])
 
 PAGES["wl"] = ("Windowing", [
     [preset_btn(1), preset_btn(2), preset_btn(3), preset_btn(4), preset_btn(5)],
     [preset_btn(6), preset_btn(7), preset_btn(8), preset_btn(9), INVERT],
-    strip("ps", "pacs", "num", "web"),
+    strip("wl"),
 ])
 
-# Number pad keeps a real 3x3 digit block; the right two columns hold the
-# editing keys and the two links that matter while typing numbers.
+# Number pad: a 3x3 digit block in the middle three columns, with the keys that
+# go with typing numbers down the outside.
 PAGES["num"] = ("Number pad", [
-    [numpad("7"), numpad("8"), numpad("9"), hk("Backspace", ic_backspace, "backspace"), hk("Enter", ic_enter, "enter")],
-    [numpad("4"), numpad("5"), numpad("6"), numpad("."), home()],
-    [numpad("1"), numpad("2"), numpad("3"), numpad("0"), go("ps")],
+    [hk("Backspace", ic_backspace, "backspace"), numpad("7"), numpad("8"), numpad("9"), hk("Enter", ic_enter, "enter")],
+    [numpad("."), numpad("4"), numpad("5"), numpad("6"), numpad("0")],
+    [home(), numpad("1"), numpad("2"), numpad("3"), go("ps")],
 ])
 
 PAGES["web"] = ("Web & windows", [
-    [site(n, d, u) for n, d, u in SITES] + [OPEN_ALL_SITES],
+    [site(n, d, u) for n, d, u in SITES] + [hk("Close window", ic_close, "f4", alt=True)],
     [hk("Snap left", lambda ic: ic_snap(ic, "left"), "left", win=True), hk("Snap right", lambda ic: ic_snap(ic, "right"), "right", win=True),
      hk("Maximize", ic_maxmin, "up", win=True), hk("Minimize", lambda ic: ic_maxmin(ic, False), "down", win=True),
-     hk("Close window", ic_close, "f4", alt=True)],
-    strip("ps", "pacs", "wl", "num"),
+     OPEN_ALL_SITES],
+    strip("web"),
 ])
 
 PAGES["sys"] = ("System", [
@@ -851,8 +882,8 @@ PAGES["sys"] = ("System", [
      hk("Unstick buttons", ic_unstick, "q", ctrl=True, alt=True, note="RadMapper hkPanic"),
      hk("Clipboard history", ic_clipboard, "c", ctrl=True, alt=True, note="RadMapper hkClipboard shelf"),
      hk("Scratchpad", ic_scratch, "n", ctrl=True, alt=True, note="RadMapper hkScratch shelf")],
-    [hk("Task view", ic_taskview, "tab", win=True), TO_LEFT_SCREEN, TO_RIGHT_SCREEN, CLEAR_AND_NEXT, SWITCH_APP],
-    strip("ps", "pacs", "wl", "num"),
+    [hk("Task view", ic_taskview, "tab", win=True), TO_LEFT_SCREEN, TO_RIGHT_SCREEN, SHOW_DESKTOP, SWITCH_APP],
+    strip("sys"),
 ])
 
 
@@ -876,22 +907,23 @@ def _b32(n):
 
 def inner_action(uuid_, settings, title=""):
     name = {"com.elgato.streamdeck.system.hotkey": "Hotkey", "com.elgato.streamdeck.system.website": "Website"}[uuid_]
-    return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": name, "Settings": settings,
+    return {"ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": name,
+            "Plugin": {"Name": name, "UUID": uuid_, "Version": "1.0"},
+            "Resources": None, "Settings": settings,
             "State": 0, "States": [{"Title": title}], "UUID": uuid_}
 
 
 def action_json(btn, page_ids, bundle_uuid, image_rel):
     kind, payload = btn.action
     if kind == "multi":
-        # the two layouts are read by different Stream Deck versions, so each
-        # gets its own steps: an ActionID may not appear twice in one profile.
-        routine = [inner_action(u, st, btn.name) for u, st in payload]
+        # Stream Deck 6.x nests every step in Actions[0]; the outer list is
+        # per-state, so state 1 is present and empty.
         steps = [inner_action(u, st, btn.name) for u, st in payload]
         return {
             "ActionID": str(uuid.uuid4()), "LinkedTitle": True, "Name": "Multi Action",
-            # 6.x keeps the steps under Actions; older builds read Settings.Routine. Both are written.
-            "Settings": {"Routine": routine, "RoutineAlt": []},
-            "Actions": [{"Actions": [st]} for st in steps],
+            "Plugin": {"Name": "Multi Action", "UUID": "com.elgato.streamdeck.multiactions", "Version": "1.0"},
+            "Settings": {},
+            "Actions": [{"Actions": steps}, {"Actions": []}],
             "State": 0,
             "States": [{"FontFamily": "", "FontSize": 9, "FontStyle": "", "FontUnderline": False, "Image": image_rel,
                         "OutlineThickness": 2, "ShowTitle": False, "Title": btn.name, "TitleAlignment": "bottom",
@@ -903,7 +935,7 @@ def action_json(btn, page_ids, bundle_uuid, image_rel):
         name = "Create Folder"
     elif kind == "root":
         uuid_ = "com.elgato.streamdeck.profile.rotate"
-        settings = {"DeviceUUID": "", "ProfileUUID": bundle_uuid}
+        settings = {"DeviceUUID": "", "PageIndex": 0, "ProfileUUID": bundle_uuid}
         name = "Switch Profile"
     else:
         uuid_, settings = kind, payload
@@ -928,42 +960,51 @@ def build(out_dir):
 
     preview_pages = []
     setup_rows, all_rows = [], []
-    for key, (name, grid) in PAGES.items():
-        pdir = os.path.join(root, "Profiles", page_folder_id(page_ids[key]))
-        os.makedirs(os.path.join(pdir, "Images"))
-        actions = {}
-        sheet = Image.new("RGB", (5 * (PX + 12) + 12, 3 * (PX + 12) + 12 + 60), (8, 12, 24))
-        ImageDraw.Draw(sheet).text((16, 14), name, font=ImageFont.truetype(FONT_B, 34), fill=INK)
-        for r, row in enumerate(grid):
-            for c, btn in enumerate(row):
-                if btn is None:
-                    continue
-                fname = f"{c}_{r}_{btn.name.lower().replace(' ', '_').replace('/', '')}.png"
-                fname = "".join(ch for ch in fname if ch.isalnum() or ch in "._")
-                ic = btn.image()
-                ic.save(os.path.join(pdir, "Images", fname))
-                actions[f"{c},{r}"] = action_json(btn, page_ids, bundle_uuid, f"Images/{fname}")
-                sheet.paste(Image.open(os.path.join(pdir, "Images", fname)), (12 + c * (PX + 12), 72 + r * (PX + 12)))
-                row_ = (name, f"{c},{r}", btn.name, btn.combo, btn.note)
-                all_rows.append(row_)
-                if btn.needs_setup:
-                    setup_rows.append(row_)
-        with open(os.path.join(pdir, "manifest.json"), "w") as f:
-            json.dump({"Controllers": [{"Actions": actions, "Type": "Keypad"}], "Icon": "", "Name": name}, f, indent=1)
-        preview_pages.append(sheet)
+    try:
+        for key, (name, grid) in PAGES.items():
+            pdir = os.path.join(root, "Profiles", page_folder_id(page_ids[key]))
+            os.makedirs(os.path.join(pdir, "Images"))
+            actions = {}
+            sheet = Image.new("RGB", (5 * (PX + 12) + 12, 3 * (PX + 12) + 12 + 60), (8, 12, 24))
+            ImageDraw.Draw(sheet).text((16, 14), name, font=ImageFont.truetype(FONT_B, 34), fill=INK)
+            for r, row in enumerate(grid):
+                for c, btn in enumerate(row):
+                    if btn is None:
+                        continue
+                    fname = f"{c}_{r}_{btn.name.lower().replace(' ', '_').replace('/', '')}.png"
+                    fname = "".join(ch for ch in fname if ch.isalnum() or ch in "._")
+                    ic = btn.image()
+                    ic.save(os.path.join(pdir, "Images", fname))
+                    actions[f"{c},{r}"] = action_json(btn, page_ids, bundle_uuid, f"Images/{fname}")
+                    sheet.paste(Image.open(os.path.join(pdir, "Images", fname)), (12 + c * (PX + 12), 72 + r * (PX + 12)))
+                    row_ = (name, f"{c},{r}", btn.name, btn.combo, btn.note)
+                    all_rows.append(row_)
+                    if btn.needs_setup:
+                        setup_rows.append(row_)
+            with open(os.path.join(pdir, "manifest.json"), "w") as f:
+                json.dump({"Controllers": [{"Actions": actions, "Type": "Keypad"}], "Icon": "", "Name": name}, f, indent=1)
+            preview_pages.append(sheet)
 
-    with open(os.path.join(root, "manifest.json"), "w") as f:
-        json.dump({"AppIdentifier": "*", "Name": "RadMapper Radiology",
-                   "Pages": {"Current": page_ids["home"], "Default": page_ids["home"], "Pages": list(page_ids.values())},
-                   "Version": "2.0"}, f, indent=1)
+        with open(os.path.join(root, "manifest.json"), "w") as f:
+            json.dump({"AppIdentifier": "*", "Name": "RadMapper Radiology",
+                       # child pages are reached by openchild, so only home is listed
+                       "Pages": {"Current": page_ids["home"], "Default": page_ids["home"], "Pages": [page_ids["home"]]},
+                       "Version": "2.0"}, f, indent=1)
 
-    out_file = os.path.join(out_dir, "RadMapper Radiology.streamDeckProfile")
-    with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as z:
-        for dp, _, fns in os.walk(stage):
-            for fn in fns:
-                full = os.path.join(dp, fn)
-                z.write(full, os.path.relpath(full, stage))
-    shutil.rmtree(stage)
+        out_file = os.path.join(out_dir, "RadMapper Radiology.streamDeckProfile")
+        # fixed timestamps and a stable walk order: two rebuilds of the same
+        # layout differ only in the UUIDs they generate.
+        with zipfile.ZipFile(out_file, "w", zipfile.ZIP_DEFLATED) as z:
+            for dp, _, fns in sorted(os.walk(stage)):
+                for fn in sorted(fns):
+                    full = os.path.join(dp, fn)
+                    info = zipfile.ZipInfo(os.path.relpath(full, stage), date_time=(2026, 1, 1, 0, 0, 0))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.external_attr = 0o644 << 16
+                    with open(full, "rb") as fh:
+                        z.writestr(info, fh.read())
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
     # contact sheet: pages stacked vertically
     h = sum(p.height for p in preview_pages)

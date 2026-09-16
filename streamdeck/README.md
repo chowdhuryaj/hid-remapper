@@ -16,11 +16,16 @@ so nothing has to be read from a Stream Deck title.
 
 ## Navigation
 
-Home is the launch pad. Every other page ends in a **strip** (bottom row):
-Home first, then four of the five other sections (the strip has five keys);
-System is reached from Home, and Web & windows from Home or any core page. The
-Number pad keeps its 3×3 digit block and links only to Home and Editing, which
-are the two places you go from numbers.
+Home is the launch pad. Every other page ends in a **strip** (bottom row) whose
+columns never move, so a section is always under the same finger:
+
+| | | | | |
+|---|---|---|---|---|
+| 🏠 Home | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
+
+On one of those four section pages its own column holds **📁 Number pad**
+instead, since you are already there. System is reached from Home, PACS more
+from PACS tools, and the Number pad links back to Home and Editing.
 
 **Home** is a Switch Profile action: it switches back to the profile root, so
 it returns from any depth rather than popping one folder. If a Stream Deck
@@ -34,21 +39,60 @@ in the Stream Deck app and press it once per level.
 
 | | | | | |
 |---|---|---|---|---|
-| Dictate (F4) | Prev field (Shift+Tab) | Next field (Tab) | Switch app (Alt+Tab) | Show desktop (Win+D) |
-| Prev series (F7) | Next series (F8) | Undo (Ctrl+Z) | Impression (Ctrl+Shift+1) | 📁 System |
-| 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Number pad | 📁 Web & windows |
+| Dictate (F4) | Prev field (Shift+Tab) | Next field (Tab) | Switch app (Alt+Tab) | Impression (Ctrl+Shift+1) |
+| Prev series (F7) | Next series (F8) | Undo (Ctrl+Z) | Redo (Ctrl+Y) | 📁 Number pad |
+| 📁 System | 📁 Editing | 📁 PACS tools | 📁 Windowing | 📁 Web & windows |
 
-**Editing (PowerScribe)**: Dictate, Prev/Next field, **Next field & dictate** ⛓ (Dictate, then Next field), Impression (Ctrl+Shift+1), Undo, Redo, **Copy whole report** ⛓ (Ctrl+A then Ctrl+C, ready to paste into Claude), Paste, Sign ⚙, strip.
+**Editing (PowerScribe)**
 
-**PACS tools**: Ruler (R), ROI (Shift+R), Magnify (Y), CLAHE (Shift+C), Delete measurement, Spine labeling ⚙, Localizer ⚙, Scout lines ⚙, Zoom in ⚙, Zoom out ⚙, strip.
+| | | | | |
+|---|---|---|---|---|
+| Dictate (F4) | Prev field (Shift+Tab) | Next field (Tab) | **Dictate + next field** ⛓ | Impression (Ctrl+Shift+1) |
+| Undo (Ctrl+Z) | Redo (Ctrl+Y) | **Copy whole report** ⛓ | Sign ⚙ (Ctrl+Shift+S) | Paste (Ctrl+V) |
+| strip | | | | |
 
-**Windowing**: the nine RadMapper presets on digits 1–9 (Soft tissue, Bone, Brain, C-spine soft tissue, CTA, Infarct, Liver, Lung, Lung wide), Invert ⚙, strip.
+Copy whole report sends Ctrl+A, Ctrl+C, Ctrl+End: the report is on the
+clipboard (ready to paste into Claude) and nothing is left selected. Paste sits
+at the far end of the row so it is never next to Copy.
 
-**Number pad**: 7 8 9 / 4 5 6 / 1 2 3 on the left, 0 on the bottom row beside the 3 (where a keyboard keeps it) with `.` above it, Backspace and Enter on the top right, Home and Editing under them. Sends the top-row digit keys, not the numeric keypad, so it works with NumLock off (RadMapper uses NumLock as its pause key). These are the same keystrokes as the Windowing digits, so with IntelliSpace in front any digit is read as a window preset, not as a number — type numbers only into PowerScribe.
+**PACS tools**: Ruler (R), ROI (Shift+R), Magnify (Y), CLAHE (Shift+C), Delete
+measurement (Delete); Prev series (F7), Next series (F8), Zoom in ⚙ (=), Zoom
+out ⚙ (-), 📁 PACS more; strip.
 
-**Web & windows**: mail.umn.edu, claude.ai, openevidence.com, umnradiology.com, **Open all sites** ⛓, Snap left/right (Win+←/→), Maximize/Minimize (Win+↑/↓), Close window (Alt+F4), strip.
+**PACS more**: Spine labeling ⚙ (Shift+S), Localizer ⚙ (L), Scout lines ⚙
+(Shift+L), Invert ⚙ (Shift+I), W/L 8 Lung (8); W/L 1 Soft tissue (1), W/L 2
+Bone (2), W/L 3 Brain (3), Prev series (F7), Next series (F8); the PACS tools
+strip (its column still holds Number pad).
 
-**System**: RadMapper Settings (Ctrl+Alt+Shift+F9), Pause/resume engine (Ctrl+Alt+Shift+F11), Unstick buttons (Ctrl+Alt+Q), Clipboard history (Ctrl+Alt+C), Scratchpad (Ctrl+Alt+N), Task view (Win+Tab), window to left/right monitor, **Clear & next series** ⛓ (Delete then F8), Switch app, strip.
+**Windowing**: the nine RadMapper presets on digits 1–9 (Soft tissue, Bone, Brain,
+C-spine soft tissue, CTA, Infarct, Liver, Lung, Lung wide), Invert ⚙, strip.
+
+**Number pad**
+
+| | | | | |
+|---|---|---|---|---|
+| Backspace | 7 | 8 | 9 | Enter |
+| . | 4 | 5 | 6 | 0 |
+| 🏠 Home | 1 | 2 | 3 | 📁 Editing |
+
+The digits are a 3×3 block in the middle three columns; 0 finishes the middle
+row and `.` starts it, so neither sits where a keyboard numpad puts it — this
+is a Stream Deck layout, not a numpad copy. Backspace and Enter are the top
+corners, Home and Editing the bottom corners. The keys send the top-row digits,
+not the numeric keypad, so they work with NumLock off (RadMapper uses NumLock as
+its pause key). These are the same keystrokes as the Windowing digits, so with
+IntelliSpace in front any digit is read as a window preset, not as a number —
+type numbers only into PowerScribe.
+
+**Web & windows**: mail.umn.edu, claude.ai, openevidence.com, umnradiology.com,
+Close window (Alt+F4); Snap left/right (Win+←/→), Maximize/Minimize (Win+↑/↓),
+**Open all sites** ⛓; strip.
+
+**System**: RadMapper Settings (Ctrl+Alt+Shift+F9), Pause/resume engine
+(Ctrl+Alt+Shift+F11), Unstick buttons (Ctrl+Alt+Q), Clipboard history
+(Ctrl+Alt+C), Scratchpad (Ctrl+Alt+N); Task view (Win+Tab), window to left /
+right monitor (Win+Shift+←/→), Show desktop (Win+D), Switch app (Alt+Tab);
+strip.
 
 ⛓ = a Stream Deck **Multi Action**: several steps in one press, run by the
 Stream Deck software itself.
@@ -63,13 +107,17 @@ window is in front:
   need PowerScribe to be the active window. If you want Dictate and field
   navigation to work while the PACS viewer has the cursor, set
   `ROUTE_PS_VIA_RADMAPPER = True` at the top of the key-routing section in
-  `build_profile.py` and rebuild: those three buttons then send RadMapper's
-  global `` ` `` `[` `]` bindings, and RadMapper brings PowerScribe forward,
-  delivers the key and returns focus. (Or bind the same keys yourself on
-  RadMapper's Keyboard page.) The backtick / bracket bindings are RadMapper's
-  shipped defaults (`SeedDefaultBindings`) and only need to exist on
-  RadMapper's Keyboard page; they are distinct from the blank `hkDictate` /
-  `hkPrevField` / `hkNextField` hotkey settings, which stay empty.
+  `build_profile.py` and rebuild. That reroutes every Dictate, Prev field and
+  Next field key — the three on Home and the three on Editing — plus the first
+  step of **Dictate + next field**, so they send RadMapper's global `` ` ``
+  `[` `]` bindings instead, and RadMapper brings PowerScribe forward, delivers
+  the key and returns focus. (Or bind the same keys yourself on RadMapper's
+  Keyboard page.) The backtick / bracket bindings are RadMapper's shipped
+  defaults, but `SeedDefaultBindings` returns early once any binding exists, so
+  they are seeded **only on a fresh config**. On a config you have already
+  edited, add them on RadMapper's Keyboard page first — otherwise these keys
+  just type `` ` `` `[` `]` into the report. They are distinct from the blank
+  `hkDictate` / `hkPrevField` / `hkNextField` hotkey settings, which stay empty.
 - **PACS keys** (R, Shift+R, Y, Shift+C, F7, F8, Delete, digits 1–9) are the values
   in RadMapper's shipped PACS wheel and Window-preset ring and go straight to
   IntelliSpace, so the viewer must be in front. To fire them from PowerScribe,
@@ -89,7 +137,7 @@ focus first:
 | Button | Sends | With the PACS viewer in front | With PowerScribe in front |
 |---|---|---|---|
 | Delete measurement | Delete | deletes the selected measurement | **deletes report text** (the selection, or the character after the cursor) |
-| Clear & next series ⛓ | Delete, F8 | drops the measurement, moves on | deletes report text, then sends F8 |
+| Copy whole report ⛓ | Ctrl+A, Ctrl+C, Ctrl+End | selects everything the viewer will select and copies it | selects the report, copies it, then Ctrl+End drops the selection and parks the cursor at the end — nothing is left selected to overtype |
 | Close window | Alt+F4 | closes the viewer | closes PowerScribe |
 
 ## Buttons marked with the gear badge ⚙
