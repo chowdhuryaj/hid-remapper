@@ -27,6 +27,13 @@
 ;      and refuses to load ("conflicts with an existing parameter"). Renamed to
 ;      gX/gY/gS. tests/check_source.py now asserts no nested function shares a
 ;      name with an enclosing parameter.
+;    * LOAD FIX 2: Warp.Back had `if` / `try` / `else`; a try (braced or
+;      not) takes the else as its own clause. The if/else own the braces
+;      now. FIRST-RUN FIXES: names are case-insensitive -- RadialPaint used
+;      W and w as one variable (WD now), PanelPointer/PanelSettings used B
+;      and b (bands now), Warp.__Grid's local `line` shadowed the Line
+;      class it then called (hair now). check_source.py asserts all four
+;      shapes are absent file-wide.
 ;
 ;    * THE SCRIPT DID NOT LOAD. `class Warp` declared `static grab` beside
 ;      `static Grab()` and `static SUB` beside `static Sub()`. AHK property
@@ -8868,19 +8875,19 @@ RadialPaint() {
         cy := ro + pad
         n := R.slices.Length
         step := 360.0 / n
-        W := R.wedges
+        WD := R.wedges
         ; The way back, under everything: it is the largest target on the
         ; ring and it must never look like a command. A numbered child ring
         ; has a zero-span `back` -- a marker for the node below, with no arc
         ; to fill.
-        if (IsObject(W.back) && arcOf(W.back) > 0.01)
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(W.back.start),
-                arcOf(W.back), (R.sel = -1)
+        if (IsObject(WD.back) && arcOf(WD.back) > 0.01)
+            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(WD.back.start),
+                arcOf(WD.back), (R.sel = -1)
                     ? Lumi.Mix(Lumi.C["surface"], Lumi.C["cyan"], 0.30)
                     : Lumi.C["raised"])
         i := 1
         for sl in R.slices {
-            w := W.slices[i]
+            w := WD.slices[i]
             ; With wedges on, the slice is DRAWN as the arc it answers to,
             ; so what you see is exactly what you can hit; with them off it
             ; fills its whole share of the circle, as it did before v0.6.4.
@@ -8897,7 +8904,7 @@ RadialPaint() {
         ; slice, which is the one thing a solid ring cannot say -- WHICH
         ; directions still count as this slice.
         if (wedgy && R.sel > 0) {
-            w := W.slices[R.sel]
+            w := WD.slices[R.sel]
             FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(w.start), arcOf(w),
                 Lumi.Alpha(Lumi.C["magenta"], 0x38))
         }
@@ -8914,15 +8921,15 @@ RadialPaint() {
         ; any ring this code can build.
         if wedgy {
             raw := []
-            for w in W.slices {
+            for w in WD.slices {
                 raw.Push(w.start)
                 raw.Push(w.end)
             }
             ; a zero-span back (the numbered child ring) is a marker for the
             ; parent node, not an arc: it has no edges of its own
-            if (IsObject(W.back) && arcOf(W.back) > 0.01) {
-                raw.Push(W.back.start)
-                raw.Push(W.back.end)
+            if (IsObject(WD.back) && arcOf(WD.back) > 0.01) {
+                raw.Push(WD.back.start)
+                raw.Push(WD.back.end)
             }
             edges := []
             seen := Map()
@@ -8942,8 +8949,8 @@ RadialPaint() {
         }
         ; The parent ring, as a node in the direction it actually lies in,
         ; with the line that leads back to it (Kando's connector).
-        if IsObject(W.back) {
-            t := rad(W.back.center)
+        if IsObject(WD.back) {
+            t := rad(WD.back.center)
             bx := Round(cx + (ro - 24) * Cos(t))
             by := Round(cy + (ro - 24) * Sin(t))
             bcol := (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["hair"]
@@ -8965,7 +8972,7 @@ RadialPaint() {
         ; it keeps the mid-annulus place it has always had
         micon := numbered ? ((ri + ro) / 2) : (ri + disc + 6)
         for sl in R.slices {
-            w := W.slices[i]
+            w := WD.slices[i]
             t := rad(w.center)
             lx := cx + micon * Cos(t)
             ly := cy + micon * Sin(t)
@@ -17784,12 +17791,12 @@ class Atlas {
 
     static PanelPointer(x, y, w, h) {
         Lumi.Label(x, y, 400, "Pointer", "title")
-        b := Atlas.Bands(y + 34, h - 34, [0.34, 0.36, 0.30], [148, 156, 138])
+        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.36, 0.30], [148, 156, 138])
         sw := Min(300, Max(160, w - 340))    ; slider track
         lx := x + 24
 
         ; ── speed ───────────────────────────────────────────────────────
-        B := b[1]
+        B := bands[1]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Speed", "section")
         Lumi.Label(lx, B.y + 38, 170, "Sniper", "dim", "left", 24)
@@ -17805,7 +17812,7 @@ class Atlas {
             . "restored on release, on panic and on exit.", "mute")
 
         ; ── drag scroll ─────────────────────────────────────────────────
-        B := b[2]
+        B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Drag scroll", "section")
         Lumi.Label(lx, B.y + 38, 170, "Pixels per notch", "dim", "left", 24)
@@ -17824,7 +17831,7 @@ class Atlas {
             . "image. Smaller px/notch scrolls faster.", "mute")
 
         ; ── click lock ──────────────────────────────────────────────────
-        B := b[3]
+        B := bands[3]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Click lock", "section")
         Lumi.Label(lx, B.y + 38, 170, "Lock button", "dim", "left", 30)
@@ -17852,13 +17859,13 @@ class Atlas {
         Lumi.Label(x, y, 400, "Settings", "title")
         ; The hotkey band grew: every row now carries a Rec button and a
         ; plain-words line, and there are nine of them.
-        b := Atlas.Bands(y + 34, h - 34, [0.34, 0.42, 0.24], [172, 212, 118])
+        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.42, 0.24], [172, 212, 118])
         half := (w - 20) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
 
         ; ── band 1: timing ──────────────────────────────────────────────
-        B := b[1]
+        B := bands[1]
         Lumi.Card(x, B.y, half, B.h)
         cx := x + 24
         Lumi.Label(cx, B.y + 12, 300, "Timing", "section")
@@ -17903,7 +17910,7 @@ class Atlas {
             "code", "left", Max(16, B.h - (py2 + 24 - B.y) - 10))
 
         ; ── band 2: hotkeys ─────────────────────────────────────────────
-        B := b[2]
+        B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(x + 24, B.y + 10, 300, "Hotkeys", "section")
         p2 := Atlas.Pitch(B.h - 44, 3, 52, 58)
@@ -17930,7 +17937,7 @@ class Atlas {
             "hkTeleRight", 0, 0, "", colw)
 
         ; ── band 3: behaviour + where the config lives ──────────────────
-        B := b[3]
+        B := bands[3]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(x + 24, B.y + 6, 300, "Behaviour", "section")
         tw := (w - 48) // 5
@@ -21075,12 +21082,11 @@ class Warp {
             Warp.stage := "grid"
             Warp.Drop("fine")
             Warp.Drop("loupe")
-            if Warp.L.Has("grid")
-                try {
-                    Warp.L["grid"].Show()
-                }
-            else
+            if Warp.L.Has("grid") {
+                try Warp.L["grid"].Show()
+            } else {
                 Warp.DrawGrid()
+            }
             Warp.DrawLegend()
             return
         }
@@ -21391,7 +21397,7 @@ class Warp {
     static __Grid(m, cols, rows) {
         w := m.w
         h := m.h
-        line := Lumi.Alpha(Lumi.C["cyan"], 0x58)
+        hair := Lumi.Alpha(Lumi.C["cyan"], 0x58)
         edge := Lumi.Alpha(Lumi.C["cyan"], 0xB0)
         pill := Lumi.Alpha(Lumi.C["abyss"], 0xB4)
         Rectangle(0, 0, w, h, Lumi.Alpha(Lumi.C["abyss"], 0x22), true)
@@ -21399,11 +21405,11 @@ class Warp {
         border.penwidth := 2
         loop cols - 1 {
             x := Round(A_Index * w / cols)
-            Line(x, 0, x, h, line, 1)
+            Line(x, 0, x, h, hair, 1)
         }
         loop rows - 1 {
             y := Round(A_Index * h / rows)
-            Line(0, y, w, y, line, 1)
+            Line(0, y, w, y, hair, 1)
         }
         cw := w / cols
         ch := h / rows

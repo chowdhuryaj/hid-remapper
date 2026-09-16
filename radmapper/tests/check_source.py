@@ -167,18 +167,121 @@ while _i < len(_lines):
     _i = _j + 1
 assert not _clashes, ('Nested function name conflicts with an enclosing parameter', _clashes)
 
-# ---- one-line try between an if and its else ------------------------------
-# `if x` / `try stmt` / `else ...`: the brace-less try takes the else as ITS
-# else clause (v2 try has one), and the if is left dangling -> "Unexpected
-# Else" at load. Brace the try body. (A one-line try followed by catch is fine.)
-_tryelse = []
-for _k in range(len(_lines) - 2):
-    if re.match(r'^\s*(if|else if)\b.*[^{]\s*$', _lines[_k]) \
-            and re.match(r'^\s*try\s+\S', _lines[_k + 1]) and not _lines[_k + 1].rstrip().endswith('{') \
-            and re.match(r'^\s*else\b', _lines[_k + 2]):
-        _tryelse.append(_k + 2)
-assert not _tryelse, ('One-line try between an if and its else', _tryelse)
 
-print('PASS: UI member references, case-insensitive collisions, nested-name clashes, try/else binding, timer identity, '
+# ---- variables that differ only by case inside one function -----------------
+# AHK v2 variable names are case-insensitive: `W := R.wedges` then
+# `w := W.slices[i]` overwrite the SAME variable. Parses fine, throws on the
+# first run. Flag any function whose assigned / parameter / for-loop names
+# collide case-insensitively. (Block comments, line comments and strings are
+# blanked first, keeping newlines so line numbers stay right.)
+def _blank(txt):
+    out = []; i = 0; n = len(txt)
+    while i < n:
+        c = txt[i]
+        if txt.startswith('/*', i):
+            j = txt.find('*/', i); j = n if j < 0 else j + 2
+            out.append(''.join('\n' if ch == '\n' else ' ' for ch in txt[i:j])); i = j
+        elif c == ';' and (i == 0 or txt[i-1] in ' \t\n'):
+            j = txt.find('\n', i); j = n if j < 0 else j
+            out.append(' ' * (j - i)); i = j
+        elif c in '"\'':
+            q = c; j = i + 1
+            while j < n and txt[j] != q and txt[j] != '\n':
+                j += 2 if txt[j] == '`' else 1
+            j = min(j + 1, n); out.append(' ' * (j - i)); i = j
+        else:
+            out.append(c); i += 1
+    return ''.join(out)
+_B = _blank(s).split('\n')
+_assign = re.compile(r'(?<![\w.])([A-Za-z_]\w*)\s*(?::=|\+=|-=|\.=|\*=|/=)')
+_forvar = re.compile(r'^\s*for\s+([A-Za-z_]\w*)(?:\s*,\s*([A-Za-z_]\w*))?\s+in\b')
+_ctl = {'if', 'while', 'for', 'loop', 'switch', 'case', 'try', 'catch', 'return',
+        'else', 'finally', 'until', 'throw', 'static', 'global', 'local'}
+_casevars = []
+_i = 0
+while _i < len(_B):
+    _m = _head.match(_B[_i])
+    if not _m:
+        _i += 1
+        continue
+    _names = {}
+    for _p in _m.group(2).split(','):
+        _p = _p.strip().lstrip('&').split(':=')[0].split(' ')[0].strip()
+        if _p:
+            _names.setdefault(_p.lower(), set()).add(_p)
+    _depth = 0; _j = _i
+    while _j < len(_B):
+        _depth += _B[_j].count('{') - _B[_j].count('}')
+        if _j > _i:
+            for _a in _assign.findall(_B[_j]):
+                if _a.lower() not in _ctl:
+                    _names.setdefault(_a.lower(), set()).add(_a)
+            _fm = _forvar.match(_B[_j])
+            if _fm:
+                for _a in _fm.groups():
+                    if _a:
+                        _names.setdefault(_a.lower(), set()).add(_a)
+        if _depth <= 0 and _j > _i:
+            break
+        _j += 1
+    for _low, _forms in _names.items():
+        if len(_forms) > 1:
+            _casevars.append((_m.group(1), _i + 1, sorted(_forms)))
+    _i = _j + 1
+assert not _casevars, ('Variables differing only by case in one function', _casevars)
+# ---- a try (any form) between an if and its else ----------------------------
+# `if x` / `try ...` / `else`: the try (braced or not; v2 try has its own
+# else clause) takes the else, and the if is left dangling -> "Unexpected
+# Else" at load, or DrawGrid-on-success if a build tolerates it. Put the
+# braces on the if/else and the one-line try inside.
+_tryelse = []
+for _k in range(len(_B) - 1):
+    if re.match(r'^\s*(if|else if)\b.*[^{]\s*$', _B[_k]) and re.match(r'^\s*try\b', _B[_k + 1]):
+        _d = 0; _e = _k + 1
+        while _e < len(_B):
+            _d += _B[_e].count('{') - _B[_e].count('}')
+            if _d <= 0 and (_e > _k + 1 or not _B[_k + 1].rstrip().endswith('{')):
+                break
+            _e += 1
+        if _e + 1 < len(_B) and re.match(r'^\s*else\b', _B[_e + 1]):
+            _tryelse.append(_k + 2)
+assert not _tryelse, ('A try between an if and its else', _tryelse)
+
+# ---- a local that shadows a class or function the same body calls ----------
+# `line := ...` then `Line(x, y, ...)`: Line is a GpGFX class, i.e. a variable
+# holding a Class object, and names are case-insensitive, so the call goes
+# through the local integer -> "This value of type Integer is not callable".
+_classes = {m.group(1) for m in re.finditer(r'^class\s+([A-Za-z_]\w*)', s, re.M)}
+_funcs = {m.group(1) for m in re.finditer(r'^([A-Za-z_]\w*)\([^)]*\)\s*\{', s, re.M)}
+_callables = {c.lower(): c for c in _classes | _funcs}
+_shadow = []
+_i = 0
+while _i < len(_B):
+    _m = _head.match(_B[_i])
+    if not _m:
+        _i += 1
+        continue
+    _names = {p.strip().lstrip('&').split(':=')[0].split(' ')[0].strip().lower()
+              for p in _m.group(2).split(',') if p.strip()}
+    _depth = 0; _j = _i; _body = []
+    while _j < len(_B):
+        _depth += _B[_j].count('{') - _B[_j].count('}')
+        _body.append(_B[_j])
+        if _j > _i:
+            _names.update(a.lower() for a in _assign.findall(_B[_j]))
+            _fm = _forvar.match(_B[_j])
+            if _fm:
+                _names.update(a.lower() for a in _fm.groups() if a)
+        if _depth <= 0 and _j > _i:
+            break
+        _j += 1
+    _text = '\n'.join(_body)
+    for _n in _names:
+        if _n in _callables and re.search(r'(?<![\w.])' + re.escape(_callables[_n]) + r'\s*\(', _text, re.I):
+            _shadow.append((_m.group(1), _i + 1, _callables[_n]))
+    _i = _j + 1
+assert not _shadow, ('A local shadows a class/function the same body calls', _shadow)
+
+print('PASS: UI member references, case-insensitive collisions, nested-name clashes, try/else binding, case-variant variables, class-name shadowing, timer identity, '
       f'Windows page fit (max HkRow offset {max(_offs)} <= 460), '
       f'{len(pairs)} text/background contrast pairs')
