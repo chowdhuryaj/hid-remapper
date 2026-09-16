@@ -39,6 +39,10 @@ longer types a bracket at all, and the **hold** rows make every press wait the
 hold threshold (200 ms by default) before it resolves, which is noticeable in
 a report field. Dictating a bracket is unaffected.
 
+The buttons are named the same way everywhere: **Button 3** is the wheel
+click, **Button 4** is the back thumb button and **Button 5** is the forward
+one — on the mouse map, in every list and in every message.
+
 To remove any of them, open the **Keyboard** page (or **Mouse** for the thumb
 buttons), select the row, and choose **Delete**. Deleting only the two `[` /
 `]` **hold** rows removes the latency and keeps field navigation; deleting all
@@ -49,6 +53,12 @@ The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
 pages and every action", adds Layers, Macros, Apps, Windows and Pointer and the
 full action list. Nothing is lost either way.
+
+In Simple view the add button is **Set a button…** on the Mouse page and
+**Set a key…** on the Keyboard page; both open the three-question wizard. In
+Advanced view both become **Add new** and open the full editor. Settings ▸
+**Restore shipped defaults…** puts everything back the way it arrived (it
+asks first, and it cannot be undone).
 
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.

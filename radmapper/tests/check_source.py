@@ -16,8 +16,16 @@ def luminance(h):
     rgb = [v/12.92 if v <= .04045 else ((v+.055)/1.055)**2.4 for v in rgb]
     return sum(v*w for v,w in zip(rgb,[.2126,.7152,.0722]))
 tokens = dict(re.findall(r'"(\w+)",\s+"0xFF([0-9A-F]{6})"', s[s.index('class Lumi {'):s.index('class Atlas {')]))
-for ink in ['ink', 'inkDim', 'inkMute']:
-    for ground in ['abyss', 'surface', 'raised', 'raised2', 'sunk']:
-        a,b = sorted([luminance(tokens[ink]),luminance(tokens[ground])])
-        assert (b+.05)/(a+.05) >= 4.5, (ink, ground)
-print('PASS: UI member references, case-insensitive collisions, timer identity, 15 text/background contrast pairs')
+pairs = [(ink, ground) for ink in ['ink', 'inkDim', 'inkMute']
+         for ground in ['abyss', 'surface', 'raised', 'raised2', 'sunk']]
+# Accent tokens that are also painted AS TEXT have to clear the same bar on
+# the two control/row grounds. `danger` is deliberately not on this list: it
+# fails (3.8:1 on raised), which is exactly why Lumi.Btn's "danger" case
+# paints its label with `dangerInk` and keeps `danger` for the border only.
+pairs += [(ink, ground) for ink in ['dangerInk', 'magenta', 'jade', 'cyan']
+          for ground in ['raised', 'raised2']]
+for ink, ground in pairs:
+    a,b = sorted([luminance(tokens[ink]),luminance(tokens[ground])])
+    assert (b+.05)/(a+.05) >= 4.5, (ink, ground, round((b+.05)/(a+.05), 2))
+print('PASS: UI member references, case-insensitive collisions, timer identity, '
+      f'{len(pairs)} text/background contrast pairs')

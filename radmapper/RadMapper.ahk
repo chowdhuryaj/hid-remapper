@@ -20,6 +20,37 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.6.2b (review pass 2, settings UI) -- wording, honesty and reach:
+;    * ONE VOCABULARY for the buttons: "Button 4 (thumb, back)", "Button 5
+;      (thumb, forward)", "Button 3 (wheel click)" everywhere, and the mouse
+;      map's caps are the same numbers. Events are words too -- "Tap it",
+;      "Hold it down", "Turn the wheel" -- through EVENT_LABELS.
+;    * NO FALSE SUCCESS. The wheel deck, the timing calibrator, the
+;      scratchpad, the starter packs and the wizard all report "Applied for
+;      now - not written to disk" when the save failed, instead of "Saved".
+;    * The DUPLICATE-ROW question is asked for edits too, not only for new
+;      rows, and it says the existing assignment will be deleted.
+;    * CONFIRMATIONS on the three buttons that threw work away silently:
+;      Reload from disk, Import config (which names the count and the backup
+;      folder) and deleting a scratchpad snippet. A failed import now says
+;      so instead of rolling back in silence.
+;    * SETTINGS HOTKEYS are usable: every row has a Rec button and its value
+;      spelled out underneath ("Ctrl + Alt + Shift + F9"), the PowerScribe
+;      rows are named after PowerScribe, and the two pointer teleports have
+;      keyboard rows at last.
+;    * PRACTICE is practice: the cancel keys are bound in trial mode too,
+;      the hub says "practice - nothing is sent", the latched auto-commit
+;      cannot fire, and the wheel stays up for 20 s.
+;    * Adding or duplicating a menu no longer leaves the new menu alive in
+;      memory and invisible on screen when the file cannot be written.
+;    * CONTRAST: "danger" is border-only now; its label uses the new
+;      dangerInk token. check_source.py checks eight more text/ground pairs.
+;    * Keyboard operability, minimally: Up/Down/Enter in the Chooser and in
+;      an open dropdown; F1 says where full keyboard operation lives.
+;    * Simple mode no longer offers actions whose editors it hides (macro,
+;      layout); the Keyboard page gets the same wizard the Mouse page has;
+;      buttons that need a selected row are drawn inert until there is one.
+;
 ;  v0.6.2a (review pass 1) -- correctness fixes, no new features:
 ;    * A held action is RELEASED, not orphaned, when a press falls through to
 ;      the native path (engine paused, our own GUI, a click-lock latch).
@@ -97,7 +128,7 @@
 ;      gated, and a 45 s idle timeout guarantees the keyboard comes back.
 ;
 ;  v0.6.1f: THE "SET A BUTTON" WIZARD. One dialog, three numbered
-;  questions -- which button (tiles: Button 4, Button 5, Middle, or record
+;  questions -- which button (tiles: Button 4, Button 5, Button 3, or record
 ;  a key), when (Tap / Hold), what (the short action list, a Details field
 ;  with Rec and Keys, and a program). Save writes an ordinary row through
 ;  the same validator and UpsertBinding the editor uses and lands on the
@@ -844,13 +875,23 @@ global LAYER_BASE_LABEL := "Base (no button held)"
 global INPUT_LABELS := Map(
     "LButton", "Left Button",
     "RButton", "Right Button",
-    "MButton", "Middle Button (wheel click)",
-    "XButton1", "X1 Back (thumb)",
-    "XButton2", "X2 Forward (thumb)",
+    "MButton", "Button 3 (wheel click)",
+    "XButton1", "Button 4 (thumb, back)",
+    "XButton2", "Button 5 (thumb, forward)",
     "WheelUp", "Wheel Up (scroll)",
     "WheelDown", "Wheel Down (scroll)",
     "WheelLeft", "Tilt Wheel Left",
     "WheelRight", "Tilt Wheel Right")
+
+; Event codes <-> the words a person would use. The engine and the config
+; only ever see the codes; every list, dropdown and sentence shows these.
+global EVENT_LABELS := Map(
+    "tap", "Tap it",
+    "double", "Tap it twice",
+    "triple", "Tap it three times",
+    "hold", "Hold it down",
+    "taphold", "Tap, then hold",
+    "turn", "Turn the wheel")
 
 ; Action type codes <-> GUI labels (parallel arrays; keep in sync)
 ; v1.0 (E1): the "layer"/"layertoggle" actions are RETIRED -- layers are now
@@ -869,7 +910,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "radial",
     "macro", "run", "guiopen", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
-    "Type text", "Native input", "Pass through — let the app's own binding run",
+    "Type text", "Act like another button", "Pass through — let the app's own binding run",
     "Double click",
     "Modifier + left-drag (hold)",
     "Native drag after move (hold)", "PowerScribe: toggle dictation",
@@ -897,7 +938,8 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
     "Radial menu (hold and flick a direction)",
     "Run macro", "Run program",
-    "Open RadMapper settings", "Toggle engine pause", "Disabled"]
+    "Open RadMapper settings", "Toggle engine pause",
+    "Block it (this button does nothing at all)"]
 global ACT_HINTS := Map(
     "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
     "keysrepeat", "AHK Send syntax; fires once on press, repeats while held",
@@ -916,18 +958,18 @@ global ACT_HINTS := Map(
     "pacs_keys", "Use Rec or Keys. Sent to the PACS viewer from ANY app: PACS is brought forward, the keys land, focus comes back.",
     "tele_prev", "No value needed (monitors are ordered left to right)",
     "tele_next", "No value needed (monitors are ordered left to right)",
-    "parkgo", "No value needed (set the spot in the Apps tab)",
-    "sniper", "No value needed (speed set in Pointer tab)",
-    "boost", "No value needed (speed set in Pointer tab)",
-    "scrollptr", "No value needed (px per notch + invert set in Pointer tab)",
+    "parkgo", "No value needed (set the spot in the Apps page) (turn on “Show advanced pages” on Home)",
+    "sniper", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
+    "boost", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
+    "scrollptr", "No value needed (px per notch + invert set in the Pointer page (turn on “Show advanced pages” on Home))",
     "zoomptr", "No value needed — same engine as drag scroll, emitting "
              . "Ctrl+wheel, so it zooms wherever Ctrl+wheel zooms",
     "clicklock", "Blank = whichever mouse button is held (nothing held = "
                . "nothing happens); or name one, e.g. LButton. There is also "
-               . "a global lock key in the Pointer tab.",
+               . "a global lock key on the Pointer page (turn on “Show advanced pages” on Home).",
     "wldial", "+1 or -1 (sends W/L preset digits 1..9,0 on a ring)",
     "layout", "Leave BLANK to pick from a list at the cursor, or name one "
-            . "layout from the Windows tab to apply it directly",
+            . "layout from the Windows page to apply it directly (turn on “Show advanced pages” on Home)",
     "winplace", "A screen and/or a tile, e.g. next, prev, here, 2, max, "
               . "left, right, top, bottom, tl, tr, bl, br. 'next' keeps the "
               . "window's shape on the next screen; 'max' fills the screen it "
@@ -941,10 +983,10 @@ global ACT_HINTS := Map(
     "appswitch", "+1 or -1. Put it on the wheel inside a layer: the list "
                . "appears while the layer's input is held and stays up while "
                . "you scroll, and releasing switches to the highlighted window.",
-    "radial", "Menu name from the Menus tab, or leave BLANK for the menu "
+    "radial", "Menu name from the Menus page, or leave BLANK for the menu "
             . "that matches the app in front. Put it on a HOLD: flick a "
             . "direction and release. Hold still and the wheel appears.",
-    "macro", "Macro name from the Macros tab",
+    "macro", "Macro name from the Macros page (turn on “Show advanced pages” on Home)",
     "run", "Program or document path / URL",
     "guiopen", "No value needed",
     "pausetgl", "No value needed",
@@ -1411,11 +1453,29 @@ InputCodeFromLabel(label) {
     return label
 }
 
+; Same pair for the events. Unknown codes pass through unchanged, so a
+; hand-edited config never loses a row to a missing label.
+EventLabelOf(code) {
+    for c, l in EVENT_LABELS {
+        if (c = code)
+            return l
+    }
+    return code
+}
+
+EventCodeOf(label) {
+    for code, l in EVENT_LABELS {
+        if (l = label)
+            return code
+    }
+    return label
+}
+
 ; --- input-valued action values (v0.3.1) ---------------------------------------
 ; "Native input" and "Native drag after move" take an INPUT NAME as their
 ; value -- the input to press instead. v0.2/v0.3 accepted only the internal
 ; code ("RButton"), which the GUI never shows anywhere: every list, dropdown
-; and zone is labelled "Right Button" / "X1 Back (thumb)". Typing what the UI
+; and zone is labelled "Right Button" / "Button 4 (thumb, back)". Typing what the UI
 ; displays produced Send("{Blind}{Right Button 1}"), which throws -- so the
 ; source button was suppressed and did nothing at all. That is why remapping
 ; a mouse button to another mouse button "didn't work". Values are now
@@ -1822,8 +1882,11 @@ StarterPackApply(name) {
     saved := IsSet(Atlas) ? Atlas.SaveOrWarn() : SaveCfg()
     if IsSet(Atlas)
         try Atlas.Build()
-    HUD("Applied “" name "” — " rows.Length " setting" (rows.Length = 1 ? "" : "s")
-        . " on the Mouse page", "jade")
+    if saved
+        HUD("Applied “" name "” — " rows.Length " setting"
+            . (rows.Length = 1 ? "" : "s") " on the Mouse page", "jade")
+    else
+        HUD("Applied for now — not written to disk", "danger")
 }
 
 ; Window presets 1-9: the slice NUMBER is the key it sends, and the label
@@ -2673,6 +2736,11 @@ CfgImport() {
         g_Cfg := previous
         g_CfgDirty := wasDirty
         g_CfgSaveFailed := false             ; memory and disk agree again
+        ; Silence here read as success: the window rebuilt, showed the OLD
+        ; bindings, and nothing said the import had been rolled back.
+        MsgBox("Import failed: the new settings could not be written to "
+            . CFG_PATH ". Your current settings are unchanged.",
+            "RadMapper", "Iconx")
         return
     }
     AfterCfgChange()
@@ -7176,8 +7244,10 @@ RadialOpen(name, holder := 0, trial := false) {
                  targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false, depth: 1,
                  t0: A_TickCount, restAt: A_TickCount}
-    if !trial
-        RadialBindCancel()                   ; a click anywhere cancels
+    ; ALWAYS, practice included. A practice wheel that a click could not
+    ; dismiss was the one window in RadMapper you had to wait out, and the
+    ; cancel keys are the thing being practised as much as the flick is.
+    RadialBindCancel()                       ; a click anywhere cancels
     SetTimer(RadialTick, 16)
     RadialTick()
 }
@@ -7205,7 +7275,9 @@ RadialTick(*) {
         RadialClose(false)
         return
     }
-    if (R.latched && (now - R.t0 > 6000)) {
+    ; Practice is a thing you look at, so it gets a longer leash than a
+    ; latched menu sitting over a live study.
+    if (R.latched && (now - R.t0 > (R.trial ? 20000 : 6000))) {
         RadialClose(false)
         return
     }
@@ -7245,7 +7317,9 @@ RadialTick(*) {
     }
     ; Latched mode commits by resting in a slice. Nothing else can commit it
     ; without pushing a click through the overlay.
-    if (R.latched && R.sel > 0 && R.slices[R.sel].sub = ""
+    ; ...and never in practice: a practice wheel that fires a slice the
+    ; moment the hand pauses is not practice, it is a misfire.
+    if (!R.trial && R.latched && R.sel > 0 && R.slices[R.sel].sub = ""
         && (now - R.restAt >= Max(Cfg("radialRestMs"), 120)))
         RadialClose(true)
 }
@@ -7555,6 +7629,13 @@ RadialPaint() {
         Lumi.Label(cx - ri + 4, cy - 2, ri * 2 - 8,
             IsObject(pick) ? (pick.live ? pick.label : "—") : "cancel",
             IsObject(pick) && pick.live ? "accent" : "mute", "center", 20)
+        ; Practice looks exactly like the real thing, which is the point --
+        ; so the hub has to say, on the wheel itself, that it is not.
+        if R.trial
+            Text(cx - ri + 4, cy + 18, ri * 2 - 8, 16,
+                "practice — nothing is sent", Lumi.C["warn"],
+                Lumi.Size["tiny"], Lumi.Face, "Bold")
+                .TextAlign("center", "middle")
 
         lyr.Draw()
     } catch as e {
@@ -8462,7 +8543,7 @@ HUD(msg, tone := "cyan") {
     ; match the Atlas toast.
     m := HUDCorner()
     CoordMode("ToolTip", "Screen")
-    ToolTip(msg, m.x, m.y)
+    ToolTip(Lumi.ToneMark(tone) msg, m.x, m.y)
     SetTimer(HUDOff, -900)   ; same Func each call = timer resets, so a burst
 }                            ; of HUDs never hides the newest one early
 
@@ -8633,11 +8714,23 @@ RefreshProblems(force := false) {
 
 ; The no-file way to hand the trail to a debugging session.
 ProblemsCopy() {
-    txt := ""
+    ; A pasted list is useless without the machine it came from -- every
+    ; question we ask back ("which version? did it save? which app?") is
+    ; answered by this header, so it always rides along.
+    app := ActiveAppName()
+    txt := "RadMapper " RM_VERSION "  ·  AutoHotkey " A_AhkVersion
+        . "  ·  Windows " A_OSVersion "`r`n"
+        . "Config: " CFG_PATH (g_CfgSaveFailed ? "   (NOT SAVED TO DISK)" : "") "`r`n"
+        . "Engine: " (g_Enabled ? "running" : "PAUSED")
+        . "   ·  In front: " (app != "" ? app : "(no profile)")
+        . "   ·  Layer: " CurrentLayerDisp() "`r`n"
+        . "Copied: " FormatTime(, "yyyy-MM-dd HH:mm") "`r`n"
+        . "----------------------------------------------------------`r`n"
     for p in g_Problems
         txt .= p.time "  [" p.kind "]  " p.detail "`r`n"
-    A_Clipboard := (txt != "") ? txt : "(no problems this session)"
-    HUD("Diagnostics log copied to clipboard")
+    if (g_Problems.Length = 0)
+        txt .= "(no problems this session)`r`n"
+    A_Clipboard := txt
 }
 
 ProblemsClear() {
@@ -8651,7 +8744,7 @@ TestTabSync() {
         return
     ; WinExist sees the hidden GUI only if DetectHiddenWindows were On --
     ; keep it Off (default) or Hide would leave monitoring running
-    if (g_UI.navSel = 7 && WinExist("ahk_id " . g_UI.g.Hwnd)) {
+    if (g_UI.navSel = g_UI.navDiag && WinExist("ahk_id " . g_UI.g.Hwnd)) {
         TestStart()
         RefreshProblems(true)
     } else {
@@ -8802,6 +8895,11 @@ BuildMain() {
         "Pointer", "Settings", "Diagnostics"]
     ui.navItems := []
     ui.navSel := 1
+    ui.navDiag := ui.panelNames.Length          ; resolved by NAME, not by a
+    for i, name in ui.panelNames {              ; hard-coded index that drifts
+        if (name = "Diagnostics")
+            ui.navDiag := i
+    }
     for i, name in ui.panelNames {
         t := g.AddText("x8 y" (74 + (i - 1) * 40) " w140 h32 +0x200", "   " name)
         t.OnEvent("Click", NavClick.Bind(i))
@@ -9082,6 +9180,10 @@ BuildMain() {
     g.AddButton("x+8 yp w100", "Import…").OnEvent("Click", (*) => CfgImport())
     g.AddButton("x+8 yp w130", "Open backups").OnEvent("Click", (*) => OpenBackups())
     g.AddButton("x20 y432 w160", "Apply settings").OnEvent("Click", (*) => SettingsApply())
+    g.SetFont("s9 c808080")
+    g.AddText("x200 y436 w560", "Radial menus and window arrangements are "
+        . "edited in the new settings window (tray ▸ Settings).")
+    g.SetFont("s10 c" (ThemeDark() ? "D6D8DA" : "Default"))
 
     ; ---------- Diagnostics (input tester + problems log) ----------
     PanelNext(ui, g)
@@ -9181,13 +9283,13 @@ StatusTick(*) {
         g_UI.sbLast := txt
         SbSetText(txt)
     }
-    if (g_UI.navSel = 8)                     ; live problems list while shown
+    if (g_UI.navSel = g_UI.navDiag)          ; live problems list while shown
         RefreshProblems()
 }
 
-RestoreDefaults() {
+RestoreDefaults(confirmed := false) {
     global g_Cfg
-    if (MsgBox("Restore the shipped defaults?"
+    if (!confirmed && MsgBox("Restore the shipped defaults?"
         . " Your assignments will be replaced, including the dictation and monitor-switching defaults.", "RadMapper", "YesNo Icon?") != "Yes")
         return
     g_Cfg := DefaultCfg()
@@ -11008,7 +11110,11 @@ class Lumi {
                                     ; call sites read the same)
         "latch",    "0xFFFF2D95",   ; a click lock is pink and unmissable
         "warn",     "0xFFFF6FB5",
-        "danger",   "0xFFFF1B6B",   ; deeper, redder pink: destructive only
+        "danger",   "0xFFFF1B6B",   ; deeper, redder pink: destructive only.
+                                    ; BORDER AND FILL ONLY -- at 3.8:1 on
+                                    ; `raised` it is not readable as text
+        "dangerInk", "0xFFFF7FA8",  ; the same signal, light enough to READ:
+                                    ; 6.0:1 on raised, 5.0:1 on raised2
         ; ── BRIGHT OLIVE GREEN -- state: running, engaged, filled ────────
         "jade",     "0xFFBCD62B",   ; the state hue
         "teal",     "0xFF8FA61E",   ; deeper olive: gradient floor
@@ -11089,6 +11195,7 @@ class Lumi {
     ; wrote into.
     static openSel := 0
     static selWatch := 0
+    static selKeyDown := false     ; edge detector for the list's arrow keys
     static editing := 0            ; >0 while a Field owns the keyboard
     static liveField := 0          ; the Field currently capturing keys
     static editBeat := 0           ; heartbeat of the live edit loop
@@ -11366,6 +11473,29 @@ class Lumi {
         }
     }
 
+    /**
+     * Trim a string to what will fit in `w` px and mark the cut with an
+     * ellipsis. GpGFX gives no measured-text call, so this is a CHARACTER
+     * BUDGET: Segoe UI averages a little over half the point size per
+     * glyph. Deliberately slightly generous -- a cell that clips one letter
+     * is better than one that drops three that would have fitted.
+     *
+     * `sizeKey` takes either a Size key ("body", "small") or a Label kind
+     * ("mute", "code"), so call sites pass whatever they already have.
+     */
+    static Elide(str, w, sizeKey := "small") {
+        static kindSize := Map("hero", "hero", "title", "title",
+            "section", "tiny", "body", "body", "dim", "body",
+            "accent", "body", "mute", "small", "mono", "small",
+            "code", "small")
+        key := kindSize.Has(sizeKey) ? kindSize[sizeKey] : sizeKey
+        size := Lumi.Size.Has(key) ? Lumi.Size[key] : Lumi.Size["small"]
+        n := Floor(w / (size * 0.55))
+        if (n < 2 || StrLen(str) <= n)
+            return str
+        return SubStr(str, 1, n - 1) "…"
+    }
+
     /** A wrapping paragraph -- GpGFX wraps inside the shape's box. */
     static Para(x, y, w, h, str, kind := "dim") {
         col := (kind = "mute") ? Lumi.C["inkMute"] : Lumi.C["inkDim"]
@@ -11388,6 +11518,8 @@ class Lumi {
      */
     static Btn(x, y, w, h, label, onClick := 0, kind := "ghost") {
         r := Lumi.RAD["field"]
+        if (kind = "muted")      ; a disabled button that cannot be clicked
+            onClick := 0
         switch kind {
             case "primary":
                 ; flat pink, dark label. One per screen, and the only
@@ -11404,11 +11536,21 @@ class Lumi {
                     Lumi.Face, "Bold").TextAlign("center", "middle")
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
             case "danger":
+                ; The BORDER carries the red; the LABEL uses dangerInk, which
+                ; is the same signal at a ratio you can actually read.
                 hit := RoundedRectangle(x, y, w, h, r, Lumi.C["raised"], true)
                 RoundedRectangle(x, y, w, h, r, Lumi.C["danger"], false)
-                Text(x, y, w, h, label, Lumi.C["danger"], Lumi.Size["body"],
+                Text(x, y, w, h, label, Lumi.C["dangerInk"], Lumi.Size["body"],
                     Lumi.Face, "Bold").TextAlign("center", "middle")
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
+            case "muted":
+                ; Nothing is selected, so this button has nothing to act on.
+                ; Shown, not hidden: the row of actions keeps its shape and
+                ; the person can see what will be available.
+                hit := RoundedRectangle(x, y, w, h, r, Lumi.C["raised"], true)
+                RoundedRectangle(x, y, w, h, r, Lumi.C["hairSoft"], false)
+                Text(x, y, w, h, label, Lumi.C["inkMute"], Lumi.Size["body"],
+                    Lumi.Face).TextAlign("center", "middle")
             default:
                 hit := RoundedRectangle(x, y, w, h, r, Lumi.C["raised"], true)
                 RoundedRectangle(x, y, w, h, r, Lumi.C["hair"], false)
@@ -11743,6 +11885,7 @@ class Lumi {
 
     static __SelectLabel(state) {
         txt := state.items.Has(state.index) ? state.items[state.index] : ""
+        txt := Lumi.Elide(txt, state.w - 34, "body")   ; 10 px pad + chevron
         state.box.Text(txt, Lumi.C["ink"], Lumi.Size["body"], Lumi.Face,
             , , "left", "middle")
         state.box.strX := 0
@@ -11891,6 +12034,25 @@ class Lumi {
             Lumi.CloseSelect()
             return
         }
+        ; Up / Down / Enter, polled on the tick that already watches Escape.
+        ; A registered hotkey would have to be created and torn down for
+        ; every popup; this list lives for a moment. selKeyDown is the edge
+        ; detector -- without it one press would walk the whole list.
+        if (GetKeyState("Up", "P") || GetKeyState("Down", "P")) {
+            if !Lumi.selKeyDown {
+                Lumi.selKeyDown := true
+                Lumi.__SelectStep(st, GetKeyState("Down", "P") ? 1 : -1)
+            }
+            return
+        }
+        if GetKeyState("Enter", "P") {
+            if !Lumi.selKeyDown {
+                Lumi.selKeyDown := true
+                Lumi.__SelectDo(st, st.parent, st.index)
+            }
+            return
+        }
+        Lumi.selKeyDown := false
         ; Grace period. Activate() is asynchronous, so a list checked at
         ; 120 ms can legitimately not be the foreground window yet -- and
         ; dismissing it then would make dropdowns look like they never open.
@@ -11950,6 +12112,26 @@ class Lumi {
         }
         if IsObject(prev)
             LayerStack.ActiveLayer := prev
+    }
+
+    /** Move the highlight by one row, scrolling the window to keep it. */
+    static __SelectStep(state, d) {
+        n := state.items.Length
+        if (n < 1)
+            return
+        i := Min(Max(state.index + d, 1), n)
+        if (i = state.index)
+            return
+        state.index := i
+        if (i < state.popTop)
+            state.popTop := i
+        else if (i > state.popTop + state.popVis - 1)
+            state.popTop := i - state.popVis + 1
+        state.popTop := Min(Max(state.popTop, 1),
+            Max(n - state.popVis + 1, 1))
+        Lumi.__SelectPaint(state)
+        if IsObject(state.pop)
+            state.pop.Draw()
     }
 
     static __SelectWheel(state, delta) {
@@ -12130,7 +12312,8 @@ class Lumi {
             cell := r.cells.Has(ci) ? r.cells[ci] : ""
             kind := c.HasProp("kind") ? c.kind : "body"
             align := c.HasProp("align") ? c.align : "left"
-            view.shapes.Push(Lumi.Label(cx, ry, c.w - 6, cell, kind, align,
+            view.shapes.Push(Lumi.Label(cx, ry, c.w - 6,
+                Lumi.Elide(cell, c.w - 6, kind), kind, align,
                 view.rowH - 2))
             cx += c.w
             ci += 1
@@ -12161,23 +12344,41 @@ class Lumi {
 
     static _toast := 0
 
+    /** The one-character tell that says what KIND of message this is,
+     *  for the colour-blind and for a glance from across the room. */
+    static ToneMark(tone) {
+        switch tone {
+            case "danger": return "⚠  "
+            case "warn", "pink": return "!  "
+            case "jade", "ok": return "✓  "
+        }
+        return ""
+    }
+
     static Toast(msg, tone := "cyan", ms := 0) {
         if (ms = 0)
             ms := Lumi.MS["toast"]
         col := Lumi.Col(tone)
+        msg := Lumi.ToneMark(tone) msg
         prev := LayerStack.ActiveLayer
         try {
             if IsObject(Lumi._toast) {
                 try Lumi._toast.Dispose()
                 Lumi._toast := 0
             }
-            w := Min(Max(StrLen(msg) * 8 + 64, 240), 760)
-            h := 52
+            ; A long message used to be squeezed into one 760 px line and
+            ; clipped. Past ~70 characters it gets a second line instead.
+            two := StrLen(msg) > 70
+            w := two ? 620 : Min(Max(StrLen(msg) * 8 + 64, 240), 760)
+            h := two ? 74 : 52
             lyr := Layer(w, h, "LumiToast")
             LayerStack.ActiveLayer := lyr
             Lumi.Card(0, 0, w, h, "surface")
-            Rectangle(0, 0, 3, h, col, true)              ; the whole signal
-            Lumi.Label(18, 0, w - 30, msg, "body", "left", h)
+            Rectangle(0, 0, 4, h, col, true)              ; the whole signal
+            if two
+                Lumi.Para(18, 14, w - 34, h - 22, msg)
+            else
+                Lumi.Label(18, 0, w - 30, msg, "body", "left", h)
             Lumi.__ToastPlace(lyr)
             lyr.ClickThrough := true
             lyr.NoActivate()
@@ -12338,8 +12539,8 @@ class Lumi {
         ; --- list ---
         Lumi.Label(566, 244, 300, "List", "section")
         rows := []
-        for r in [["X1 Back", "tap", "Teleport monitor: prev"],
-                  ["X2 Fwd", "tap", "Teleport monitor: next"],
+        for r in [["Button 4", "Tap it", "Teleport monitor: prev"],
+                  ["Button 5", "Tap it", "Teleport monitor: next"],
                   ["Numpad1", "tap", "Send keys: {Enter}"],
                   ["Numpad2", "tap", "Send keys: {Tab}"],
                   ["Numpad3", "tap", "Send keys: {Esc}"],
@@ -12563,9 +12764,14 @@ class Atlas {
     ; an existing advanced row still reads correctly. Advanced mode is the
     ; whole table. Each Select carries its own codes array, so a row's
     ; meaning never depends on which list it was drawn from.
+    ; "macro" and "layout" are OFF this list on purpose: their editors live
+    ; on the Macros and Windows pages, which Simple mode hides, so picking
+    ; them here offered an action whose value could not be created. ActView
+    ; still keeps an existing row's own action, so nothing already bound is
+    ; lost -- turn advanced pages on to add a new one.
     static SIMPLE_ACTS := ["keys", "text", "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
-        "zoomptr", "radial", "layout", "winplace", "warp", "macro", "guiopen",
+        "zoomptr", "radial", "winplace", "warp", "guiopen",
         "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
@@ -13084,6 +13290,36 @@ class Atlas {
 
     ; ── CHROME ──────────────────────────────────────────────────────────────
 
+    /*
+     * ROUND-2 SUSPICION, recorded here because it cannot be tested without
+     * Windows and GpGFX. NO CODE CHANGE.
+     *
+     * Almost every panel handler calls Build() SYNCHRONOUSLY, from inside a
+     * GpGFX shape's click handler -- NavGo/Go, PickZone, PickKeyTile,
+     * SetApp, SetLayer, SetKbApp, SetKbLayer, ToggleEngine. Build() calls
+     * lyr.Clear(), which disposes every shape on the layer, and the shape
+     * whose handler is running is one of them. GpGFX then returns from the
+     * dispatch loop into an object that no longer exists. Whether that is
+     * benign or throws depends on how far GpGFX walks its shape list after
+     * the callback returns, which is why Shelf.Defer and Chooser.Defer
+     * exist at all: both classes hit this and both answered it the same
+     * way, with SetTimer(fn, -1) so the click unwinds first.
+     *
+     * The dialog path already does it (DoWizPick, DoWizRecKey, DoWizFull
+     * all defer their reopen), and Build() itself defers when a Field is
+     * live or a drag is running -- but a plain navigation click does not.
+     *
+     * WHAT TO CHECK ON THE FIRST WINDOWS RUN: navigate between pages, click
+     * mouse-map zones and key tiles, change the App and Layer dropdowns,
+     * flip the engine switch -- then open Diagnostics and look for
+     * "ui-event" problems. If any appear, route those handlers through the
+     * same one-shot defer the Shelf and Chooser use:
+     *
+     *     SetTimer(fn, -1)          ; let the click unwind, then rebuild
+     *
+     * If none appear after a working session, GpGFX finishes its dispatch
+     * before touching the shape again and this note can be deleted.
+     */
     static Build() {
         lyr := Atlas.lyr
         if !IsObject(lyr)
@@ -13447,20 +13683,43 @@ class Atlas {
 
     /** F1: the whole setup path in one box, in plain words. */
     static Help() {
-        MsgBox("Start with one shortcut`n`n"
-            . "Mouse / Keyboard: choose a button or key, then add an assignment. "
-            . "In program limits where it works. Only while holding adds an optional second button. "
-            . "Rec records a shortcut; Keys lets you choose it without AutoHotkey syntax.`n`n"
-            . "Radial menus: Edit commands, Assign a button, then Practice safely. "
-            . "Choose Send keys for PACS shortcuts and record the keys shown in your viewer settings. "
-            . "A disabled direction does nothing. Practice never sends a command.`n`n"
-            . "Navigation: use the left list. Escape closes the current popup or window. "
-            . "For standard Windows controls, use tray > Settings (classic).`n`n"
-            . "Screens: " Atlas.HkWords("hkWarp") " opens the keyboard pointer -- type a "
-            . "grid cell (column letter, then row), refine with Q W E / A S D / Z X C, "
-            . "Space clicks, G drags, Esc closes. The Windows page saves arrangements "
-            . "that follow you to other stations.`n`n"
-            . "Recovery: " Atlas.HkWords("hkPanic") " releases held inputs. "
+        MsgBox("Home is the whole map.`n`n"
+            . "It offers four jobs -- change what a mouse button does, "
+            . "change what a keyboard key does, set up a radial menu, apply "
+            . "a starter pack -- and every one of them is a button. Start "
+            . "there and you never have to guess which page you want.`n`n"
+            . "The switch at the bottom of Home is Simple or Advanced. "
+            . "Simple shows Mouse, Keyboard, Menus, Settings and Diagnostics, "
+            . "and a short list of actions. Advanced adds Layers, Macros, "
+            . "Apps, Windows and Pointer. Nothing is lost either way -- the "
+            . "switch changes what is SHOWN, never what is set up.`n`n"
+            . "If something goes wrong, go to Diagnostics and press "
+            . "“Copy this list”. That puts the whole trail, and what "
+            . "machine it came from, on the clipboard -- paste it into an "
+            . "email and the answer usually falls out of it.`n`n"
+            . "Mouse / Keyboard`n"
+            . "Choose a button or key, then add an assignment. In program "
+            . "limits where it works. Only while holding adds an optional "
+            . "second button. Rec records a shortcut; Keys lets you choose "
+            . "one without AutoHotkey syntax.`n`n"
+            . "Radial menus`n"
+            . "Edit commands, Assign a button, then Practice safely. Choose "
+            . "Send keys for PACS shortcuts and record the keys shown in "
+            . "your viewer settings. A disabled direction does nothing, and "
+            . "practice never sends a command.`n`n"
+            . "Getting around`n"
+            . "Use the list on the left. Escape closes the current popup or "
+            . "window. Full keyboard operation -- Tab, arrows and Enter "
+            . "through every control -- is available in the older window, "
+            . "at tray ▸ Settings (classic).`n`n"
+            . "Screens`n"
+            . Atlas.HkWords("hkWarp") " opens the keyboard pointer: type a "
+            . "grid cell (column letter, then row), refine with Q W E / "
+            . "A S D / Z X C, Space clicks, G drags, Esc closes. The "
+            . "Windows page saves arrangements that follow you to other "
+            . "stations.`n`n"
+            . "If something sticks`n"
+            . Atlas.HkWords("hkPanic") " releases every held input. "
             . Atlas.HkWords("hkToggle") " pauses or resumes RadMapper.",
             "RadMapper quick help", "Owner" Lumi.HwndOf(Atlas.dlg ? Atlas.dlg : Atlas.lyr))
     }
@@ -13746,7 +14005,7 @@ class Atlas {
                 continue
             act := IsInertRow(row) ? "Native (system default)"
                 : DescribeAction(row["action"])
-            rows.Push({cells: [MGet(row, "event", ""), act,
+            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")), act,
                                MGet(row, "mods", "")]})
             Atlas.rowRefs.Push(i)
         }
@@ -13762,16 +14021,40 @@ class Atlas {
         by := y + h - 78
         b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
         Lumi.Btn(b[1].x, by, b[1].w, 34, Atlas.Advanced() ? "Add new" : "Set a button…",
-            (*) => (Atlas.Advanced() ? Atlas.EditRow(0)
-                : Atlas.OpenDlg(() => Atlas.WizardDlg({btn: Atlas.sel}))), "primary")
-        Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit", (*) => Atlas.EditSel(), "accent")
-        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete", (*) => Atlas.DeleteSel(), "danger")
+            (*) => Atlas.SetButtonStart(), "primary")
+        ; A button that needs a selected row says so by looking inert
+        ; rather than by scolding you after the click.
+        hasSel := Atlas.HasSel(rows.Length)
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit", (*) => Atlas.EditSel(),
+            hasSel ? "accent" : "muted")
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete", (*) => Atlas.DeleteSel(),
+            hasSel ? "danger" : "muted")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)), "accent")
         if (rows.Length = 0)
             Lumi.Label(lx, y + 150, lw,
                 "Nothing set here — this one still works the normal way.",
                 "mute")
+    }
+
+    /** "Add new" / "Set a button…" on the Mouse page. The wizard can only
+     *  express its three buttons, so a selection it would silently drop
+     *  (left, right, wheel, tilt) goes straight to the full editor with
+     *  that input already filled in. */
+    static SetButtonStart() {
+        if Atlas.Advanced() {
+            Atlas.EditRow(0)
+            return
+        }
+        sel := Atlas.sel
+        if (sel != "" && IsMouseInput(sel)
+            && !Atlas.HasCode(Atlas.WIZ_BUTTONS, sel)) {
+            seed := NewBinding(Atlas.ScopeApp(), Atlas.ScopeLayer(), "", sel,
+                IsWheel(sel) ? "turn" : "tap", "keys", "")
+            Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
+            return
+        }
+        Atlas.OpenDlg(() => Atlas.WizardDlg({btn: sel}))
     }
 
     static SetApp(i) {
@@ -13929,8 +14212,10 @@ class Atlas {
     }
 
     static ZoneCap(code) {
-        static caps := Map("LButton", "L", "RButton", "R", "MButton", "M",
-            "XButton1", "X1", "XButton2", "X2", "WheelUp", "▲",
+        ; The cap is the SAME number the label says -- "X1" on the map and
+        ; "Button 4" in every list was two names for one button.
+        static caps := Map("LButton", "L", "RButton", "R", "MButton", "3",
+            "XButton1", "4", "XButton2", "5", "WheelUp", "▲",
             "WheelDown", "▼", "WheelLeft", "◀", "WheelRight", "▶")
         return caps.Has(code) ? caps[code] : code
     }
@@ -14124,7 +14409,7 @@ class Atlas {
             ; and therefore impossible to edit or delete from here.
             act := IsInertRow(row) ? "Native (system default)"
                 : DescribeAction(row["action"])
-            rows.Push({cells: [MGet(row, "event", ""), act,
+            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")), act,
                                MGet(row, "mods", "")]})
             Atlas.rowRefs.Push(i)
         }
@@ -14135,12 +14420,18 @@ class Atlas {
 
         by := y + h - 78
         b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
-        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
-            (*) => Atlas.EditRow(0, true), "primary")
+        ; Simple mode gets the wizard here too -- the Mouse page has had it
+        ; since v0.6 and the Keyboard page was the odd one out.
+        Lumi.Btn(b[1].x, by, b[1].w, 34,
+            Atlas.Advanced() ? "Add new" : "Set a key…",
+            (*) => (Atlas.Advanced() ? Atlas.EditRow(0, true)
+                : Atlas.OpenDlg(() => Atlas.WizardDlg({btn: Atlas.keySel}))),
+            "primary")
+        hasSel := Atlas.HasSel(rows.Length)
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit",
-            (*) => Atlas.EditSel(true), "accent")
+            (*) => Atlas.EditSel(true), hasSel ? "accent" : "muted")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
-            (*) => Atlas.DeleteSel(), "danger")
+            (*) => Atlas.DeleteSel(), hasSel ? "danger" : "muted")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(true)), "accent")
         if (rows.Length = 0 && Atlas.keySel != "")
@@ -14197,7 +14488,7 @@ class Atlas {
         Lumi.Label(x + 14, y, 272, "KEYS IN USE", "section")
         if (keys.Length = 0) {
             Lumi.Para(x + 14, y + 34, 272, 90,
-                "No keys bound yet. “Add key row” hooks one. A key nothing "
+                "No keys bound yet. “Add new” hooks one. A key nothing "
                 . "references is never touched at all, so an untouched "
                 . "keyboard keeps its native latency — which is why this "
                 . "list is short by design.", "mute")
@@ -14219,7 +14510,8 @@ class Atlas {
         }
         if (keys.Length > i)
             Lumi.Label(x + 14, y + 278, 272,
-                "+" (keys.Length - i) " more — narrow the scope above",
+                "+" (keys.Length - i) " more — they are listed on the rows "
+                . "to the right",
                 "mute", "left", 16)
         Lumi.Label(x + 14, y + 296, 272,
             "Olive rim = assigned here.   Pink ring + L = holds a layer.",
@@ -14319,26 +14611,30 @@ class Atlas {
                 q = "" ? "—" : q]})
             Atlas.rowRefs.Push(i)
         }
-        Atlas.list := Lumi.List(x, y + 78, w, h - 176, rows,
-            [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
-             {w: 190, kind: "mono"}],
-            0, 30, ["Program", "Recognised by", "Pointer spot", "Special"])
-
-        Lumi.Label(x, y + h - 96, w,
+        ; The instruction goes ABOVE the list it is about: "pick a program
+        ; in the list first" printed BELOW the list is advice you read after
+        ; you have already clicked the wrong thing.
+        Lumi.Label(x, y + 74, w,
             "A pointer spot is where the pointer belongs when that program "
             . "is in front — the dictation box in PowerScribe, the image in "
             . "the viewer. Pick a program in the list first, then use the "
             . "buttons below.", "mute", "left", 34)
+        Atlas.list := Lumi.List(x, y + 112, w, h - 176, rows,
+            [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
+             {w: 190, kind: "mono"}],
+            0, 30, ["Program", "Recognised by", "Pointer spot", "Special"])
+
         by := y + h - 52
         b := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
+        hasSel := Atlas.HasSel(rows.Length)
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Set pointer spot",
-            (*) => Atlas.CaptureSpot(), "primary")
+            (*) => Atlas.CaptureSpot(), hasSel ? "primary" : "muted")
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Forget spot",
-            (*) => Atlas.ClearSpot(), "ghost")
+            (*) => Atlas.ClearSpot(), hasSel ? "ghost" : "muted")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Instant clicks",
-            (*) => Atlas.ToggleNoHold(), "accent")
+            (*) => Atlas.ToggleNoHold(), hasSel ? "accent" : "muted")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "No pointer jump",
-            (*) => Atlas.ToggleNoFollow(), "accent")
+            (*) => Atlas.ToggleNoFollow(), hasSel ? "accent" : "muted")
         Lumi.Btn(b[5].x, by, b[5].w, 34, "More settings…",
             (*) => Atlas.Classic("apps"), "ghost")
     }
@@ -14468,7 +14764,7 @@ class Atlas {
                     live += 1
             }
             app := MGet(m, "app", "")
-            rows.Push({cells: [nm, app = "" ? "any program" : app,
+            rows.Push({cells: [nm, app = "" ? "any program" : AppDisp(app),
                 sl.Length " slice" (sl.Length = 1 ? "" : "s"),
                 live " filled", Atlas.MenuBoundTo(nm)]})
             Atlas.menuRefs.Push(i)
@@ -14494,12 +14790,13 @@ class Atlas {
 
         by2 := y + h - 48
         bw := (w - 40) // 5
+        hasSel := Atlas.HasSel(rows.Length)
         Lumi.Btn(x, by2, bw, 34, "Edit commands",
-            (*) => Atlas.MenuEditSel(), "accent")
+            (*) => Atlas.MenuEditSel(), hasSel ? "accent" : "muted")
         Lumi.Btn(x + bw + 10, by2, bw, 34, "Assign a button",
-            (*) => Atlas.MenuAssign(), "accent")
+            (*) => Atlas.MenuAssign(), hasSel ? "accent" : "muted")
         Lumi.Btn(x + (bw + 10) * 2, by2, bw, 34, "Practice safely",
-            (*) => Atlas.MenuTry(), "ghost")
+            (*) => Atlas.MenuTry(), hasSel ? "ghost" : "muted")
         Lumi.Btn(x + (bw + 10) * 3, by2, bw, 34, "Duplicate",
             (*) => Atlas.MenuDuplicate(), "ghost")
         Lumi.Btn(x + (bw + 10) * 4, by2, bw, 34, "Delete",
@@ -14566,9 +14863,14 @@ class Atlas {
             if !d.HasProp(k)
                 d.%k% := v
         }
+        ; L/R/wheel are not wizard fare -- but say so instead of silently
+        ; clearing the choice the Mouse map had already made.
+        dropped := ""
         if (d.btn != "" && !Atlas.HasCode(Atlas.WIZ_BUTTONS, d.btn)
-            && IsMouseInput(d.btn))
-            d.btn := ""                      ; L/R/wheel are not wizard fare
+            && IsMouseInput(d.btn)) {
+            dropped := InputLabel(d.btn)
+            d.btn := ""
+        }
         w := 660
         h := 560
         Lumi.CloseSelect()
@@ -14597,26 +14899,29 @@ class Atlas {
         ; 1 -- which button
         Lumi.Label(24, 76, 400, "1 · Which button?", "section")
         tiles := [["XButton1", "Button 4"], ["XButton2", "Button 5"],
-                  ["MButton", "Middle"]]
+                  ["MButton", "Button 3"]]
         tw := 118
         tx := 24
         for t in tiles {
             Lumi.Btn(tx, 98, tw, 46, t[2], Atlas.WizPick(st, "btn", t[1]),
-                d.btn = t[1] ? "primary" : "ghost")
+                d.btn = t[1] ? "accent" : "ghost")
             tx += tw + 10
         }
         keyLbl := (d.btn != "" && !IsMouseInput(d.btn))
             ? "Key: " d.btn : "A keyboard key…"
         Lumi.Btn(tx, 98, w - 24 - tx, 46, keyLbl, Atlas.WizRecKey(st),
-            (d.btn != "" && !IsMouseInput(d.btn)) ? "primary" : "ghost")
+            (d.btn != "" && !IsMouseInput(d.btn)) ? "accent" : "ghost")
+        if (dropped != "")
+            Lumi.Label(24, 146, w - 48, dropped " is not in this short list — "
+                . "use “All options…” to set it up.", "mute", "left", 16)
 
         ; 2 -- when
         Lumi.Label(24, 160, 400, "2 · When?", "section")
         half := (w - 48 - 10) // 2
         Lumi.Btn(24, 182, half, 46, "Tap it  (a quick press)",
-            Atlas.WizPick(st, "event", "tap"), d.event = "tap" ? "primary" : "ghost")
+            Atlas.WizPick(st, "event", "tap"), d.event = "tap" ? "accent" : "ghost")
         Lumi.Btn(24 + half + 10, 182, half, 46, "Hold it  (press and keep it down)",
-            Atlas.WizPick(st, "event", "hold"), d.event = "hold" ? "primary" : "ghost")
+            Atlas.WizPick(st, "event", "hold"), d.event = "hold" ? "accent" : "ghost")
 
         ; 3 -- what
         Lumi.Label(24, 244, 400, "3 · What should it do?", "section")
@@ -14638,18 +14943,38 @@ class Atlas {
             "Global means everywhere. Pick a program to limit it there.",
             "mute", "left", 20)
 
+        ; One plain sentence for what Save is about to do. Three tiles and
+        ; two dropdowns do not add up to a sentence on their own.
+        Lumi.Label(24, h - 106, w - 48, Atlas.WizSummary(d),
+            d.btn = "" ? "body" : "dim", "left", 24)
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Btn(24, h - 60, 130, 36, "All options…",
             Atlas.WizFull(st), "ghost")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.WizSave(st), "primary")
+            Atlas.WizSave(st), d.btn = "" ? "ghost" : "primary")
 
         Atlas.dstate := st
         Lumi.FullErase(dlg)
         dlg.Draw()
         dlg.Activate()
+    }
+
+    /** The wizard's draft, said out loud. */
+    static WizSummary(d) {
+        if (d.btn = "")
+            return "Pick a button to finish."
+        ev := EventLabelOf(d.event)
+        ev := StrLower(SubStr(ev, 1, 1)) SubStr(ev, 2)
+        what := DescribeAction(Map("type", d.act, "value", d.value))
+        ; lower-case the opening word unless it is a proper noun
+        ; ("PowerScribe", "PACS", "W/L") -- those carry an inner capital
+        word := RegExMatch(what, "^\w+", &m) ? m[0] : ""
+        if !RegExMatch(SubStr(word, 2), "[A-Z]")
+            what := StrLower(SubStr(what, 1, 1)) SubStr(what, 2)
+        where := (d.app = "*") ? "in every program" : "in " AppDisp(d.app)
+        return InputLabel(d.btn) ", when you " ev ", will " what " — " where "."
     }
 
     /** Snapshot the editable fields into the draft before a reopen. */
@@ -14697,8 +15022,10 @@ class Atlas {
         Lumi.EndEdit()
         d := Atlas.WizDraft(st)
         keyMode := (d.btn != "" && !IsMouseInput(d.btn))
-        seed := NewBinding(d.app, "*", "", d.btn != "" ? d.btn : "XButton1",
-            d.event, d.act, d.value)
+        ; No button chosen means no button chosen: seeding XButton1 handed
+        ; the full editor an assignment the person never asked for.
+        seed := (d.btn = "") ? 0
+            : NewBinding(d.app, "*", "", d.btn, d.event, d.act, d.value)
         SetTimer(() => Atlas.OpenDlg(() => Atlas.BindDlg(0, keyMode, seed)), -1)
     }
     static WizSave(st) {
@@ -14727,7 +15054,7 @@ class Atlas {
                 "YesNo Icon! Owner" hwnd) != "Yes")
                 return
         }
-        ; The mouse half of the same warning: Middle is one of the wizard's
+        ; The mouse half of the same warning: Button 3 is one of the wizard's
         ; four button tiles, and Hold is one of its two events, so this is
         ; two clicks away from the Home page.
         if MButtonHoldRisk(btn, d.event) {
@@ -14771,9 +15098,13 @@ class Atlas {
             Atlas.panel := Atlas.PanelIndex("Mouse")
         }
         Atlas.CloseDlg()
-        Atlas.SaveOrWarn()
+        ok := Atlas.SaveOrWarn()
         Atlas.Build()
-        Lumi.Toast("Saved: " InputLabel(btn) " " d.event " → " ActLabelOf(d.act), "jade")
+        if ok
+            Lumi.Toast("Saved: " InputLabel(btn) " " EventLabelOf(d.event)
+                . " → " ActLabelOf(d.act), "jade")
+        else
+            Lumi.Toast("Applied for now — not written to disk", "danger", 5000)
     }
 
     /** The starter-pack list at the cursor: pick one and it is applied. */
@@ -14831,8 +15162,12 @@ class Atlas {
         if !g_Cfg.Has("menus")
             g_Cfg["menus"] := []
         g_Cfg["menus"].Push(m)
-        if !SaveCfg()
-            return
+        AfterCfgChange()
+        ; The menu EXISTS whether or not the file could be written, and the
+        ; list has to show it either way -- bailing before Build() left the
+        ; new menu alive in memory and invisible on screen. SaveOrWarn says
+        ; the true thing about the disk (MenuDelete has always done this).
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Atlas.SelectListRow(g_Cfg["menus"].Length)
         Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
@@ -14861,8 +15196,8 @@ class Atlas {
         }
         copy["slices"] := sl
         g_Cfg["menus"].Push(copy)
-        if !SaveCfg()
-            return
+        AfterCfgChange()
+        Atlas.SaveOrWarn()
         Atlas.Build()
         Atlas.SelectListRow(g_Cfg["menus"].Length)
         Lumi.Toast("Copied to “" name "”", "jade")
@@ -14880,6 +15215,7 @@ class Atlas {
             . "it will stop opening anything. This cannot be undone.")
             return
         g_Cfg["menus"].RemoveAt(ref)
+        AfterCfgChange()
         Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Deleted “" name "”", "magenta")
@@ -15001,12 +15337,14 @@ class Atlas {
 
         ; ── shortcuts ───────────────────────────────────────────────────
         ky := ry + 42
-        Atlas.HkRow(x, ky, "Window → next screen", "hkWinNext", 150, 100)
-        Atlas.HkRow(x + 262, ky, "→ previous screen", "hkWinPrev", 128, 100)
-        Atlas.HkRow(x + 502, ky, "Fill screen", "hkWinMax", 80, 100)
-        ky2 := ky + 36
-        Atlas.HkRow(x, ky2, "Keyboard pointer", "hkWarp", 150, 100)
-        Lumi.Para(x + 262, ky2 + 2, w - 262, 30,
+        ; Wider pitch and a taller row: every hotkey now has a Rec button
+        ; beside it and its value in words underneath.
+        Atlas.HkRow(x, ky, "Window → next screen", "hkWinNext", 150, 90)
+        Atlas.HkRow(x + 300, ky, "→ previous screen", "hkWinPrev", 128, 90)
+        Atlas.HkRow(x + 600, ky, "Fill screen", "hkWinMax", 80, 90)
+        ky2 := ky + 50
+        Atlas.HkRow(x, ky2, "Keyboard pointer", "hkWarp", 150, 90)
+        Lumi.Para(x + 300, ky2 + 2, w - 300, 30,
             "A lettered grid over the screen: type a cell, refine with Q W E / "
             . "A S D / Z X C, Space clicks, G drags, N snaps to a control.", "mute")
 
@@ -15327,12 +15665,12 @@ class Atlas {
 
     static PanelSettings(x, y, w, h) {
         Lumi.Label(x, y, 400, "Settings", "title")
-        b := Atlas.Bands(y + 34, h - 34, [0.38, 0.34, 0.28], [178, 146, 118])
+        ; The hotkey band grew: every row now carries a Rec button and a
+        ; plain-words line, and there are nine of them.
+        b := Atlas.Bands(y + 34, h - 34, [0.34, 0.42, 0.24], [172, 212, 118])
         half := (w - 20) // 2
-        ; hotkeys: two columns, each label + field, derived from the width
-        colw := (w - 60) // 2
-        hkL := Round(colw * 0.46)
-        hkF := colw - hkL - 6
+        ; hotkeys: three stacked columns, derived from the width
+        colw := (w - 72) // 3
 
         ; ── band 1: timing ──────────────────────────────────────────────
         B := b[1]
@@ -15355,39 +15693,56 @@ class Atlas {
         Lumi.Card(rx, B.y, rw, B.h)
         pl := Min(180, rw - 190)
         Lumi.Label(rx + 24, B.y + 12, 300, "PowerScribe", "section")
-        Lumi.Label(rx + 24, B.y + 32, pl, "Dictate key", "dim", "left", 30)
-        Lumi.Field(rx + 24 + pl, B.y + 32, 120, 30, Cfg("psDictateKey"),
-            (t) => Atlas.SetCfgStr("psDictateKey", t), "{F4}", true)
-        Lumi.Label(rx + 24, B.y + 32 + pitch, pl, "Return delay (ms)",
-            "dim", "left", 30)
-        Lumi.Field(rx + 24 + pl, B.y + 32 + pitch, 120, 30,
+        py0 := B.y + 32
+        Lumi.Label(rx + 24, py0, pl, "Dictate key", "dim", "left", 30)
+        Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
+            (t) => Atlas.SetCfgStr("psDictateKey", t), "F4", true)
+        Lumi.Btn(rx + 24 + pl + 126, py0 + 1, 44, 28, "Rec",
+            Atlas.RecSendKey("psDictateKey"), "accent")
+        ; Where to FIND it. Nobody knows this key by heart, and the wrong
+        ; one here is a dictation button that silently does nothing.
+        Lumi.Label(rx + 24, py0 + 31, rw - 48,
+            "The key PowerScribe uses to start and stop dictation "
+            . "(Tools ▸ Preferences ▸ Keyboard).", "mute", "left", 18)
+        py1 := py0 + 54
+        Lumi.Label(rx + 24, py1, pl, "Return delay (ms)", "dim", "left", 30)
+        Lumi.Field(rx + 24 + pl, py1, 120, 30,
             String(Cfg("psReturnDelay")),
             (t) => Atlas.SetCfgInt("psReturnDelay", t, 0, 2000, 60), "", true)
         psList := ""
         for exe in g_Cfg["psExes"]
             psList .= (psList = "" ? "" : "; ") exe
-        Lumi.Label(rx + 24, B.y + 32 + pitch * 2, pl, "Processes",
-            "dim", "left", 26)
-        Lumi.Label(rx + 24, B.y + 32 + pitch * 2 + 24, rw - 48, psList,
-            "code", "left", B.h - (32 + pitch * 2 + 24) - 12)
+        py2 := py1 + 36
+        Lumi.Label(rx + 24, py2, pl, "Processes", "dim", "left", 26)
+        Lumi.Label(rx + 24, py2 + 24, rw - 48, psList,
+            "code", "left", Max(16, B.h - (py2 + 24 - B.y) - 10))
 
         ; ── band 2: hotkeys ─────────────────────────────────────────────
         B := b[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(x + 24, B.y + 10, 300, "Hotkeys", "section")
-        p2 := Atlas.Pitch(B.h - 50, 4)
+        p2 := Atlas.Pitch(B.h - 44, 3, 52, 58)
         hy := B.y + 30
-        c2 := x + 30 + colw
-        Atlas.HkRow(x + 24, hy,            "Open settings",      "hkGui",      hkL, hkF)
-        Atlas.HkRow(x + 24, hy + p2,       "Pause (combo)",      "hkToggle",   hkL, hkF)
-        Atlas.HkRow(x + 24, hy + p2 * 2,   "Panic release",      "hkPanic",    hkL, hkF)
-        Atlas.HkRow(x + 24, hy + p2 * 3,   "Pause (single key)", "hkPause",    hkL, hkF)
-        Atlas.HkRow(c2,     hy,            "PS dictate",         "hkDictate",  hkL, hkF)
-        Atlas.HkRow(c2,     hy + p2,       "PS next field",      "hkNextField", hkL, hkF)
-        Atlas.HkRow(c2,     hy + p2 * 2,   "PS previous field",  "hkPrevField", hkL, hkF)
-        Lumi.Para(c2, hy + p2 * 3, colw, 34,
-            "NumLock pauses by default; its native lock toggle is suppressed.",
-            "mute")
+        c1 := x + 24
+        c2 := c1 + colw + 12
+        c3 := c2 + colw + 12
+        Atlas.HkRow(c1, hy,          "Open settings",      "hkGui",   0, 0, "", colw)
+        Atlas.HkRow(c1, hy + p2,     "Pause (combo)",      "hkToggle", 0, 0, "", colw)
+        Atlas.HkRow(c1, hy + p2 * 2, "Panic release",      "hkPanic", 0, 0, "", colw)
+        Atlas.HkRow(c2, hy,          "Pause (single key)", "hkPause", 0, 0,
+            "its native lock toggle is suppressed", colw)
+        Atlas.HkRow(c2, hy + p2,     "PowerScribe: toggle dictation",
+            "hkDictate", 0, 0, "", colw)
+        Atlas.HkRow(c2, hy + p2 * 2, "PowerScribe: next field",
+            "hkNextField", 0, 0, "", colw)
+        Atlas.HkRow(c3, hy,          "PowerScribe: previous field",
+            "hkPrevField", 0, 0, "", colw)
+        ; The two teleports were bindable to a mouse button and to nothing
+        ; else -- the thing the script shipped to do had no keyboard row.
+        Atlas.HkRow(c3, hy + p2,     "Pointer to left monitor",
+            "hkTeleLeft", 0, 0, "", colw)
+        Atlas.HkRow(c3, hy + p2 * 2, "Pointer to right monitor",
+            "hkTeleRight", 0, 0, "", colw)
 
         ; ── band 3: behaviour + where the config lives ──────────────────
         B := b[3]
@@ -15408,18 +15763,23 @@ class Atlas {
         Lumi.Toggle(x + 24 + tw * 4, B.y + 26, "Teleport flash",
             Cfg("teleportFlash"),
             (v) => Atlas.SetCfg("teleportFlash", v ? 1 : 0))
-        bw := (w - 88) // 5
+        bw := (w - 98) // 6
         by := B.y + 56
+        ; Both of these throw away everything that is loaded, and neither
+        ; used to ask. Reload is one misclick away from Export.
         Lumi.Btn(x + 24, by, bw, 30, "Reload from disk",
-            (*) => (LoadCfg(), AfterCfgChange(), Atlas.Build()), "ghost")
+            (*) => Atlas.ReloadFromDisk(), "ghost")
         Lumi.Btn(x + 34 + bw, by, bw, 30, "Open config file",
             (*) => (SaveCfg(), Run('notepad.exe "' CFG_PATH '"')), "ghost")
         Lumi.Btn(x + 44 + bw * 2, by, bw, 30, "Open folder",
             (*) => (SaveCfg(), Run('explorer.exe "' CFG_DIR '"')), "ghost")
         Lumi.Btn(x + 54 + bw * 3, by, bw, 30, "Import config…",
-            (*) => (CfgImport(), Atlas.Build()), "accent")
+            (*) => Atlas.ImportConfig(), "accent")
         Lumi.Btn(x + 64 + bw * 4, by, bw, 30, "Export…",
             (*) => CfgExport(), "ghost")
+        ; Parity with the classic window, which has had this since v0.2.
+        Lumi.Btn(x + 74 + bw * 5, by, bw, 30, "Restore shipped defaults…",
+            (*) => Atlas.RestoreShipped(), "ghost")
         ; Where the config actually is, on screen, always. This is the thing
         ; whose absence caused the bindings to look lost on every upgrade.
         Lumi.Label(x + 24, B.y + 90, w - 330,
@@ -15461,14 +15821,106 @@ class Atlas {
         return (t) => Atlas.SetCfgInt(key, t, lo, hi, dflt)
     }
 
-    static HkRow(x, y, label, key, lw := 190, fw := 170) {
-        Lumi.Label(x, y, lw, label, "dim", "left", 28)
+    /**
+     * One hotkey: a name, a field, a Rec button, and the value SPELLED OUT
+     * underneath. "^!+F9" is not something anyone reads as a key, and a
+     * field you can only fill by typing AutoHotkey modifier punctuation is
+     * a field most people leave empty -- which is why these seven shipped
+     * unassigned and stayed that way.
+     *
+     * `cw > 0` stacks the row (name on its own line, full column width) for
+     * the Settings page, whose names are sentences. Without it the row is
+     * the original name-then-field pair, for the Windows page.
+     */
+    static HkRow(x, y, label, key, lw := 190, fw := 170, note := "", cw := 0) {
+        words := Atlas.HkWords(key)
+        if (note != "")
+            words .= " — " note
+        if (cw > 0) {
+            Lumi.Label(x, y, cw, Lumi.Elide(label, cw, "dim"),
+                "dim", "left", 16)
+            Lumi.Field(x, y + 17, cw - 52, 26, Cfg(key), Atlas.StrCommit(key),
+                "unassigned", true)
+            Lumi.Btn(x + cw - 46, y + 17, 46, 26, "Rec",
+                Atlas.RecHotkey(key), "accent")
+            Lumi.Label(x, y + 44, cw, Lumi.Elide(words, cw, "mute"),
+                "mute", "left", 13)
+            return
+        }
+        Lumi.Label(x, y, lw, Lumi.Elide(label, lw, "dim"), "dim", "left", 28)
         Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
             "unassigned", true)
+        Lumi.Btn(x + lw + fw + 6, y + 1, 44, 28, "Rec",
+            Atlas.RecHotkey(key), "accent")
+        Lumi.Label(x + lw, y + 30, fw + 50, Lumi.Elide(words, fw + 50, "mute"),
+            "mute", "left", 14)
+    }
+
+    static RecHotkey(key) {
+        return (*) => Atlas.DoRecHotkey(key)
+    }
+
+    /** Rec, for a HOTKEY field. RecordCombo returns Send syntax ("^{F9}");
+     *  a hotkey is registered WITHOUT the braces, so they come off here.
+     *  Same capture path the binding editor's Rec uses. */
+    static DoRecHotkey(key) {
+        Lumi.EndEdit()
+        v := RecordCombo()
+        if (v = "")
+            return
+        Atlas.SetCfgStr(key, StrReplace(StrReplace(v, "{", ""), "}", ""))
+        Atlas.Build()
+    }
+
+    /** Rec, for a field that holds SEND syntax -- braces stay on. */
+    static RecSendKey(key) {
+        return (*) => Atlas.DoRecSendKey(key)
+    }
+
+    static DoRecSendKey(key) {
+        Lumi.EndEdit()
+        v := RecordCombo()
+        if (v = "")
+            return
+        Atlas.SetCfgStr(key, v)
+        Atlas.Build()
     }
 
     static StrCommit(key) {
         return (t) => Atlas.SetCfgStr(key, t)
+    }
+
+    /** Re-read the file. Everything since the last save goes. */
+    static ReloadFromDisk() {
+        if !Atlas.Confirm("Throw away every change since the last save and "
+            . "re-read " CFG_PATH "?")
+            return
+        LoadCfg()
+        AfterCfgChange()
+        Atlas.Build()
+    }
+
+    /** Replace the whole config from a file. Say how much is at stake. */
+    static ImportConfig() {
+        n := MGet(g_Cfg, "bindings", []).Length
+        if !Atlas.Confirm("Replace everything with the settings in another "
+            . "file?`n`nYour " n " assignment" (n = 1 ? "" : "s")
+            . " will be replaced. A copy of what you have now is saved in "
+            . BACKUP_DIR " first.")
+            return
+        CfgImport()
+        Atlas.Build()
+    }
+
+    /** Back to the shipped defaults. The one truly destructive button. */
+    static RestoreShipped() {
+        if !Atlas.Confirm("Replace everything with the shipped defaults?"
+            . "`n`nEvery assignment you have made is deleted, including the "
+            . "dictation key and the monitor-switching thumb buttons. This "
+            . "cannot be undone.")
+            return
+        RestoreDefaults(true)
+        Atlas.Build()
     }
 
     static SetCfg(key, v) {
@@ -15536,6 +15988,17 @@ class Atlas {
     }
 
     ; ── ROW ACTIONS ─────────────────────────────────────────────────────────
+
+    /**
+     * Will a row be selected once this panel has finished drawing?
+     *
+     * Lumi.List is built with sel = 0 and Build() restores the remembered
+     * selection AFTER the panel has painted, so a button deciding how to
+     * draw itself has to ask savedSel, not the list it is standing next to.
+     */
+    static HasSel(n) {
+        return (n > 0 && Atlas.savedSel >= 1 && Atlas.savedSel <= n)
+    }
 
     static SelectedRef() {
         if (!IsObject(Atlas.list) || Atlas.list.sel < 1)
@@ -15691,17 +16154,25 @@ class Atlas {
                     ? MGet(row, "button", "LButton") : Atlas.sel)))
         }
 
+        ; The list shows the WORDS; `events` stays the parallel code array
+        ; the save path indexes into, exactly like ActSelect/ActCode.
         Lumi.Label(24, 196, 120, "When you", "dim", "left", 30)
         ev := row ? MGet(row, "event", "tap") : Atlas.EventSeed(keyMode)
-        st.event := Lumi.Select(150, 196, 240, 30, events,
+        evWords := []
+        for e in events
+            evWords.Push(EventLabelOf(e))
+        st.event := Lumi.Select(150, 196, 240, 30, evWords,
             Atlas.IndexOfText(events, ev))
 
         Lumi.Label(24, 238, 120, "Also hold", "dim", "left", 30)
         mods := row ? MGet(row, "mods", "") : ""
-        st.ctrl := Lumi.Toggle(150, 242, "Ctrl", InStr(mods, "^") ? 1 : 0, 0, 36, 18)
-        st.alt := Lumi.Toggle(258, 242, "Alt", InStr(mods, "!") ? 1 : 0, 0, 36, 18)
-        st.shift := Lumi.Toggle(356, 242, "Shift", InStr(mods, "+") ? 1 : 0, 0, 36, 18)
-        st.win := Lumi.Toggle(468, 242, "Win", InStr(mods, "#") ? 1 : 0, 0, 36, 18)
+        ; 44x24 and evenly pitched: the old 36x18 switches were below the
+        ; 24 px minimum target and their spacing was uneven, so "Shift" sat
+        ; where the eye expected "Alt".
+        st.ctrl := Lumi.Toggle(150, 242, "Ctrl", InStr(mods, "^") ? 1 : 0, 0, 44, 24)
+        st.alt := Lumi.Toggle(268, 242, "Alt", InStr(mods, "!") ? 1 : 0, 0, 44, 24)
+        st.shift := Lumi.Toggle(386, 242, "Shift", InStr(mods, "+") ? 1 : 0, 0, 44, 24)
+        st.win := Lumi.Toggle(504, 242, "Win", InStr(mods, "#") ? 1 : 0, 0, 44, 24)
 
         actCode := row ? row["action"]["type"] : "keys"
         Lumi.Label(24, 280, 120, "It does", "dim", "left", 30)
@@ -15958,16 +16429,20 @@ class Atlas {
             return
 
         b := NewBinding(app, lay, mods, btn, event, atype, val)
+        ; An EDIT can collide too: change the button or the event of an
+        ; existing row onto one that already exists and a row is silently
+        ; dropped. Count the duplicates that are not this row and not inert.
         realDups := 0
-        if !st.idx {
-            for d in FindDupBinding(b) {
-                if !IsInertRow(g_Cfg["bindings"][d])
-                    realDups += 1
-            }
+        for d in FindDupBinding(b) {
+            if (d = st.idx)
+                continue
+            if !IsInertRow(g_Cfg["bindings"][d])
+                realDups += 1
         }
         if (realDups > 0) {
             if (MsgBox("Replace the existing assignment for " InputLabel(btn)
-                . " " event " in " AppDisp(app) "?", "RadMapper",
+                . " " event " in " AppDisp(app) "? The one that is there now"
+                . " will be deleted.", "RadMapper",
                 "YesNo Icon? Owner" hwnd) != "Yes")
                 return
         }
@@ -16241,8 +16716,8 @@ class Atlas {
                 UpsertBinding(b)
                 made += 1
             }
-            SaveCfg()
             AfterCfgChange()
+            ok := Atlas.SaveOrWarn()
         } catch as e {
             Problem("edit-error", "Wheel deck save failed: " e.Message)
             Lumi.Toast("Save failed: " e.Message, "danger", 3000)
@@ -16264,8 +16739,13 @@ class Atlas {
         }
         Atlas.CloseDlg()
         Atlas.Build()
-        Lumi.Toast(made " direction" (made = 1 ? "" : "s") " on "
-            . InputLabel(host) (cleared ? ", " cleared " cleared" : ""), "jade")
+        ; Do not claim a save that did not happen.
+        if ok
+            Lumi.Toast(made " direction" (made = 1 ? "" : "s") " on "
+                . InputLabel(host) (cleared ? ", " cleared " cleared" : ""),
+                "jade")
+        else
+            Lumi.Toast("Applied for now — not written to disk", "danger", 5000)
     }
 
     static CloseDlg() {
@@ -16631,15 +17111,29 @@ class Atlas {
     ; still the classic Win32 dialogs. They are reached from here so nothing
     ; is unreachable while they are being ported.
 
+    /** Panel names in the CLASSIC window, by the word the caller used. */
+    static CLASSIC_PAGES := Map("test", "Diagnostics", "macros", "Macros",
+        "apps", "Apps")
+
     static Classic(which) {
         Lumi.CloseSelect()
         Lumi.EndEdit()
         try {
             ShowClassic()
-            ; "test" lands on the classic Diagnostics tab, which hosts the
-            ; live input monitor; anything else keeps the last tab.
-            if (which = "test")
-                try NavShow(8)
+            ; Land on the page the button promised. "Edit commands" said
+            ; Macros and opened whatever tab was last used; the index is
+            ; resolved by NAME here, because a hard-coded 8 drifts the
+            ; moment a panel is inserted.
+            want := Atlas.CLASSIC_PAGES.Has(which)
+                ? Atlas.CLASSIC_PAGES[which] : ""
+            if (want != "" && IsObject(g_UI)) {
+                for i, name in g_UI.panelNames {
+                    if (name = want) {
+                        try NavShow(i)
+                        break
+                    }
+                }
+            }
             Lumi.Toast("Opened the older settings window", "cyan")
         }
     }
@@ -16946,11 +17440,14 @@ class Calib {
         ht := Calib.recHold
         CfgSet("tapWindow", tw)
         CfgSet("holdThreshold", ht)
-        SaveCfg()
         AfterCfgChange()
+        ok := Atlas.SaveOrWarn()
         Calib.Close()
         try Atlas.Build()
-        HUD("Timing calibrated — tap " tw " ms, hold " ht " ms", "jade")
+        if ok
+            HUD("Timing calibrated — tap " tw " ms, hold " ht " ms", "jade")
+        else
+            HUD("Applied for now — not written to disk", "danger")
     }
 
     ; ── paint ───────────────────────────────────────────────────────────────
@@ -17523,7 +18020,8 @@ class Shelf {
                 return                       ; already there
         }
         g_Cfg["snippets"].InsertAt(1, text)
-        SaveCfg()
+        if !Atlas.SaveOrWarn()
+            HUD("Applied for now — not written to disk", "danger")
     }
 
     static AddFromClip() {
@@ -17568,11 +18066,19 @@ class Shelf {
         i := Shelf.sel
         if (Shelf.kind != "scratch" || i < 1 || i > Shelf.items.Length)
             return
+        ; A snippet is typed once and kept for months; deleting it was one
+        ; keypress with no question and no undo. Show what is about to go.
+        gone := g_Cfg["snippets"][i]
+        head := (StrLen(gone) > 80) ? SubStr(gone, 1, 80) "…" : gone
+        if !Atlas.Confirm("Delete this snippet?`n`n" head)
+            return
         g_Cfg["snippets"].RemoveAt(i)
-        SaveCfg()
+        ok := Atlas.SaveOrWarn()
         Shelf.sel := Max(1, Min(i, g_Cfg["snippets"].Length))
         Shelf.top := 1
         Shelf.Paint()
+        HUD(ok ? "Snippet deleted" : "Applied for now — not written to disk",
+            ok ? "magenta" : "danger")
     }
 
     /** Clipboard list only -- the scratchpad is deleted a row at a time. */
@@ -17605,7 +18111,7 @@ class Shelf {
 ;  that passive HUDs stay in a corner.
 
 class Chooser {
-    static W := 560
+    static W := 680                ; the sub column was clipping menu names
     static ROWH := 30
     static VIS := 10
 
@@ -17671,6 +18177,12 @@ class Chooser {
         try {
             HotIf(ObjBindMethod(Chooser, "IsFront"))
             Hotkey("Escape", ObjBindMethod(Chooser, "EscKey"), "On")
+            ; A list of choices should work like a list of choices. These
+            ; are scoped by the same IsFront context as Escape, so they are
+            ; live only while this window is the foreground one.
+            Hotkey("Up", ObjBindMethod(Chooser, "MoveKey", -1), "On")
+            Hotkey("Down", ObjBindMethod(Chooser, "MoveKey", 1), "On")
+            Hotkey("Enter", ObjBindMethod(Chooser, "EnterKey"), "On")
             Chooser.escBound := true
         } catch {
         } finally {
@@ -17688,6 +18200,27 @@ class Chooser {
 
     static EscKey(*) {
         Chooser.Defer(ObjBindMethod(Chooser, "Close"))
+    }
+
+    /** Move the highlight, dragging the visible window along with it. */
+    static MoveKey(d, *) {
+        n := Chooser.items.Length
+        if (n < 1)
+            return
+        i := Min(Max(Chooser.sel + d, 1), n)
+        if (i = Chooser.sel)
+            return
+        Chooser.sel := i
+        if (i < Chooser.top)
+            Chooser.top := i
+        else if (i > Chooser.top + Chooser.VIS - 1)
+            Chooser.top := i - Chooser.VIS + 1
+        Chooser.top := Min(Max(Chooser.top, 1), Max(n - Chooser.VIS + 1, 1))
+        Chooser.Defer(ObjBindMethod(Chooser, "Paint"))
+    }
+
+    static EnterKey(*) {
+        Chooser.Defer(ObjBindMethod(Chooser, "Pick", Chooser.sel))
     }
 
     static Paint() {
@@ -17735,7 +18268,8 @@ class Chooser {
             Lumi.Label(26, ry, 300, it.label,
                 active ? "body" : "dim", "left", Chooser.ROWH - 2)
             if it.HasProp("sub")
-                Lumi.Label(330, ry, w - 350, it.sub, "mute", "left",
+                Lumi.Label(330, ry, w - 350,
+                    Lumi.Elide(it.sub, w - 350, "mute"), "mute", "left",
                     Chooser.ROWH - 2)
             hit := Container(14, ry, w - 28, Chooser.ROWH - 2)
             hit.OnEvent("Click", ObjBindMethod(Chooser, "RowClick", i))

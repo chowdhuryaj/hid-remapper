@@ -185,9 +185,29 @@ try {
     Check(MButtonHoldRisk("XButton1", "tap", "MButton"),
         "A layer hosted on MButton is a middle-button hold")
 
+    ; v0.6.2b: the event vocabulary is a two-way map -- the "When you" list
+    ; shows the words and the save path writes the code back, so a label that
+    ; does not round-trip silently rewrites the row's trigger.
+    for code in ["tap", "double", "triple", "hold", "taphold", "turn"]
+        Check(EventCodeOf(EventLabelOf(code)) = code, "Event round trip lost " code)
+    Check(EventLabelOf("tap") = "Tap it" && EventLabelOf("turn") = "Turn the wheel",
+        "Event labels are the words on screen")
+    Check(EventLabelOf("weird") = "weird" && EventCodeOf("weird") = "weird",
+        "An unknown event passes through unchanged")
+
+    ; Elide is pure arithmetic over Lumi.Size -- no layer, no GpGFX.
+    Check(Lumi.Elide("short", 400, "body") = "short", "Elide cut a string that fits")
+    long := "PowerScribe: previous field, in every program"
+    Check(StrLen(Lumi.Elide(long, 60, "small")) < StrLen(long),
+        "Elide must trim a string that cannot fit")
+    Check(SubStr(Lumi.Elide(long, 60, "small"), -1) = "…",
+        "A trimmed string ends in an ellipsis")
+    Check(Lumi.Elide(long, 4, "body") = long,
+        "A width with no room for two characters is left alone")
+
     FileAppend("PASS: JSON, config shape, radial geometry, rename, pause, persistence, "
         . "stations, adaptive layouts, window placement, keyboard pointer geometry, "
-        . "clamped thresholds, hold/repeat action classes`n", "*")
+        . "clamped thresholds, hold/repeat action classes, event labels, elision`n", "*")
     ExitApp(0)
 } catch as e {
     FileAppend("FAIL: " e.Message " (line " e.Line ")`n", "**")
