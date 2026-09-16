@@ -20,6 +20,36 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.6.2a (review pass 1) -- correctness fixes, no new features:
+;    * A held action is RELEASED, not orphaned, when a press falls through to
+;      the native path (engine paused, our own GUI, a click-lock latch).
+;    * OS keyboard auto-repeat re-fires only repeat-safe tap actions, rate
+;      limited by repeatRate; dictation, macros, Run and radial menus no
+;      longer fire dozens of times for one held key.
+;    * "Focus blocked - key delivered in background" now says the window
+;      would not come forward: ControlSend into WPF is best effort at best.
+;    * PACS "already active" no longer counts the WORKLIST as the viewer, so
+;      viewer keys stop landing in the work list.
+;    * A full delivery queue reports the dropped keypress instead of
+;      dropping it silently.
+;    * A click cancels a live radial menu instead of falling through it into
+;      the study; the three mouse buttons are hooked for the menu's lifetime.
+;    * The watchdog restores the system cursor if it is hidden with no drag
+;      scroll running, and OnError restores it too.
+;    * A hold-only row fires at the threshold, not at press, unless its
+;      action actually has a hold phase (StatefulHoldType).
+;    * Panic stops a running macro between steps.
+;    * Teardown CANCELS an open radial menu instead of committing a slice.
+;    * MButton hold / tap-hold / layer-host rows warn before saving (middle
+;      drag is how IntelliSpace pans).
+;    * The Up of a key claimed by the keyboard pointer is swallowed even
+;      after the overlay has closed.
+;    * holdThreshold and tapWindow are clamped at every timing read
+;      (HoldMs / TapMs), so a hand-edited 0 cannot spin a timer.
+;    * ValidateCfg drops wrong-shaped app noHold / noFollow / park fields.
+;    * The foreground-lock timeout is saved at startup and restored on exit.
+;    * Five HotIf binders clear their context in `finally`.
+;
 ;  v0.6.0.2-preview (Codex second pass; Windows verification pending):
 ;    Guided radial setup, four/eight-way direction preservation, reference-safe
 ;    rename, explicit shortcut validation, foreground cancellation, reliable
@@ -740,15 +770,32 @@ A_HotkeyInterval := 1000
 ; outright rather than queued, which on a fast spin silently drops input.
 #MaxThreadsPerHotkey 4
 
-; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
-; any app (single-user reading station; see PSFire).
-if !IsSet(RM_TEST)
-    DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
-
-
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
 global RM_VERSION := "0.6.2-preview"
+
+; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
+; any app (single-user reading station; see PSFire).
+;
+; SPI_SETFOREGROUNDLOCKTIMEOUT is a PER-USER, PERSISTENT Windows setting: it
+; outlives this process, so every program started later on this login inherits
+; whatever RadMapper left behind. On a SHARED workstation that is not ours to
+; keep, so the previous value is read first (SPI_GETFOREGROUNDLOCKTIMEOUT,
+; 0x2000) and Cleanup puts it back; -1 means it was never read and there is
+; nothing to restore. The read lives HERE, in the globals section, rather than
+; up in the directive block: top-level code runs in file order, so a
+; `global g_FgLockSaved := -1` placed below the read would wipe the value.
+global g_FgLockSaved := -1
+if !IsSet(RM_TEST) {
+    try {
+        fgLockNow := 0
+        if DllCall("SystemParametersInfo", "UInt", 0x2000, "UInt", 0,
+            "UInt*", &fgLockNow, "UInt", 0)
+            g_FgLockSaved := fgLockNow
+    }
+    DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
+}
+
 global g_CfgRecoveryBlocked := false
 global g_CfgSaveFailed := false   ; last SaveCfg() threw or was blocked
 ; -- WHERE THE CONFIG LIVES (v0.4.1) -----------------------------------------
@@ -1082,6 +1129,11 @@ global g_Idx := {bind: Map(), layerBind: Map(), anyMods: false,
     anyApp: false, anyNoHold: false, anyNoFollow: false, refd: Map()}
 global g_AppCache := {hwnd: 0, tick: 0, name: ""}   ; ActiveAppName cache
 global g_MacroBusy := false
+; Panic bumps this; RunMacro snapshots it and stops between steps if it moved.
+; A macro is a SEQUENCE -- panic released every button, but without this the
+; loop kept sending its remaining keys into the study it had just been
+; panicked out of.
+global g_MacroGen := 0
 global g_MouseHkWarned := "" ; last mouse-in-Settings-hotkey set warned about
 global g_BadKeyWarned := ""  ; last unhookable-key set warned about
 global g_ClashWarned := ""   ; last Settings-hotkey/key-row clash warned about
@@ -1475,6 +1527,27 @@ IsBareTypingKey(code) {
     if (StrLen(code) != 1)
         return false
     return InStr(typing, StrLower(code)) > 0
+}
+
+; The mouse counterpart of IsBareTypingKey. To tell a tap from a hold the
+; engine must WITHHOLD the physical middle-click until the threshold passes,
+; and IntelliSpace uses middle-drag to PAN -- so a hold/tap-hold row on
+; MButton, or a layer hosted on MButton (which is a hold by another name),
+; makes panning feel dead for holdThreshold and can swallow it outright.
+; Warned and confirmed, never blocked: on a trackball the middle button is a
+; legitimate place to put a layer, and this is a cost to accept knowingly,
+; exactly like the bare typing keys above.
+MButtonHoldRisk(btn, event, layer := "*") {
+    if (btn = "MButton" && (event = "hold" || event = "taphold"))
+        return true
+    return LayerIncludes(layer, "MButton")
+}
+
+MButtonHoldWarning() {
+    return "Holding the middle button withholds the physical middle-click"
+        . " until RadMapper can tell a tap from a hold -- and IntelliSpace"
+        . " uses middle-drag to pan, so panning will feel dead for the hold"
+        . " threshold and a quick pan can be lost.`n`nSet it anyway?"
 }
 
 ; --- key names (v0.3) --------------------------------------------------------
@@ -1894,16 +1967,26 @@ SeedDefaultBindings(cfg) {
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; [ and ] -- field navigation on tap, a drag mode on hold.
     ;
-    ; KNOWN COST, accepted deliberately: these two keys TYPE. Binding a
-    ; typing key on "hold" means the engine has to hold the character back
-    ; until it can tell a tap from a hold, so typing a literal [ or ] is
-    ; delayed by holdThreshold (200 ms by default, and the calibrator can
-    ; lower it). In a PowerScribe field that delay is felt, and a dropped
-    ; character lands in the report. This is the same asymmetry the binding
-    ; dialog warns about before it will save such a row; it is seeded here
-    ; because it was asked for, not because it is free. If bracket characters
-    ; ever start misbehaving while dictating, these two HOLD rows are the
-    ; first thing to delete -- the tap rows cost nothing.
+    ; KNOWN COST, accepted deliberately, and it is TWO different costs:
+    ;
+    ;   * The TAP rows do not delay the character, they REPLACE it. A tap of
+    ;     [ fires ps_next and nothing is typed -- there is no path through
+    ;     the engine on which a bracket still reaches the application. So
+    ;     with these rows in place the two bracket characters cannot be
+    ;     typed at all (dictating "[" still works; pressing the key does
+    ;     not). That is the point of the rows, and it is also the whole of
+    ;     their cost.
+    ;   * The HOLD rows are what adds LATENCY. Binding any typing key on
+    ;     "hold" makes the engine withhold the press until it can tell a tap
+    ;     from a hold, so every [ or ] waits holdThreshold (200 ms by
+    ;     default; the calibrator can lower it) before resolving -- which is
+    ;     felt, and is what the binding dialog warns about before it will
+    ;     save such a row.
+    ;
+    ; Both were asked for, and neither is free. If the brackets misbehave
+    ; while dictating, delete the two HOLD rows first: that removes the
+    ; latency and leaves field navigation working. Deleting all four gives
+    ; the keys back to the keyboard.
     b.Push(NewBinding("*", "*", "", "[", "tap",  "ps_next", ""))
     b.Push(NewBinding("*", "*", "", "[", "hold", "scrollptr", ""))
     b.Push(NewBinding("*", "*", "", "]", "tap",  "ps_prev", ""))
@@ -2426,9 +2509,23 @@ ValidateCfg() {
     g_Cfg["bindings"] := kept
     kept := []
     for app in g_Cfg["apps"] {
-        if (app is Map && app.Has("name") && MGet(app, "match", 0) is Array
+        if !(app is Map && app.Has("name") && MGet(app, "match", 0) is Array
             && app["match"].Length > 0)
-            kept.Push(app)
+            continue
+        ; A hand edit that gives one of these the wrong SHAPE must cost that
+        ; one field, not the whole profile and not a crash in the hook thread:
+        ; AppNoHold reads noHold[..].Length, ParkNow reads park["x"], and
+        ; either throws on the wrong type from inside a press. Drop the field
+        ; and the app simply behaves as if it had never been set.
+        if (app.Has("noHold") && !(app["noHold"] is Array))
+            app.Delete("noHold")
+        ; noFollow is a FLAG (0/1), read for truthiness -- any object is
+        ; truthy, so a Map here silently turns follow-focus off for the app.
+        if (app.Has("noFollow") && IsObject(app["noFollow"]))
+            app.Delete("noFollow")
+        if (app.Has("park") && !(app["park"] is Map))
+            app.Delete("park")
+        kept.Push(app)
     }
     g_Cfg["apps"] := kept
     if (g_Cfg.Has("menus") && g_Cfg["menus"] is Array) {
@@ -3252,8 +3349,20 @@ SpecFor(btn, ctx) {
     ; layer, and its own hold/tap is deferred to release, firing only if the
     ; layer went unused (the QMK mod-tap rule). So instant hold is gated on the
     ; button not hosting a layer.
+    ;
+    ; And it is gated on the hold action being STATEFUL (StatefulHoldType --
+    ; exactly ActionDown's special cases). A hold row carrying a ONE-SHOT
+    ; action -- run a program, a macro, "PowerScribe: toggle dictation", a
+    ; radial-free tele_next -- has no down phase to engage: ActionDown falls
+    ; through to ActionFire, so instant engagement fired the whole action the
+    ; instant the button went down. That is not a hold, it is a tap with a
+    ; different name, and on a hold-ONLY row it made the threshold meaningless
+    ; (a brush of the button launched the program). One-shots now wait for
+    ; HoldTimer like every other hold, which is the only way a hold can be
+    ; abandoned by letting go early.
     instantHold := IsObject(hold) && tapNative && !IsObject(double)
         && !IsObject(triple) && !IsObject(taphold) && !layerHost
+        && StatefulHoldType(hold["action"]["type"])
 
     ; Eager first-press passthrough: when the only extras are multi-tap (no
     ; hold, tap-hold or layer-host role) and the tap is native or unbound,
@@ -3487,6 +3596,30 @@ OnPressHK(btn, *) {
         Warp.FromHook(btn)
         return
     }
+    ; v0.6.2a: a live menu is MODAL, but its overlay is NoActivate and
+    ; click-through, so a mouse click during one used to fall straight into
+    ; the study underneath WITH THE WHEEL STILL UP -- a stray window/level or
+    ; a scroll through the series you were about to pick a preset for. A
+    ; click is the universal "not this" gesture: cancel, fire nothing, and
+    ; swallow the click. The holder's own button is exempt (its release is
+    ; the commit), wheels are exempt (a notch is not a click), and a TRIAL
+    ; menu is exempt -- it is being looked at from the settings window, where
+    ; clicking is how you leave it. RadialBindCancel hooks the three mouse
+    ; buttons the config does not, so this is reached even when LButton is
+    ; otherwise fully native.
+    if (IsObject(g_Radial) && !g_Radial.trial && IsMouseInput(btn)
+        && !IsWheel(btn)
+        && !(IsObject(g_Radial.holder) && g_Radial.holder.btn = btn)) {
+        RadialClose(false)
+        HUD("Menu cancelled", "mute")
+        ; down+consumed, like the click-lock escape below: the matching
+        ; physical release must be inert, not a native Up with no Down.
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        return
+    }
     ; A reinjected click can never change which window is the foreground one
     ; (Windows' foreground lock), so the engine must manage activation itself
     ; around its own windows. Ours-ness is POSITIONAL (window under the
@@ -3519,10 +3652,23 @@ OnPressHK(btn, *) {
             try WinActivate("ahk_id " uw)
             Problem("focus", "GUI was foreground; handed focus to " WinClassOf(uw))
         }
-        SendNativeDown(btn)
+        ; A live state here owns a synthetic hold that NOTHING will ever
+        ; release: from this press on the input goes native, so the state
+        ; machine never sees its release. A bare ClearBS orphaned it -- a
+        ; moddrag left LButton down over the image, a sniper left the pointer
+        ; slowed, until the watchdog or panic caught it. Release exactly as
+        ; the stale-state path below does, THEN clear, THEN go native.
         prev := BS(btn)
-        if prev
+        if prev {
+            if (prev.down && !prev.consumed) {
+                if (prev.mode = "passthru" || prev.mode = "eager1")
+                    SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
+                else if (prev.mode = "held")
+                    ActionUp(prev.holdBinding, prev)
+            }
             ClearBS(btn)
+        }
+        SendNativeDown(btn)
         st := NewBS(btn)
         st.down := true
         st.mode := "passthru"
@@ -3541,8 +3687,17 @@ OnPressHK(btn, *) {
     if ClickLockOwns(btn) {
         ClickLockRelease()
         old := BS(btn)
-        if old
+        if old {
+            ; same orphan as the not-ours branch above: this press consumes
+            ; the input, so the old state's release never arrives
+            if (old.down && !old.consumed) {
+                if (old.mode = "passthru" || old.mode = "eager1")
+                    SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
+                else if (old.mode = "held")
+                    ActionUp(old.holdBinding, old)
+            }
             ClearBS(btn)
+        }
         st := NewBS(btn)
         st.down := true
         st.consumed := true
@@ -3558,15 +3713,30 @@ OnPressHK(btn, *) {
     ; it tore down the live state (releasing a hold mid-hold, logging phantom
     ; "recovered" problems) and rebuilt it, so a held key bounced between
     ; engaging and releasing its hold action instead of holding it. Repeats
-    ; are now absorbed: a plain remap re-fires (a held key SHOULD repeat, as
-    ; the physical key does), a native passthrough re-sends its down, and any
-    ; in-flight state -- pending, held, armedmod -- is simply left alone.
+    ; are now absorbed: a native passthrough re-sends its down, a REPEAT-SAFE
+    ; tap action re-fires at repeatRate (a held key SHOULD repeat, as the
+    ; physical key does -- but only for actions that mean the same thing
+    ; twice; see RepeatSafeAct), and any in-flight state -- pending, held,
+    ; armedmod -- is simply left alone.
     if (isKey && prev && prev.down && !prev.consumed
         && InputHeldPhysical(btn)) {
         if (prev.mode = "fired" && IsObject(prev.spec)
-            && IsObject(prev.spec.tap))
-            ActionFire(prev.spec.tap, prev)
-        else if (prev.mode = "passthru" || prev.mode = "eager1")
+            && IsObject(prev.spec.tap)
+            && RepeatSafeAct(prev.spec.tap["action"]["type"])) {
+            ; Only a REPEAT-SAFE action re-fires, and never at the OS repeat
+            ; rate. Windows resends key-down every ~30 ms, so v0.3 toggled
+            ; dictation, opened a radial menu or launched a program dozens of
+            ; times for one held key -- the action ran per repeat, not per
+            ; press. repStart is the wall clock of the last re-fire, gated by
+            ; the same repeatRate the keysrepeat hold uses (it is free here:
+            ; a "fired" state never runs the keysrepeat timer that owns it).
+            gap := Max(Cfg("repeatRate"), 1)
+            since := now - prev.repStart
+            if (prev.repStart = 0 || since < 0 || since >= gap) {
+                prev.repStart := now
+                ActionFire(prev.spec.tap, prev)
+            }
+        } else if (prev.mode = "passthru" || prev.mode = "eager1")
             SendNativeDown(prev.passBtn != "" ? prev.passBtn : btn)
         return
     }
@@ -3689,9 +3859,24 @@ OnPressHK(btn, *) {
     ArmTimers(st)
 }
 
+; Timing reads, CLAMPED to the same ranges the Settings page and the
+; calibrator enforce (50-2000 ms and 30-1000 ms). A hand-edited config -- or a
+; JSON number that arrived as 0 -- used to reach SetTimer as `-0`, which in
+; AHK means "run this timer repeatedly, as fast as it can", so the hold timer
+; fired continuously and the button engaged its hold before the hand had
+; moved. Every timing read of these two settings goes through here; the GUI
+; keeps its own ClampInt on the way IN, this is the guard on the way OUT.
+HoldMs() {
+    return ClampInt(Cfg("holdThreshold"), 50, 2000, 200)
+}
+
+TapMs() {
+    return ClampInt(Cfg("tapWindow"), 30, 1000, 100)
+}
+
 ArmTimers(st) {
     st.gen += 1
-    SetTimer(HoldTimer.Bind(st, st.gen), -Cfg("holdThreshold"))
+    SetTimer(HoldTimer.Bind(st, st.gen), -HoldMs())
     StartPollIfNeeded(st)
 }
 
@@ -3708,6 +3893,20 @@ StartPollIfNeeded(st) {
         st.polling := true
         SetTimer(MovePoll.Bind(st.btn, st.pollId), 15)
     }
+}
+
+; Tap actions that are safe to RE-FIRE on an OS keyboard auto-repeat: the
+; physical key would produce the same output again, and repeating that output
+; is what the user asked for by holding the key. Names are ACT_CODES entries.
+; Everything absent is a ONE-SHOT and must fire once per PRESS: ps_* and
+; pacs_keys queue a focus dance, macro/run/guiopen/layout/winplace/warp/radial
+; open or launch something, tele_* teleports the pointer, and the toggles
+; (sniper, boost, scrollptr, zoomptr, clicklock, pausetgl) would flip on and
+; off at 30 Hz. wldial is in because a held dial SHOULD walk the ring, which
+; is the whole gesture.
+RepeatSafeAct(t) {
+    return (t = "keys" || t = "keysrepeat" || t = "text" || t = "native"
+        || t = "stock" || t = "wldial")
 }
 
 ; Hold-action types that ENGAGE state in ActionDown (ended by ActionUp)
@@ -3829,6 +4028,17 @@ TapTimer(st, gen, *) {
 OnReleaseHK(btn, *) {
     Critical "On"
     TestNotify(btn, 0)
+    ; A key whose PRESS was handed to the keyboard pointer must not emit a
+    ; native Up here -- and "is Warp still up?" is the wrong test for that.
+    ; The press that CLOSES the overlay (Esc, Space, R/M/F, V) sets
+    ; Warp.active false before its own release arrives, so that Up fell
+    ; through to the safety SendNativeUp below and a phantom keystroke landed
+    ; in whatever the click had just activated. Warp records what it claimed;
+    ; the claim is consumed here, whatever Warp is doing now.
+    if Warp.claimed.Has(btn) {
+        Warp.claimed.Delete(btn)
+        return
+    }
     st := BS(btn)
     if (Warp.active && IsKeyInput(btn) && !st)
         return                               ; press went to the keyboard pointer
@@ -3863,12 +4073,12 @@ OnReleaseHK(btn, *) {
         dx := ex - st.sx
         dy := ey - st.sy
         dt := Cfg("dragThreshold")
-        if (A_TickCount - st.pressTick < Cfg("holdThreshold")
+        if (A_TickCount - st.pressTick < HoldMs()
             && (dx * dx + dy * dy) < dt * dt) {
             st.nativeTaps := 1
             st.tapCount := 1
             st.mode := "wait"
-            SetTimer(TapTimer.Bind(st, st.gen), -Cfg("tapWindow"))
+            SetTimer(TapTimer.Bind(st, st.gen), -TapMs())
         } else
             ClearBS(btn)
         return
@@ -3913,7 +4123,7 @@ OnReleaseHK(btn, *) {
             ClearBS(btn)
         } else {
             st.mode := "wait"
-            SetTimer(TapTimer.Bind(st, st.gen), -Cfg("tapWindow"))
+            SetTimer(TapTimer.Bind(st, st.gen), -TapMs())
         }
         return
     }
@@ -4209,7 +4419,7 @@ ActionDown(binding, st, instant) {
             SafeSend(v)
             if IsObject(st) {
                 st.repStart := A_TickCount   ; wall-clock runaway cap anchor
-                delay := instant ? Cfg("holdThreshold") : Cfg("repeatRate")
+                delay := instant ? HoldMs() : Cfg("repeatRate")
                 SetTimer(RepeatKick.Bind(st, st.gen, v), -delay)
             }
         case "dragmove":
@@ -5334,9 +5544,12 @@ AppSwitchBindKeys() {
     try {
         HotIf((*) => IsObject(g_AppSw))
         Hotkey("Delete", AppSwitchDelKey, "On")
-        HotIf()                              ; clear: later Hotkey() is global
         bound := true
-    }
+    } catch {
+        ; unregistrable: the feature is simply unavailable, as before
+    } finally {
+        HotIf()                              ; clear: later Hotkey() is global,
+    }                                        ; even when Hotkey() threw
 }
 
 AppSwitchDelKey(*) {
@@ -6866,6 +7079,68 @@ RadialCountFor(n) {
     return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
 }
 
+; ── clicking out of a live menu ──────────────────────────────────────────
+;
+; The wheel is drawn on a NoActivate, click-through layer, so a mouse button
+; the config does not hook stays fully native and its click goes THROUGH the
+; menu into the study. OnPressHK cancels the menu for every button the engine
+; already hooks; these hotkeys cover the rest -- LButton, RButton and MButton
+; when nothing references them -- and exist only while a non-trial menu is
+; open, so the three buttons are byte-for-byte native at every other moment.
+; Registered on open, removed on close: nothing outlives the menu.
+global g_RadialCancelKeys := []   ; buttons hooked for the current menu
+
+RadialCancelActive(*) {
+    return (IsObject(g_Radial) && !g_Radial.trial) ? 1 : 0
+}
+
+RadialCancelHit(btn, *) {
+    Critical "On"
+    if (!IsObject(g_Radial) || g_Radial.trial)
+        return
+    RadialClose(false)                       ; cancel: a menu never commits
+    HUD("Menu cancelled", "mute")            ; on a click
+}
+
+RadialBindCancel() {
+    global g_RadialCancelKeys
+    RadialUnbindCancel()
+    ; try/finally, not try alone: a throw inside must never leave OUR context
+    ; installed, or the next plain Hotkey() call in the process silently
+    ; inherits it (the engine's own hooks are registered that way).
+    try {
+        HotIf(RadialCancelActive)
+        for b in ["LButton", "RButton", "MButton"] {
+            if g_HookState.Has(b)            ; already ours: OnPressHK cancels
+                continue
+            try {
+                Hotkey("*" b, RadialCancelHit.Bind(b), "On")
+                g_RadialCancelKeys.Push(b)
+            }
+        }
+    } catch {
+        ; a menu that could not hook the spare buttons still works; the
+        ; unhooked ones simply stay native, as they were before v0.6.2a
+    } finally {
+        HotIf()
+    }
+}
+
+RadialUnbindCancel() {
+    global g_RadialCancelKeys
+    if (g_RadialCancelKeys.Length = 0)
+        return
+    try {
+        HotIf(RadialCancelActive)            ; Off must run under the SAME
+        for b in g_RadialCancelKeys          ; context the hotkey was made in
+            try Hotkey("*" b, "Off")
+    } catch {
+    } finally {
+        HotIf()
+    }
+    g_RadialCancelKeys := []
+}
+
 /**
  * Open a menu.
  *
@@ -6901,6 +7176,8 @@ RadialOpen(name, holder := 0, trial := false) {
                  targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false, depth: 1,
                  t0: A_TickCount, restAt: A_TickCount}
+    if !trial
+        RadialBindCancel()                   ; a click anywhere cancels
     SetTimer(RadialTick, 16)
     RadialTick()
 }
@@ -7011,6 +7288,7 @@ RadialEnter(name) {
 RadialClose(commit) {
     global g_Radial
     SetTimer(RadialTick, 0)
+    RadialUnbindCancel()                     ; the three buttons go native
     R := g_Radial
     g_Radial := 0
     if !IsObject(R)
@@ -7327,8 +7605,14 @@ PSFire(keys) {
 ; report editor keeps the cursor.
 PACSFire(keys) {
     global g_PSQueue
-    if (g_PSQueue.Length >= 16)
+    if (g_PSQueue.Length >= 16) {
+        ; The cap is a runaway backstop, but a silent drop is a keypress the
+        ; reader watched go nowhere with no explanation. Say so.
+        Problem("ps-queue", "delivery queue full (16) -- dropped PACS keys: "
+            . keys)
+        HUD("Too many queued keypresses — that one was dropped", "warn")
         return
+    }
     g_PSQueue.Push({app: Cfg("pacsApp"), keys: keys})
     SetTimer(PSDrain, -1)
 }
@@ -7337,37 +7621,64 @@ PACSFire(keys) {
 ; first: the Apps-tab match entries, each optionally narrowed by the title
 ; substring in pacsWindow (IntelliSpace has a worklist AND a viewer under one
 ; exe; F7/F8 belong to the viewer).
+; Returns {pref, all}: `pref` is only the criteria narrowed by the preferred
+; title, `all` is those followed by the bare ones (activation order --
+; prefer the viewer, settle for any window of the app). They are SEPARATE
+; because "is it already in front?" and "what should I bring forward?" are
+; different questions. IntelliSpace's worklist and viewer share one exe, so
+; a bare "ahk_exe IntelliSpacePACSRadiology.exe" is TRUE while the worklist
+; is focused -- and the already-active fast path then fired F7/F8 straight
+; into the worklist, which has its own bindings for them (it renamed a
+; column, it did not window/level anything). With a preferred title set, only
+; the preferred criteria may take that fast path.
 AppCrits(appName, prefer := "") {
-    out := []
+    pref := []
+    bare := []
     for app in MGet(g_Cfg, "apps", []) {
         if (MGet(app, "name", "") != appName)
             continue
         for m in MGet(app, "match", []) {
             crit := MatchCrit(m)
             if (prefer != "" && SubStr(crit, 1, 4) = "ahk_")
-                out.Push(prefer " " crit)     ; "VirtualMonitor ahk_exe X"
+                pref.Push(prefer " " crit)    ; "VirtualMonitor ahk_exe X"
         }
         for m in MGet(app, "match", [])
-            out.Push(MatchCrit(m))
+            bare.Push(MatchCrit(m))
     }
-    return out
+    all := []
+    for c in pref
+        all.Push(c)
+    for c in bare
+        all.Push(c)
+    return {pref: pref, all: all}
 }
 
 AppDeliverNow(appName, keys) {
     gen := g_PSGen
-    crits := AppCrits(appName, appName = Cfg("pacsApp") ? Cfg("pacsWindow") : "")
+    prefer := (appName = Cfg("pacsApp")) ? Cfg("pacsWindow") : ""
+    cr := AppCrits(appName, prefer)
+    crits := cr.all
     if (crits.Length = 0) {
         Problem("app-missing", "No '" appName "' profile on the Apps tab")
         HUD("No " appName " profile on the Apps tab", "warn")
         return
     }
-    for crit in crits {
+    ; Already-active fast path. When a preferred window title exists, ONLY the
+    ; preferred criteria count as "already there": the bare exe match is also
+    ; true for the PACS WORKLIST, and sending viewer keys to the worklist is
+    ; how F7/F8 ended up editing the list instead of the images. With no
+    ; preference set the two lists are identical and nothing changes.
+    fast := (prefer != "" && cr.pref.Length > 0) ? cr.pref : crits
+    for crit in fast {
         if WinActive(crit) {
             SafeSend(keys)
             return
         }
     }
     win := ""
+    ; Activation order is unchanged: the preferred (viewer) criteria first,
+    ; then any window of the app -- better to raise the worklist and send
+    ; there than to send nothing at all.
     for crit in crits {
         if WinExist(crit) {
             win := crit
@@ -7389,9 +7700,19 @@ AppDeliverNow(appName, keys) {
         try WinActivate(win)                     ; foreground lock: one retry
         if !WinWaitActive(win, , 0.5) {
             if (g_PSGen = gen && WinExist(win)) {
+                ; Best effort, and NOT a delivery. ControlSend posts to a
+                ; window's message queue; a WPF application (PowerScribe One,
+                ; and the WPF parts of the viewer) routes keyboard input
+                ; through its own focus manager and ignores a posted message
+                ; aimed at the HWND. So this may land and may do nothing at
+                ; all, and the old wording -- "key delivered in background" --
+                ; told the reader the keystroke had arrived when the usual
+                ; outcome is that it did not.
                 try ControlSend(keys, , win)
-                Problem("app-blocked", appName " focus blocked - key delivered in background")
-                HUD(appName " focus blocked - key sent in background")
+                Problem("app-blocked", appName " would not come forward;"
+                    . " background delivery attempted (ControlSend is"
+                    . " unreliable in WPF and may have done nothing)")
+                HUD(appName " would not come forward — press it again", "warn")
             }
             return
         }
@@ -7419,8 +7740,12 @@ AppDeliverNow(appName, keys) {
 ; background delivery instead of silently dropping the action.
 RM_PSFireReal(keys) {
     global g_PSQueue
-    if (g_PSQueue.Length >= 16)      ; runaway-macro backstop; no human
-        return                       ; outruns the drain loop
+    if (g_PSQueue.Length >= 16) {    ; runaway-macro backstop; no human
+        Problem("ps-queue", "delivery queue full (16) -- dropped PowerScribe"
+            . " keys: " keys)        ; outruns the drain loop, so a full queue
+        HUD("Too many queued keypresses — that one was dropped", "warn")
+        return                       ; means something is misbehaving: never
+    }                                ; drop it silently
     g_PSQueue.Push(keys)
     SetTimer(PSDrain, -1)
 }
@@ -7473,10 +7798,17 @@ PSDeliverNow(keys) {
     if !WinWaitActive(psWin, , 0.5) {
         try WinActivate(psWin)                   ; foreground lock: one retry
         if !WinWaitActive(psWin, , 0.5) {
-            if (g_PSGen = gen && WinExist(psWin)) {   ; unfocusable: last-resort
-                try ControlSend(keys, , psWin)        ; background delivery
-                Problem("ps-blocked", "PS focus blocked - key delivered in background")
-                HUD("PS focus blocked - key sent in background")
+            if (g_PSGen = gen && WinExist(psWin)) {
+                ; Last resort, and best effort ONLY -- see AppDeliverNow:
+                ; PowerScribe is WPF, so a posted keystroke is very likely to
+                ; be dropped by its focus manager. Attempt it, then tell the
+                ; truth: the window would not come forward.
+                try ControlSend(keys, , psWin)
+                Problem("ps-blocked", "PowerScribe would not come forward;"
+                    . " background delivery attempted (ControlSend is"
+                    . " unreliable in WPF and may have done nothing)")
+                HUD("PowerScribe would not come forward — press it again",
+                    "warn")
             }
             return
         }
@@ -7538,8 +7870,11 @@ RunMacro(name, *) {
         return
     }
     g_MacroBusy := true
+    gen := g_MacroGen                        ; panic bumps this: stop the rest
     try {
         for step in macros[name] {
+            if (g_MacroGen != gen)           ; checked at BOTH ends of the body
+                break                        ; so a step that slept is caught
             t := MGet(step, "type", "")
             v := MGet(step, "value", "")
             switch t {
@@ -7572,6 +7907,11 @@ RunMacro(name, *) {
                 case "tooltip":
                     HUD(v)
             }
+            ; The macro thread is interruptible: panic can land inside a
+            ; Sleep or a PSMacroSync wait, and the switch above returns to
+            ; here none the wiser. This is the check that catches that.
+            if (g_MacroGen != gen)
+                break
         }
     } catch as e {
         Problem("macro-error", "Macro step failed: " e.Message)
@@ -7890,6 +8230,12 @@ RegisterKbHotkeys() {
 ; before any path that can unregister an Up hotkey (disable, config change)
 ; or the release event is lost and the synthetic input stays down forever.
 ForceReleaseActive() {
+    ; BEFORE the g_BS sweep: a held radial menu commits on ActionUp, and
+    ; teardown is not a commit. Pausing the engine, changing a binding or
+    ; exiting with a wheel up used to fire whichever slice the pointer
+    ; happened to be resting in -- a W/L preset or "mark as read" into the
+    ; open study. RadialClose(false) is a no-op when no menu is open.
+    RadialClose(false)
     ClickLockRelease()                       ; a latch must never outlive the
     ScrollPtrStop()                          ; hooks that can release it
     for name, st in g_BS.Clone() {
@@ -7933,6 +8279,21 @@ Watchdog() {
     ; Before the enabled test: a wedged UI count is not an engine state, and
     ; it must clear even while the engine is paused. See Lumi.EditGuard.
     try Lumi.EditGuard()
+    ; Also before the enabled test, and for the same reason: a hidden system
+    ; cursor is not engine state. SetSystemCursor replaces the cursors for the
+    ; WHOLE desktop (it is the only way to hide the pointer over another
+    ; process), so if the thing that hid it dies without restoring -- a throw
+    ; inside SPTick, a paused engine, a teardown that skipped ScrollPtrStop --
+    ; the user is left with no pointer at all and no pointer to fix it with.
+    ; Drag scroll/zoom is the only caller, so no live anchor means nothing
+    ; owns the hidden cursor: give it back.
+    if (g_SysCursorHidden && !IsObject(g_ScrollPtr)) {
+        SysCursorShow()
+        SPMarkerHide()
+        Problem("recovered", "system cursor was hidden with no drag scroll"
+            . " running -- restored")
+        HUD("RadMapper restored the mouse pointer")
+    }
     if !g_Enabled
         return
     now := A_TickCount
@@ -8003,8 +8364,16 @@ ToggleEnabled() {
 
 PanicRelease() {
     global g_Layer, g_LayerStack, g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
+    global g_MacroBusy, g_MacroGen
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
+    ; A running macro is a SEQUENCE, and panic has to stop the rest of it:
+    ; releasing every button meant nothing while the macro thread kept
+    ; sending its remaining steps into the study. RunMacro snapshots this
+    ; generation and breaks as soon as it moves. g_MacroBusy is cleared too,
+    ; so the next macro is not refused by a loop that is on its way out.
+    g_MacroGen += 1
+    g_MacroBusy := false
     try SysCursorShow()                      ; never leave the pointer hidden
     try SPMarkerHide()
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
@@ -8069,6 +8438,11 @@ RadUnhandledError(err, mode) {
     try Problem("unhandled", detail)
     try OutputDebug("[RadMapper unhandled] " detail "`n")
     try DllCall("user32\ReleaseCapture")
+    ; The error may have come out of the drag-scroll tick, which hides the
+    ; system cursor process-wide. Never let an unhandled error be the reason
+    ; the workstation has no pointer. (OnExit -> Cleanup does the same.)
+    try SysCursorShow()
+    try SPMarkerHide()
     return 1
 }
 
@@ -9751,6 +10125,11 @@ BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
         MsgBox("A binding cannot require its own input as a held layer button.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
+    if MButtonHoldRisk(btn, event, lay) {
+        if (MsgBox(MButtonHoldWarning(), "RadMapper",
+            "YesNo Icon! Owner" . dlg.Hwnd) != "Yes")
+            return
+    }
     atype := ACT_CODES[ddAct.Value]
     ok := true
     val := ValidateActionValue(dlg, atype, edVal.Value, &ok)
@@ -9999,6 +10378,11 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
         MsgBox("A binding cannot require its own input as a held layer button.",
             "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
+    }
+    if MButtonHoldRisk(key, event, lay) {    ; a KEY row hosted on MButton
+        if (MsgBox(MButtonHoldWarning(), "RadMapper",
+            "YesNo Icon! Owner" . dlg.Hwnd) != "Yes")
+            return
     }
     atype := ACT_CODES[ddAct.Value]
     ok := true
@@ -10436,7 +10820,7 @@ BuildTray() {
 }
 
 Cleanup(*) {
-    global g_SpeedSaved, g_Problems
+    global g_SpeedSaved, g_Problems, g_FgLockSaved
     SetTimer(Watchdog, 0)
     SetTimer(FollowTick, 0)
     try StationWatchStop()
@@ -10452,6 +10836,13 @@ Cleanup(*) {
     if (g_SpeedSaved != "") {
         RM_SetSpeed(g_SpeedSaved)
         g_SpeedSaved := ""
+    }
+    ; Put the user's foreground-lock timeout back. It is a per-user Windows
+    ; setting, not ours to leave changed on a shared login. -1 = never read.
+    if (g_FgLockSaved >= 0) {
+        try DllCall("SystemParametersInfo", "UInt", 0x2001,
+            "UInt", g_FgLockSaved, "Ptr", 0, "UInt", 0)
+        g_FgLockSaved := -1
     }
     return 0
 }
@@ -12035,9 +12426,11 @@ class Lumi {
         try {
             HotIf(ObjBindMethod(Lumi, "__GalleryFront"))
             Hotkey("Escape", ObjBindMethod(Lumi, "__GalleryEsc"), "On")
-            HotIf()
             Lumi.galleryEsc := true
-        }
+        } catch {
+        } finally {
+            HotIf()                          ; a throw must never leave our
+        }                                    ; context on later Hotkey() calls
     }
 
     static __GalleryFront(*) {
@@ -12279,9 +12672,11 @@ class Atlas {
             Hotkey("^!Right", (*) => Atlas.SizeNudge(40, 0), "On")
             Hotkey("^!Up",    (*) => Atlas.SizeNudge(0, -40), "On")
             Hotkey("^!Down",  (*) => Atlas.SizeNudge(0, 40), "On")
-            HotIf()
             Atlas.escBound := true
-        }
+        } catch {
+        } finally {
+            HotIf()                          ; a throw partway through these
+        }                                    ; must not leak IsFront onward
     }
 
     /**
@@ -14332,6 +14727,14 @@ class Atlas {
                 "YesNo Icon! Owner" hwnd) != "Yes")
                 return
         }
+        ; The mouse half of the same warning: Middle is one of the wizard's
+        ; four button tiles, and Hold is one of its two events, so this is
+        ; two clicks away from the Home page.
+        if MButtonHoldRisk(btn, d.event) {
+            if (MsgBox(MButtonHoldWarning(), "RadMapper",
+                "YesNo Icon! Owner" hwnd) != "Yes")
+                return
+        }
         ok := true
         val := ValidateActionValue(hwnd, d.act, d.value, &ok)
         if !ok
@@ -15537,6 +15940,13 @@ class Atlas {
                 . " feel delayed -- and while dictating, a dropped character"
                 . " lands in the report.`n`nSafer: add a modifier, or use a"
                 . " key that does not type.`n`nBind it anyway?", "RadMapper",
+                "YesNo Icon! Owner" . hwnd) != "Yes")
+                return
+        }
+        ; Same shape, for the one mouse button that already has a job the
+        ; reading room depends on. Warn, never block.
+        if MButtonHoldRisk(btn, event, lay) {
+            if (MsgBox(MButtonHoldWarning(), "RadMapper",
                 "YesNo Icon! Owner" . hwnd) != "Yes")
                 return
         }
@@ -16814,8 +17224,10 @@ class Shelf {
         try {
             HotIf(ObjBindMethod(Shelf, "IsFront"))
             Hotkey("Escape", ObjBindMethod(Shelf, "EscKey"), "On")
-            HotIf()
             Shelf.escBound := true
+        } catch {
+        } finally {
+            HotIf()
         }
     }
 
@@ -17259,8 +17671,10 @@ class Chooser {
         try {
             HotIf(ObjBindMethod(Chooser, "IsFront"))
             Hotkey("Escape", ObjBindMethod(Chooser, "EscKey"), "On")
-            HotIf()
             Chooser.escBound := true
+        } catch {
+        } finally {
+            HotIf()
         }
     }
 
@@ -17412,6 +17826,10 @@ class Warp {
     static cols := 0
     static rows := 0
     static first := ""              ; pending column letter
+    ; Keys whose PRESS this class took off the engine (OnPressHK handed them
+    ; over). OnReleaseHK consumes the claim so the matching Up is swallowed
+    ; even though the overlay has closed by then -- see OnReleaseHK.
+    static claimed := Map()
     static grab := false            ; left button held by us (dragging)
     static zoom := 4
     static loupeOn := true
@@ -17584,6 +18002,9 @@ class Warp {
 
     /** A key that reached the engine's own hook first (a bound key row). */
     static FromHook(name) {
+        ; Claim FIRST: Warp.Key can close the overlay (Esc, Space, a click
+        ; letter), and the release still has to be swallowed after that.
+        Warp.claimed[name] := true
         vk := 0
         try vk := GetKeyVK(name)
         if vk

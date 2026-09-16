@@ -153,8 +153,41 @@ try {
     Check(p.x = 3538, "Loupe flips to the left at the edge")
     Check(!Warp.active, "Keyboard pointer is closed under the rig")
 
+    ; v0.6.2a: clamped timing reads, and the two action-class predicates the
+    ; press path gates on. g_Cfg is replaced wholesale here -- these are the
+    ; last checks in the file.
+    g_Cfg := Map("bindings", [], "settings", Map())
+    Check(HoldMs() = 200 && TapMs() = 100, "Unset thresholds fall back to the defaults")
+    CfgSet("holdThreshold", 0)
+    CfgSet("tapWindow", 0)
+    Check(HoldMs() = 50 && TapMs() = 30, "A zero threshold clamps up, never to 0")
+    CfgSet("holdThreshold", 99999)
+    CfgSet("tapWindow", 99999)
+    Check(HoldMs() = 2000 && TapMs() = 1000, "A huge threshold clamps down")
+    CfgSet("holdThreshold", "soon")
+    CfgSet("tapWindow", "")
+    Check(HoldMs() = 200 && TapMs() = 100, "A non-numeric threshold falls back")
+    for t in ["radial", "scrollptr", "zoomptr", "moddrag", "keysrepeat",
+        "native", "stock", "dragmove", "sniper", "boost"]
+        Check(StatefulHoldType(t), "Stateful hold type lost " t)
+    for t in ["ps_dictate", "pacs_keys", "macro", "run", "guiopen", "layout",
+        "winplace", "warp", "tele_next", "clicklock", "none"]
+        Check(!StatefulHoldType(t), "One-shot " t " must not engage at press")
+    for t in ["keys", "keysrepeat", "text", "native", "stock", "wldial"]
+        Check(RepeatSafeAct(t), "Repeat-safe action lost " t)
+    for t in ["ps_dictate", "ps_next", "pacs_keys", "macro", "run", "guiopen",
+        "radial", "tele_next", "sniper", "clicklock", "none"]
+        Check(!RepeatSafeAct(t), "Auto-repeat must not re-fire " t)
+    Check(MButtonHoldRisk("MButton", "hold") && MButtonHoldRisk("MButton", "taphold"),
+        "A middle-button hold must warn")
+    Check(!MButtonHoldRisk("MButton", "tap") && !MButtonHoldRisk("XButton1", "hold"),
+        "Only a middle-button hold warns")
+    Check(MButtonHoldRisk("XButton1", "tap", "MButton"),
+        "A layer hosted on MButton is a middle-button hold")
+
     FileAppend("PASS: JSON, config shape, radial geometry, rename, pause, persistence, "
-        . "stations, adaptive layouts, window placement, keyboard pointer geometry`n", "*")
+        . "stations, adaptive layouts, window placement, keyboard pointer geometry, "
+        . "clamped thresholds, hold/repeat action classes`n", "*")
     ExitApp(0)
 } catch as e {
     FileAppend("FAIL: " e.Message " (line " e.Line ")`n", "**")

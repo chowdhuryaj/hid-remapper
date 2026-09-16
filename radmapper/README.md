@@ -25,9 +25,25 @@ workstation. Treat it as a candidate for testing.
 To watch every button light up as you press it, use **Test my mouse and
 keyboard…** on the Diagnostics page.
 
-**Shipped defaults are active:** the backtick key toggles dictation, and the two
-thumb buttons jump the pointer between monitors. Review or remove these on the
-Mouse and Keyboard pages. Nothing else is remapped until you add it.
+**Shipped defaults are active.** Seven rows ship turned on:
+
+- **`** (backtick) toggles PowerScribe dictation.
+- **Button 4 / Button 5** (the thumb buttons) jump the pointer to the previous
+  and next monitor.
+- **`[`** tap = PowerScribe *next field*, **`[`** hold = drag scroll.
+- **`]`** tap = PowerScribe *previous field*, **`]`** hold = drag zoom.
+
+The four bracket rows have a cost worth knowing about before you dictate with
+them: the **tap** rows *replace* the character, so pressing `[` or `]` no
+longer types a bracket at all, and the **hold** rows make every press wait the
+hold threshold (200 ms by default) before it resolves, which is noticeable in
+a report field. Dictating a bracket is unaffected.
+
+To remove any of them, open the **Keyboard** page (or **Mouse** for the thumb
+buttons), select the row, and choose **Delete**. Deleting only the two `[` /
+`]` **hold** rows removes the latency and keeps field navigation; deleting all
+four gives the bracket keys back to the keyboard. Nothing else is remapped
+until you add it.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
