@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.1  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.2  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,34 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.2 -- CHORDING FIXES and a CONFLICTS report.
+;    * A BUTTON THE DRIVER INJECTS. Trackball and mouse drivers that remap
+;      or chord a button (a middle click made by software, a thumb button
+;      turned into "middle") deliver it as an INJECTED event, and
+;      AutoHotkey never counts an injected press as physically held. The
+;      watchdog's "input physically up" sweep then released every hold of
+;      such a button ~750 ms in -- "recovered a stuck MButton", the native
+;      middle-drag ended, a held right button lost its layer mid-chord.
+;      A press now records whether it read as physical at all (st.physSeen);
+;      one that did not is never swept on physical state, only by the 30 s
+;      runaway cap. Key auto-repeat applies the same rule.
+;    * A USED LAYER HOST NEVER FIRES ITS OWN DANCE. Holding the right
+;      button and working the thumb buttons could still end in the right
+;      button's double-tap (a radial menu): CommitTaps now refuses to fire
+;      for a holder whose layer was used, and an eager first press that
+;      was used as a modifier does not arm a tap dance on release.
+;    * AN EXPLICIT HOLD BEATS "INSTANT CLICKS". A program profile with
+;      instant clicks dropped EVERY hold on L/R/M there, including a hold
+;      row written for that very program. A hold or tap-hold row scoped
+;      to the program in front is kept; only rows from everywhere are
+;      dropped.
+;    * CONFLICTS. Mouse, Keyboard and Diagnostics have "Conflicts…": one
+;      report of every place a button's meaning changes -- a program row
+;      that beats an everywhere row, a tap that waits because a double-tap
+;      or a hold is bound, a button that hosts a layer, a program with
+;      instant clicks, two rows for the same thing, a menu row with no
+;      menu. Copy it to send.
 ;
 ;  v0.6.6.1 -- FOLLOW-FOCUS EXCEPTIONS. Settings > Behaviour has a "Follow
 ;  focus except in" field: programs and windows where the cursor is never
@@ -1165,7 +1193,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.1"
+global RM_VERSION := "0.6.6.2"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -3997,10 +4025,16 @@ SpecFor(btn, ctx) {
     layerHost := LayerHostExists(btn, ctx)
 
     ; This app cannot tolerate the tap/hold wait on this input -- drop every
-    ; binding that would cause one. See AppNoHold.
+    ; binding that would cause one. See AppNoHold. A hold written FOR THIS
+    ; PROGRAM is the exception (v0.6.6.2): the person who set instant
+    ; clicks on the profile and then bound a hold on this button there
+    ; has chosen the wait for that button, and dropping it silently made
+    ; "middle button: hold = native drag" do nothing at all.
     if AppNoHold(btn) {
-        hold := 0
-        taphold := 0
+        if (IsObject(hold) && MGet(hold, "app", "*") = "*")
+            hold := 0
+        if (IsObject(taphold) && MGet(taphold, "app", "*") = "*")
+            taphold := 0
         layerHost := false
     }
 
@@ -4131,7 +4165,7 @@ NewBS(btn) {
         tapCount: 0, gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
         holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
         passBtn: "", repStart: 0, polling: false, nativeTaps: 0,
-        dragEligible: false, locked: false}
+        dragEligible: false, locked: false, physSeen: true}
     g_BS[btn] := st
     return st
 }
@@ -4484,6 +4518,13 @@ OnPressHK(btn, *) {
     RM_GetPos(&sx, &sy)
     st.sx := sx
     st.sy := sy
+    ; Did this press read as PHYSICAL? A button a mouse driver synthesises
+    ; (a software middle click, a remapped thumb button) arrives injected,
+    ; and AutoHotkey never marks an injected press as physically held. The
+    ; watchdog and the auto-repeat both ask "still physically down?", and
+    ; for such a button the honest answer is "no idea": they must not sweep
+    ; it on that reading (v0.6.6.2).
+    st.physSeen := InputHeldPhysical(btn)
 
     if spec.pure {
         ; a pure row can be LAYER-SCOPED (a native escape-hatch inside a
@@ -4765,6 +4806,10 @@ OnReleaseHK(btn, *) {
     }
     if (mode = "eager1") {
         SendNativeUp(btn)
+        if st.usedAsMod {                    ; spent as a modifier: no dance
+            ClearBS(btn)
+            return
+        }
         ; arm the tap dance only if this was a genuine tap (short + still);
         ; a drag or long hold was already served natively and ends here
         RM_GetPos(&ex, &ey)
@@ -4829,6 +4874,14 @@ OnReleaseHK(btn, *) {
 }
 
 CommitTaps(st, n) {
+    ; A holder whose layer was USED has spent its press enabling that
+    ; action: whatever dance its own taps add up to stays silent. Both
+    ; release paths already test this; testing it here as well closes
+    ; every route to a holder's double-tap firing on top of a chord
+    ; (v0.6.6.2: right button held, thumb buttons worked, and the right
+    ; button's double-tap radial menu appeared).
+    if st.usedAsMod
+        return
     spec := st.spec
     b := 0
     times := 1
@@ -5021,6 +5074,247 @@ LastEventText() {
         g_LastEvText := g_LastEvWhat (desc != "" ? "  ->  " desc : "")
     }
     return g_LastEvText
+}
+
+; ── CONFLICTS REPORT (v0.6.6.2) ──────────────────────────────────────────
+;
+; Every place a button's meaning changes, in plain words, so "why did that
+; do something else in PACS" has one answer instead of eight pages. Pure
+; over the config: nothing here reads the engine's live state.
+;
+; Returns an array of {kind, text}. kind is "warn" for something likely to
+; surprise, "info" for something that is just worth knowing.
+
+ConflictScope(row) {
+    app := MGet(row, "app", "*")
+    lay := MGet(row, "layer", "*")
+    mods := MGet(row, "mods", "")
+    out := (app = "*" || app = "") ? "everywhere" : ("in " AppDisp(app))
+    if (lay != "*" && lay != "" && lay != "Base")
+        out .= " while holding " LayerLabelFromCode(lay)
+    if (mods != "")
+        out .= " with " mods
+    return out
+}
+
+ConflictRowText(row) {
+    return InputLabel(MGet(row, "button", "")) " · "
+        . EventLabelOf(MGet(row, "event", "")) " → "
+        . DescribeAction(MGet(row, "action", Map()))
+}
+
+ConflictReport(focus := "") {
+    out := []
+    rows := MGet(g_Cfg, "bindings", [])
+    byBtn := Map()
+    byBtn.CaseSense := "Off"
+    for row in rows {
+        b := MGet(row, "button", "")
+        if (b = "" || (focus != "" && b != focus))
+            continue
+        if !byBtn.Has(b)
+            byBtn[b] := []
+        byBtn[b].Push(row)
+    }
+    ; programs with instant clicks: every hold / tap-hold / layer row on
+    ; L, R or M is ignored there unless written for that program
+    noHold := Map()
+    for app in MGet(g_Cfg, "apps", []) {
+        nh := MGet(app, "noHold", [])
+        if (nh.Length > 0)
+            noHold[MGet(app, "name", "")] := nh
+    }
+    for appName, nh in noHold {
+        lst := ""
+        for inp in nh
+            lst .= (lst = "" ? "" : ", ") InputLabel(inp)
+        out.Push({kind: "info", text: AppDisp(appName) " has instant clicks on "
+            . lst ": holds, tap-holds and layers on those buttons are off "
+            . "there unless the row was written for " AppDisp(appName) "."})
+        for row in rows {
+            b := MGet(row, "button", "")
+            if (focus != "" && b != focus)
+                continue
+            ev := MGet(row, "event", "")
+            app := MGet(row, "app", "*")
+            hit := false
+            for inp in nh {
+                if (inp = b && (ev = "hold" || ev = "taphold") && app = "*")
+                    hit := true
+                if LayerIncludes(MGet(row, "layer", "*"), inp)
+                    hit := true
+            }
+            if hit
+                out.Push({kind: "warn", text: "Ignored in " AppDisp(appName)
+                    . ": " ConflictRowText(row) " (" ConflictScope(row) ")"})
+        }
+    }
+    for b, list in byBtn {
+        lbl := InputLabel(b)
+        ; 1. a program row that beats an everywhere row for the same gesture
+        for r1 in list {
+            if (MGet(r1, "app", "*") = "*")
+                continue
+            for r2 in list {
+                if (MGet(r2, "app", "*") != "*")
+                    continue
+                if (MGet(r1, "event", "") != MGet(r2, "event", "")
+                    || MGet(r1, "layer", "*") != MGet(r2, "layer", "*")
+                    || MGet(r1, "mods", "") != MGet(r2, "mods", ""))
+                    continue
+                if (MGet(r1["action"], "type", "") = MGet(r2["action"], "type", "")
+                    && MGet(r1["action"], "value", "") = MGet(r2["action"], "value", ""))
+                    continue
+                out.Push({kind: "info", text: "In " AppDisp(MGet(r1, "app", "*"))
+                    . ", " lbl " " EventLabelOf(MGet(r1, "event", "")) " does "
+                    . DescribeAction(r1["action"]) " instead of "
+                    . DescribeAction(r2["action"])
+                    . ((MGet(r1, "layer", "*") != "*") ? " (while holding "
+                        LayerLabelFromCode(MGet(r1, "layer", "*")) ")" : "") "."})
+            }
+        }
+        ; 2. two rows for exactly the same thing
+        i := 1
+        while (i <= list.Length) {
+            j := i + 1
+            while (j <= list.Length) {
+                a := list[i], c := list[j]
+                if (MGet(a, "app", "*") = MGet(c, "app", "*")
+                    && MGet(a, "event", "") = MGet(c, "event", "")
+                    && MGet(a, "layer", "*") = MGet(c, "layer", "*")
+                    && MGet(a, "mods", "") = MGet(c, "mods", "")) {
+                    out.Push({kind: "warn", text: "Two rows for " lbl " "
+                        . EventLabelOf(MGet(a, "event", "")) " " ConflictScope(a)
+                        . ": " DescribeAction(a["action"]) " and "
+                        . DescribeAction(c["action"]) ". The later one wins; delete one."})
+                }
+                j += 1
+            }
+            i += 1
+        }
+        ; 3. a tap that waits: a double / triple / tap-hold or a hold on the
+        ;    same button in the same scope
+        scopes := Map()
+        for r in list {
+            k := MGet(r, "app", "*") "|" MGet(r, "layer", "*") "|" MGet(r, "mods", "")
+            if !scopes.Has(k)
+                scopes[k] := {tap: 0, double: 0, triple: 0, hold: 0, taphold: 0, any: r}
+            ev := MGet(r, "event", "")
+            if scopes[k].HasProp(ev)
+                scopes[k].%ev% := r
+        }
+        for k, sc in scopes {
+            where := ConflictScope(sc.any)
+            tapNative := !IsObject(sc.tap) || IsNativeAct(sc.tap["action"]["type"])
+            if (IsObject(sc.double) || IsObject(sc.triple) || IsObject(sc.taphold)) {
+                dn := DanceIsNativeClicks(b, sc.double) && DanceIsNativeClicks(b, sc.triple)
+                if (tapNative && dn && !IsObject(sc.taphold))
+                    out.Push({kind: "info", text: lbl " " where ": the first "
+                        . "click goes out at once; a second click within "
+                        . TapMs() " ms becomes the double-tap."})
+                else
+                    out.Push({kind: "warn", text: lbl " " where ": a tap waits "
+                        . TapMs() " ms before it fires, because a double-tap, "
+                        . "triple-tap or tap-hold is bound on the same button."})
+            }
+            if (IsObject(sc.hold) && !tapNative)
+                out.Push({kind: "info", text: lbl " " where ": the tap fires on "
+                    . "release (a hold is bound); holding past " HoldMs()
+                    . " ms does " DescribeAction(sc.hold["action"]) "."})
+            if (IsObject(sc.hold) && b = "MButton")
+                out.Push({kind: "warn", text: "Middle button " where ": the hold "
+                    . "withholds the physical middle click for " HoldMs()
+                    . " ms, so a middle-drag starts late."})
+        }
+    }
+    ; 4. layer hosts
+    hosts := Map()
+    hosts.CaseSense := "Off"
+    for row in rows {
+        for part in LayerParts(row) {
+            if (focus != "" && part != focus && MGet(row, "button", "") != focus)
+                continue
+            if !hosts.Has(part)
+                hosts[part] := []
+            hosts[part].Push(row)
+        }
+    }
+    for host, hrows in hosts {
+        n := hrows.Length
+        txt := InputLabel(host) " hosts a layer with " n " row" (n = 1 ? "" : "s")
+            . ": "
+        i := 0
+        for r in hrows {
+            i += 1
+            if (i > 4) {
+                txt .= "…"
+                break
+            }
+            txt .= (i > 1 ? "; " : "") InputLabel(MGet(r, "button", "")) " → "
+                . DescribeAction(r["action"])
+        }
+        out.Push({kind: "info", text: txt ". While held it is silent; its own "
+            . "tap, double-tap or hold fires on release only if nothing in the "
+            . "layer was used."})
+        for appName, nh in noHold {
+            for inp in nh {
+                if (inp = host)
+                    out.Push({kind: "warn", text: "In " AppDisp(appName)
+                        . " the " InputLabel(host) " layer is OFF (instant clicks)."})
+            }
+        }
+    }
+    ; 5. radial rows pointing at nothing
+    for row in rows {
+        a := MGet(row, "action", 0)
+        if (!IsObject(a) || MGet(a, "type", "") != "radial")
+            continue
+        if (focus != "" && MGet(row, "button", "") != focus)
+            continue
+        v := MGet(a, "value", "")
+        if (v != "" && !MenuByName(v))
+            out.Push({kind: "warn", text: ConflictRowText(row) " ("
+                . ConflictScope(row) "): there is no menu called “" v "”."})
+        else if (v = "" && MGet(row, "app", "*") = "*")
+            out.Push({kind: "info", text: ConflictRowText(row) " everywhere: "
+                . "opens whichever menu names the program in front, and nothing "
+                . "where no menu does."})
+    }
+    ; 6. the same PowerScribe / pointer action from several places
+    ess := Map("ps_dictate", "Dictate", "ps_next", "Next field",
+        "ps_prev", "Previous field", "tele_prev", "Pointer left",
+        "tele_next", "Pointer right")
+    for code, name in ess {
+        list := []
+        for row in rows {
+            a := MGet(row, "action", 0)
+            if (IsObject(a) && MGet(a, "type", "") = code
+                && (focus = "" || MGet(row, "button", "") = focus))
+                list.Push(InputLabel(MGet(row, "button", "")) " "
+                    . StrLower(EventLabelOf(MGet(row, "event", ""))) " "
+                    . ConflictScope(row))
+        }
+        if (list.Length > 1) {
+            txt := ""
+            for one in list
+                txt .= (txt = "" ? "" : "; ") one
+            out.Push({kind: "info", text: name " is fired by " list.Length
+                . " rows: " txt "."})
+        }
+    }
+    if (out.Length = 0)
+        out.Push({kind: "info", text: focus = ""
+            ? "No conflicts found: every row applies on its own."
+            : "No conflicts found for " InputLabel(focus) "."})
+    return out
+}
+
+ConflictReportText(focus := "") {
+    txt := "RadMapper " RM_VERSION " conflicts"
+        . (focus != "" ? " for " InputLabel(focus) : "") "`r`n`r`n"
+    for one in ConflictReport(focus)
+        txt .= (one.kind = "warn" ? "! " : "- ") one.text "`r`n"
+    return txt
 }
 
 ; When a layer-scoped row fires, every holder of its layer path forfeits its
@@ -5244,7 +5538,7 @@ RepeatTick(st, gen, v, *) {
     ; InputHeldPhysical, not RM_KeyHeld: a numpad key reads as up under its
     ; own name when NumLock is off, which would kill the repeat instantly.
     if (!IsObject(st) || BS(st.btn) != st || st.gen != gen || !st.down
-        || !InputHeldPhysical(st.btn)) {
+        || (st.physSeen && !InputHeldPhysical(st.btn))) {
         SetTimer(, 0)
         return
     }
@@ -10116,8 +10410,14 @@ Watchdog() {
     now := A_TickCount
     ; 1) input states whose physical input is no longer down (lost Up)
     for name, st in g_BS.Clone() {
-        if (!st.down || InputHeldPhysical(st.btn))
+        if !st.down
             continue
+        if st.physSeen {
+            if InputHeldPhysical(st.btn)
+                continue
+        } else if (now - st.pressTick >= 0 && now - st.pressTick < 30000)
+            continue                         ; injected source: no physical
+                                             ; reading to trust; runaway cap only
         if (now - st.pressTick < 500)        ; too fresh: the real Up event
             continue                         ; may simply not have run yet
         if st.consumed {                     ; nothing owns a consumed state
@@ -10130,7 +10430,7 @@ Watchdog() {
             ActionUp(st.holdBinding, st)
         ClearBS(name)
         Problem("recovered", "released stuck " name " (" st.mode
-            . ", input physically up)")
+            . (st.physSeen ? ", input physically up)" : ", held 30 s, injected source)"))
         HUD("RadMapper recovered a stuck " name)
     }
     ; 2) momentary speed states whose holder is gone entirely (state cleared
@@ -15053,6 +15353,71 @@ class Atlas {
     }
 
     /**
+     * The conflicts report as a dialog (v0.6.6.2): one line per finding,
+     * warnings first, for one input or for everything.
+     */
+    static ConflictsDlg(focus := "") {
+        w := Min(Atlas.W - 40, 1000)
+        h := Min(Atlas.H - 40, 620)
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperConflicts")
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Lumi.Focus.Reset(dlg, true)
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, 600, focus = "" ? "Conflicts between your settings"
+            : ("Conflicts for " InputLabel(focus)), "title")
+        Lumi.Label(24, 42, w - 48,
+            "Every place a button's meaning changes: a program row that beats "
+            . "an everywhere row, a tap that waits, a button that hosts a layer, "
+            . "instant clicks, duplicates.", "mute", "left", 20)
+        Lumi.Rule(24, 66, w - 48)
+
+        report := ConflictReport(focus)
+        rows := []
+        for one in report {
+            if (one.kind = "warn")
+                rows.Push({cells: ["!", one.text]})
+        }
+        for one in report {
+            if (one.kind != "warn")
+                rows.Push({cells: ["", one.text]})
+        }
+        Lumi.List(24, 78, w - 48, h - 78 - 82, rows,
+            [{w: 24, kind: "accent", align: "center"}, {w: w - 48 - 40}],
+            0, 28)
+        st := {dlg: dlg, focus: focus}
+        Lumi.Rule(24, h - 78, w - 48)
+        Lumi.Chip(24, h - 52, 200, 20, rows.Length " finding"
+            . (rows.Length = 1 ? "" : "s"), "cyan")
+        Lumi.Btn(w - 400, h - 60, 130, 36, "Copy report",
+            (*) => (A_Clipboard := ConflictReportText(focus),
+                Lumi.Toast("Copied — paste it into an email", "jade")), "accent")
+        if (focus != "")
+            Lumi.Btn(w - 260, h - 60, 110, 36, "Everything",
+                (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg()), "ghost")
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Close",
+            (*) => Atlas.CloseDlg(), "primary")
+
+        Atlas.dstate := st
+        Lumi.Focus.Restore()
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    /**
      * Delete or Backspace with a row picked: delete what the page's Delete
      * button would. Nothing while a dialog is up -- its fields own those
      * keys -- and nothing on a page whose list has no delete.
@@ -16395,7 +16760,7 @@ class Atlas {
         ; the last two hung off the right edge of the window entirely. Widths
         ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
-        b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
+        b := Atlas.BtnRow(lx, lw, [0.2, 0.14, 0.16, 0.28, 0.22])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
             (*) => Atlas.EditRow(0), "primary")
         ; A button that needs a selected row says so by looking inert
@@ -16407,6 +16772,8 @@ class Atlas {
             hasSel ? "danger" : "muted")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)), "accent")
+        Lumi.Btn(b[5].x, by, b[5].w, 34, "Conflicts…",
+            (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(Atlas.sel)), "ghost")
         if (rows.Length = 0)
             Lumi.Label(lx, y + 150, lw,
                 "Nothing set here — this one still works the normal way.",
@@ -16781,7 +17148,7 @@ class Atlas {
             ["When you", "It does", "Also hold"])
 
         by := y + h - 78
-        b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
+        b := Atlas.BtnRow(lx, lw, [0.2, 0.14, 0.16, 0.28, 0.22])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
             (*) => Atlas.EditRow(0, true), "primary")
         hasSel := Atlas.HasSel(rows.Length)
@@ -16791,6 +17158,8 @@ class Atlas {
             (*) => Atlas.DeleteSel(), hasSel ? "danger" : "muted")
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
             (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(true)), "accent")
+        Lumi.Btn(b[5].x, by, b[5].w, 34, "Conflicts…",
+            (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(Atlas.keySel)), "ghost")
         if (rows.Length = 0 && Atlas.keySel != "")
             Lumi.Label(lx, y + 150, lw,
                 "No assignments here — this key keeps its system default.",
@@ -18641,14 +19010,16 @@ class Atlas {
             . "its Test tab. Nothing you press there is blocked.",
             "mute", "left", 24)
         by := y + h - 62
-        b := Atlas.BtnRow(x, Min(w, 620), [0.28, 0.22, 0.50])
+        b := Atlas.BtnRow(x, Min(w, 800), [0.22, 0.18, 0.22, 0.38])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Copy this list",
             (*) => (ProblemsCopy(),
                 Lumi.Toast("Copied — paste it into an email", "jade")),
             "accent")
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Clear the list",
             (*) => (ProblemsClear(), Atlas.Build()), "ghost")
-        Lumi.Btn(b[3].x, by, b[3].w, 34, "Test my mouse and keyboard…",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Conflicts…",
+            (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg()), "accent")
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "Test my mouse and keyboard…",
             (*) => Atlas.Classic("test"), "ghost")
         if (rows.Length = 0)
             Lumi.Label(x, y + 110, w,

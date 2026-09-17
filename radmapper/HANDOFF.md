@@ -4,7 +4,14 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6.1).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.2).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.2:
+- `st.physSeen`: a press that never read as physical (driver-injected button) is not
+  swept by the watchdog on physical state (30 s cap only); RepeatTick same rule.
+- `CommitTaps` returns for a holder with `usedAsMod`; eager1 release honours it too.
+- `SpecFor`: under AppNoHold, an app-scoped hold/taphold row is kept.
+- `ConflictReport()` / `Atlas.ConflictsDlg()`; "Conflicts…" on Mouse, Keyboard, Diagnostics.
 
 Done in 0.6.6.1:
 - Follow-focus exceptions: `followExcept` setting (";"-separated exe / title: / class:),
@@ -32,4 +39,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.2 for the next iteration.
+0.6.6.3 for the next iteration.
