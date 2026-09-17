@@ -4,7 +4,11 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6.4).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.5).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.5:
+- `LAYER_KEY_HOSTS := ["CapsLock"]`: always in LayerChoices; `HoldReservedForLayer()` refuses a
+  "hold" key row on CapsLock in DoSave and classic KeyOk.
 
 Done in 0.6.6.4:
 - Watchdog sweeps only synthetic-down states (passthru/eager1/held); pending/armedmod get
@@ -49,4 +53,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.5 for the next iteration.
+0.6.6.6 for the next iteration.

@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.4  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.5  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,17 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.5 -- CAPS LOCK HOSTS A LAYER.
+;    "Hold CapsLock" is always in the "Only while holding" list, on the
+;    Mouse page and the Keyboard page alike, whether or not CapsLock has
+;    a row of its own. Its HOLD is reserved for that layer: a key row on
+;    CapsLock cannot be given the "Hold it down" trigger (the binding
+;    editor and the classic dialog both refuse it), while tap, double-tap,
+;    triple-tap and tap-then-hold rows on CapsLock work exactly as before.
+;    A quick tap of a CapsLock that hosts a layer and has no tap row of
+;    its own still toggles Caps Lock natively; a hold that arms the layer
+;    and goes unused does nothing, as a layer host's hold should.
 ;
 ;  v0.6.6.4 -- THE WATCHDOG STOPS KILLING HELD LAYERS.
 ;    "Hold button 4, scroll to switch windows": the switcher appeared and
@@ -1229,7 +1240,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.4"
+global RM_VERSION := "0.6.6.5"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1296,6 +1307,9 @@ global EVENT_ITEMS := ["tap", "double", "triple", "hold", "taphold", "turn"]
 ; a stranded assignment lower in the file never runs before Init (auto-exec is
 ; top-to-bottom, RM_TEST hides this because it skips Init).
 global LAYER_BASE_LABEL := "Base (no button held)"
+; Keys that host a layer whether or not they have a row of their own.
+; CapsLock types nothing, so holding it is free (v0.6.6.5).
+global LAYER_KEY_HOSTS := ["CapsLock"]
 
 ; Friendly display names for inputs (config/JSON always stores the codes).
 global INPUT_LABELS := Map(
@@ -11843,7 +11857,17 @@ LayerChoices() {
     out := [LAYER_BASE_LABEL]
     for b in BUTTONS
         out.Push("Hold " InputLabel(b))
-    for k in KeyInputsInUse()                ; v0.3: a KEY can host a layer too
+    used := KeyInputsInUse()
+    for k in LAYER_KEY_HOSTS {               ; always offered, in-use or not
+        seen := false
+        for u in used {
+            if (u = k)
+                seen := true
+        }
+        if !seen
+            out.Push("Hold " k)
+    }
+    for k in used                            ; v0.3: a KEY can host a layer too
         out.Push("Hold " k)                  ; (CapsLock is the obvious one) --
     for i, a in BUTTONS {                    ; the engine never cared which
 
@@ -11853,6 +11877,16 @@ LayerChoices() {
         }
     }
     return out
+}
+
+; True when this key's HOLD belongs to its layer and cannot be a row's
+; trigger: CapsLock (v0.6.6.5). Tap, double, triple and tap-hold stay open.
+HoldReservedForLayer(key) {
+    for k in LAYER_KEY_HOSTS {
+        if (k = key)
+            return true
+    }
+    return false
 }
 
 ; Every key already used as an input somewhere in the config, in config
@@ -12598,6 +12632,13 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     }
     mods := ReadModBoxes(boxes)
     event := ddEvent.Text
+    if (event = "hold" && HoldReservedForLayer(key)) {
+        MsgBox("Holding " key " is reserved for its layer. Put the rows it"
+            . " should enable under 'Layer: Hold " key "'. Tap, double-tap"
+            . " and tap-then-hold on " key " are still free.",
+            "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
     ; The keyboard-specific guard. Suppressing a typing key to tell tap from
     ; hold necessarily DELAYS the character, and a failure loses it outright --
     ; in a PowerScribe field that lands in a report. Modified combos are exempt
@@ -19709,6 +19750,13 @@ class Atlas {
         if LayerIncludes(lay, btn) {
             Lumi.Toast("A button cannot be the one you hold for itself",
                 "warn", 2600)
+            return
+        }
+        if (st.keyMode && event = "hold" && HoldReservedForLayer(btn)) {
+            Lumi.Toast("Holding " btn " is reserved for its layer — pick "
+                . "'Only while holding " btn "' on the rows it should enable. "
+                . "Tap, double-tap and tap-then-hold are still free.",
+                "warn", 4200)
             return
         }
         ; The keyboard-only cost, spelled out. Suppressing a key that TYPES so
