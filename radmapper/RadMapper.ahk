@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.2  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.3  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,22 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.3 -- TILT WHEEL RELIABILITY.
+;    * A tilt over one of RadMapper's own windows went native. Every wheel
+;      notch over our own window is re-sent natively so our lists scroll --
+;      right for WheelUp / WheelDown, wrong for a tilt bound to a monitor
+;      hop: the pointer lands in the MIDDLE of the next monitor, which is
+;      exactly where the settings window sits while you are testing, and
+;      the next tilt then did nothing. Tilts resolve through the bindings
+;      wherever the pointer is; only the vertical wheel stays native over
+;      our windows.
+;    * The teleport flash (five overlay windows) was built INSIDE the
+;      wheel's Critical hotkey thread, so every notch arriving during the
+;      build queued behind it. It is deferred to a timer now; the hop
+;      itself is immediate.
+;    * A notch the tilt guard drops says so in the status bar ("ignored,
+;      within the tilt guard"), so a guard set too high is visible.
 ;
 ;  v0.6.6.2 -- CHORDING FIXES and a CONFLICTS report.
 ;    * A BUTTON THE DRIVER INJECTS. Trackball and mouse drivers that remap
@@ -1193,7 +1209,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.2"
+global RM_VERSION := "0.6.6.3"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -4960,7 +4976,12 @@ OnWheelHK(wh, *) {
     TestNotify(wh, 2)
     ; positional ours-check as in OnPressHK: scrolling over our own (possibly
     ; inactive) windows must stay native, never resolve through app profiles
-    if (!g_Enabled || OwnGuiActive() || OwnWindowAt(RM_WinAt())) {
+    ; A TILT (WheelLeft / WheelRight) is exempt from the own-window test:
+    ; nothing of ours scrolls sideways, and a tilt bound to a monitor hop
+    ; lands the pointer in the middle of the next monitor -- under the
+    ; settings window whenever it is open there (v0.6.6.3).
+    tilt := (wh = "WheelLeft" || wh = "WheelRight")
+    if (!g_Enabled || (!tilt && (OwnGuiActive() || OwnWindowAt(RM_WinAt())))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
     }
@@ -4998,8 +5019,11 @@ OnWheelHK(wh, *) {
             ; the action four or five times. Dropped outright, not re-sent:
             ; this notch belongs to an action, and passing it through would
             ; scroll the study instead.
-            if !WheelAccept(wh, A_TickCount, g_WheelAt, WheelLimitMs(wh))
+            if !WheelAccept(wh, A_TickCount, g_WheelAt, WheelLimitMs(wh)) {
+                LastEvent(wh " ignored — within the "
+                    . (tilt ? "tilt" : "wheel") " guard (" WheelLimitMs(wh) " ms)")
                 return
+            }
             holder := LayerHolderSt(b)       ; deepest held holder (0 at Base)
             ActionFire(b, holder)            ; ActionFire marks every lay holder used
         }
@@ -6409,8 +6433,18 @@ TeleportMonitor(step) {
     tx := (m.l + m.r) // 2
     ty := (m.t + m.b) // 2
     DllCall("SetCursorPos", "int", tx, "int", ty)
-    TeleportSignal(m, tx, ty)
+    TeleportSignalLater(m, tx, ty)
     TeleportNoteFollow()
+}
+
+/**
+ * The flash, off the caller's thread (v0.6.6.3). A teleport is fired from
+ * a Critical hotkey thread -- a tilt notch, a thumb button -- and building
+ * five overlay windows there held every notch that arrived meanwhile.
+ * The pointer has already moved; the picture can follow a moment later.
+ */
+TeleportSignalLater(mon, cx, cy) {
+    SetTimer(() => TeleportSignal(mon, cx, cy), -1)
 }
 
 /**
@@ -6437,7 +6471,7 @@ TeleportToIndex(idx) {
     tx := (m.l + m.r) // 2
     ty := (m.t + m.b) // 2
     DllCall("SetCursorPos", "int", tx, "int", ty)
-    TeleportSignal(m, tx, ty)
+    TeleportSignalLater(m, tx, ty)
     TeleportNoteFollow()
 }
 

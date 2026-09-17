@@ -4,7 +4,12 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6.2).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.3).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.3:
+- Tilt (WheelLeft/Right) bypasses the own-window native passthrough in OnWheelHK.
+- Teleport flash deferred (`TeleportSignalLater`) out of the hotkey thread.
+- Dropped notches show in the status bar via LastEvent.
 
 Done in 0.6.6.2:
 - `st.physSeen`: a press that never read as physical (driver-injected button) is not
@@ -39,4 +44,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.3 for the next iteration.
+0.6.6.4 for the next iteration.
