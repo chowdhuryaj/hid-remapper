@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.4-preview  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,35 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6 -- the wizard is gone, the macro editor is native, the radial
+;  editor has a wheel you can drag, and deleting a row takes one key:
+;    * THE "SET A BUTTON" WIZARD IS REMOVED. Home, the Mouse page and the
+;      Keyboard page open the ordinary binding editor directly, in Simple
+;      mode as in Advanced. "Set..." on a Home essential opens that editor
+;      with the action already chosen.
+;    * Home's essentials card lists the five PowerScribe / pointer jobs;
+;      the PACS wheel and Window presets rows are gone from it (they are
+;      set up on the Menus page).
+;    * RADIAL EDITOR: "Program" and "Size" sit on the same row as "Name"
+;      with room to read, the Icon column is wide enough to show its name,
+;      and a live wheel on the right shows the menu as it will look. DRAG
+;      one wedge onto another to swap the two commands (the rows follow).
+;    * MACRO EDITOR: native. The Macros page lists macros on the left and
+;      the selected macro's steps on the right, with Add / Edit / Delete /
+;      Move up / Move down, a step dialog with Rec for key steps, and a
+;      Test run. The classic window is no longer opened for it.
+;    * DELETE A ROW FROM THE KEYBOARD: pick a row on the Mouse, Keyboard,
+;      Menus or Macros page and press Delete or Backspace. Right-click a
+;      row for Edit / Delete.
+;    * STUCK HIGHLIGHTS: the one-tick hover floor (LeaveCheck) now covers
+;      the open dialog and the open option list as well as the main window,
+;      and a rebuilt layer forgets the shape it thought was hovered.
+;    * TELEPORT vs FOLLOW FOCUS: a monitor teleport adopts the window it
+;      lands on and holds follow-focus off for a moment, so clicking there
+;      no longer bounces the pointer back to that program's pointer spot;
+;      and a pointer spot on ANOTHER monitor than the pointer is never
+;      warped to when the pointer is already inside the focused window.
 ;
 ;  v0.6.5 -- the reading room on the front page, a rate limiter for tilt
 ;  wheels, and the row buttons that could not be pressed:
@@ -1127,7 +1156,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.4-preview"
+global RM_VERSION := "0.6.6"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1534,6 +1563,7 @@ global g_FollowCand := 0       ; hwnd waiting out followSettleMs
 global g_FollowCandAt := 0     ; tick it first appeared in front
 global g_FollowAt := 0         ; tick of the last warp (cooldown)
 global g_FollowOn := false     ; the follow-focus timer is armed
+global g_TeleAt := 0           ; tick of the last monitor teleport (follow-focus grace)
 
 global g_DialFree := ""        ; dial state when not tied to a held button
 global g_LastEvWhat := ""      ; last event; formatted lazily by LastEventText
@@ -5864,6 +5894,7 @@ SyncFollowFocus() {
 
 FollowTick(*) {
     global g_FollowLast, g_FollowPid, g_FollowCand, g_FollowCandAt, g_FollowAt
+    global g_TeleAt
     if (!g_Enabled || Cfg("followFocus") != 1) {
         SyncFollowFocus()
         return
@@ -5966,13 +5997,24 @@ FollowTick(*) {
         }
     }
     ; 10. already where it should be? then the pointer is where the user put
-    ;    it. For a parked app that means inside a small radius of the spot;
-    ;    otherwise, anywhere inside the window.
+    ;    it -- and that now includes a PARKED program (v0.6.6). The rule
+    ;    used to be "inside a small radius of the spot" for a parked app,
+    ;    so clicking anywhere in PACS that was not the spot itself focused
+    ;    PACS and yanked the pointer to the spot: the mouse was being moved
+    ;    constantly while navigating the viewer. The pointer is INSIDE the
+    ;    window that just came to the front, which means it was put there
+    ;    on purpose (a click, a teleport, a drag), and the spot is for the
+    ;    other case: focus arriving with the pointer somewhere else
+    ;    entirely, by Alt+Tab, a hotkey, or a dictation command.
     RM_GetPos(&mx, &my)
-    if parked {
-        if (Abs(mx - cx) < 40 && Abs(my - cy) < 40)
-            return
-    } else if (mx >= wx && mx < wx + ww && my >= wy && my < wy + wh)
+    if (mx >= wx && mx < wx + ww && my >= wy && my < wy + wh)
+        return
+    if (parked && Abs(mx - cx) < 40 && Abs(my - cy) < 40)
+        return
+    ; 11. a monitor teleport a moment ago is the user saying where the
+    ;    pointer goes. Whatever comes to the front because of it (the
+    ;    program under the new spot, clicked) keeps the pointer there.
+    if (g_TeleAt && now - g_TeleAt >= 0 && now - g_TeleAt < 1500)
         return
     g_FollowAt := now
     DllCall("SetCursorPos", "int", cx, "int", cy)
@@ -6023,6 +6065,23 @@ TeleportMonitor(step) {
     ty := (m.t + m.b) // 2
     DllCall("SetCursorPos", "int", tx, "int", ty)
     TeleportSignal(m, tx, ty)
+    TeleportNoteFollow()
+}
+
+/**
+ * A teleport just moved the pointer on purpose. Tell follow-focus, so a
+ * foreground change that happens because of it (the program on the new
+ * monitor, clicked) does not warp the pointer straight back to that
+ * program's pointer spot: adopt whatever is in front now, and hold every
+ * warp off for a moment (FollowTick step 11).
+ */
+TeleportNoteFollow() {
+    global g_TeleAt, g_FollowLast, g_FollowCand
+    g_TeleAt := A_TickCount
+    if g_FollowOn {
+        try g_FollowLast := FgHwnd()
+        g_FollowCand := 0
+    }
 }
 
 TeleportToIndex(idx) {
@@ -6034,6 +6093,7 @@ TeleportToIndex(idx) {
     ty := (m.t + m.b) // 2
     DllCall("SetCursorPos", "int", tx, "int", ty)
     TeleportSignal(m, tx, ty)
+    TeleportNoteFollow()
 }
 
 ; The monitor containing a point, or the primary one if it lies off every
@@ -14149,6 +14209,13 @@ class Lumi {
                 try shp.Dispose()
             }
             view.shapes := []
+            ; The hovered shape is one of the ones just disposed. Forget
+            ; it, so the next move re-enters whatever is under the pointer
+            ; now instead of comparing against an id that no longer exists.
+            try {
+                if IsObject(view.layer)
+                    view.layer.__hoveredShapeId := 0
+            }
             vis := Lumi.__ListVisible(view)
             i := view.top
             slot := 0
@@ -14191,6 +14258,9 @@ class Lumi {
                 Lumi.C["hairSoft"]))
         row.OnEvent("Click", Lumi.__ListPick(view, idx, false))
         row.OnEvent("DoubleClick", Lumi.__ListPick(view, idx, true))
+        ; A right-click picks the row and tells the owner "ctx" instead of
+        ; a double-click flag; owners that offer a row menu show it there.
+        row.OnEvent("RightMouseUp", Lumi.__ListPick(view, idx, "ctx"))
         row.OnEvent("MouseScrollUp", Lumi.__ListWheel(view, -3))
         row.OnEvent("MouseScrollDown", Lumi.__ListWheel(view, 3))
         view.shapes.Push(row)
@@ -14659,8 +14729,6 @@ class Atlas {
     static selWant := -1
     static parkRef := 0            ; app row awaiting a park-spot capture
     static escBound := false
-    static wizReopenFn := 0        ; the debounced wizard reopen (BoundFunc,
-    static wizReopenSt := 0        ;   kept so SetTimer can cancel it)
     static pending := false        ; a rebuild deferred past a live edit
     static pendAt := 0             ; ... since this tick; deferral is capped
     static resizeMode := "both"   ; right | bottom | both
@@ -14836,7 +14904,8 @@ class Atlas {
             for hk, what in Map("~Tab", "next", "~+Tab", "prev",
                 "~Enter", "activate", "~Space", "activate",
                 "~Left", "left", "~Right", "right",
-                "~Up", "up", "~Down", "down")
+                "~Up", "up", "~Down", "down",
+                "~Delete", "delete", "~BackSpace", "delete")
                 Hotkey(hk, Atlas.FocusKey(what), "On")
             Atlas.escBound := true
         } catch {
@@ -14911,6 +14980,16 @@ class Atlas {
             Lumi.Focus.Prev()
             return
         }
+        ; Delete / Backspace act on the PICKED row of the page's list, not
+        ; on the focus ring: a row is picked with a click far more often
+        ; than with Tab and the arrows, and "click it, press Delete" is the
+        ; gesture every list in Windows answers to (v0.6.6).
+        if (what = "delete") {
+            key := GetKeyState("Delete", "P") ? "Delete" : "BackSpace"
+            try KeyWait(key, "T1")           ; one press, one question
+            Atlas.DeleteKey()
+            return
+        }
         if !Lumi.Focus.HasFocus()            ; the ring appears on Tab, never
             return                           ; on an arrow key out of nowhere
         if (what = "activate") {
@@ -14920,6 +14999,57 @@ class Atlas {
             return
         }
         Lumi.Focus.Do(what)
+    }
+
+    /**
+     * Delete or Backspace with a row picked: delete what the page's Delete
+     * button would. Nothing while a dialog is up -- its fields own those
+     * keys -- and nothing on a page whose list has no delete.
+     */
+    static DeleteKey() {
+        if IsObject(Atlas.dlg)
+            return
+        if (!IsObject(Atlas.list) || Atlas.list.sel < 1)
+            return
+        switch Atlas.PanelName() {
+            case "Mouse", "Keyboard": Atlas.DeleteSel()
+            case "Menus":  Atlas.MenuDelete()
+            case "Macros": Atlas.MacroStepDelete()
+        }
+    }
+
+    /**
+     * Right-click on a list row: pick it and offer Edit / Delete at the
+     * pointer (v0.6.6). A native popup menu, because it is the one control
+     * a person expects to appear under a right-click, and it goes away
+     * on its own. The tick is held across it exactly as Confirm holds it:
+     * a rebuild while the menu is up disposes the list the choice is for.
+     */
+    static RowMenu(i, mode) {
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        m := Menu()
+        switch mode {
+            case "mouse":
+                m.Add("Edit…", (*) => Atlas.EditRow(i))
+                m.Add("Delete", (*) => Atlas.DeleteSel())
+            case "key":
+                m.Add("Edit…", (*) => Atlas.EditRow(i, true))
+                m.Add("Delete", (*) => Atlas.DeleteSel())
+            case "menu":
+                m.Add("Edit commands…", (*) => Atlas.MenuEditSel())
+                m.Add("Delete", (*) => Atlas.MenuDelete())
+            case "step":
+                m.Add("Edit…", (*) => Atlas.MacroStepEditSel())
+                m.Add("Delete", (*) => Atlas.MacroStepDelete())
+                m.Add("Move up", (*) => Atlas.MacroStepMove(-1))
+                m.Add("Move down", (*) => Atlas.MacroStepMove(1))
+            default:
+                return
+        }
+        Atlas.StopTick()
+        try m.Show()
+        Atlas.StartTick()
     }
 
     /**
@@ -15340,8 +15470,8 @@ class Atlas {
      * exist at all: both classes hit this and both answered it the same
      * way, with SetTimer(fn, -1) so the click unwinds first.
      *
-     * The dialog path already does it (DoWizPick, DoWizRecKey, DoWizFull
-     * all defer their reopen), and Build() itself defers when a Field is
+     * The dialog path already does it (MenuResize and the radial editor's
+     * drag both defer their reopen), and Build() itself defers when a Field is
      * live or a drag is running -- but a plain navigation click does not.
      *
      * WHAT TO CHECK ON THE FIRST WINDOWS RUN: navigate between pages, click
@@ -16008,9 +16138,7 @@ class Atlas {
         ["Next field",               "ps_next",    "",               "hkNextField"],
         ["Previous field",           "ps_prev",    "",               "hkPrevField"],
         ["Pointer to left monitor",  "tele_prev",  "",               "hkTeleLeft"],
-        ["Pointer to right monitor", "tele_next",  "",               "hkTeleRight"],
-        ["PACS wheel",               "radial",     "PACS",           ""],
-        ["Window presets",           "radial",     "Window presets", ""]]
+        ["Pointer to right monitor", "tele_next",  "",               "hkTeleRight"]]
 
     /** Every trigger for one essential, in plain words, or "". */
     static EssTriggers(act, value, hk := "") {
@@ -16041,15 +16169,17 @@ class Atlas {
         return (*) => Atlas.DoEssClear(i)
     }
 
-    /** "Set…" -- the wizard, with question 3 already answered. */
+    /** "Set…" -- the binding editor, with the action already chosen. */
     static DoEssSet(i) {
         if (i < 1 || i > Atlas.ESSENTIALS.Length)
             return
         e := Atlas.ESSENTIALS[i]
         ; A radial menu is a HOLD: flick a direction and release. Everything
         ; else here is a tap.
-        Atlas.OpenDlg(() => Atlas.WizardDlg({act: e[2], value: e[3],
-            event: (e[2] = "radial") ? "hold" : "tap"}))
+        btn := IsMouseInput(Atlas.sel) ? Atlas.sel : "XButton1"
+        seed := NewBinding("*", "*", "", btn,
+            (e[2] = "radial") ? "hold" : "tap", e[2], e[3])
+        Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
     }
 
     /** "Clear" -- every binding that fires it, and its Settings hotkey. */
@@ -16095,8 +16225,8 @@ class Atlas {
         ; and the card's own 16 px gutters leave 672 for a row:
         ;   name 210 + 10 + triggers + 10 + Set 74 + 8 + Clear 64 = 672
         ; so triggers gets 704 - 408 = 296 px here and grows with the window.
-        ; HEIGHT: 30 for the heading + 7 rows of 24 + 4 = 202.
-        ; Seven functions, seven rows: this card is what the program is for,
+        ; HEIGHT: 30 for the heading + 5 rows of 24 + 4 = 154.
+        ; Five functions, five rows: this card is what the program is for,
         ; so it is the first thing on the first page.
         cy := y + 28
         rowH := 24
@@ -16140,8 +16270,7 @@ class Atlas {
         bw := Min(380, (w - 16) // 2)
         bh := 40
         Lumi.Btn(x, jy + 22, bw, bh, "Change what a mouse button does",
-            (*) => (Atlas.Advanced() ? Atlas.Go(Atlas.PanelIndex("Mouse"))
-                : Atlas.OpenDlg(() => Atlas.WizardDlg())), "primary")
+            (*) => Atlas.Go(Atlas.PanelIndex("Mouse")), "primary")
         Lumi.Btn(x + bw + 16, jy + 22, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
@@ -16216,8 +16345,8 @@ class Atlas {
         ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
         b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
-        Lumi.Btn(b[1].x, by, b[1].w, 34, Atlas.Advanced() ? "Add new" : "Set a button…",
-            (*) => Atlas.SetButtonStart(), "primary")
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
+            (*) => Atlas.EditRow(0), "primary")
         ; A button that needs a selected row says so by looking inert
         ; rather than by scolding you after the click.
         hasSel := Atlas.HasSel(rows.Length)
@@ -16231,26 +16360,6 @@ class Atlas {
             Lumi.Label(lx, y + 150, lw,
                 "Nothing set here — this one still works the normal way.",
                 "mute")
-    }
-
-    /** "Add new" / "Set a button…" on the Mouse page. The wizard can only
-     *  express its three buttons, so a selection it would silently drop
-     *  (left, right, wheel, tilt) goes straight to the full editor with
-     *  that input already filled in. */
-    static SetButtonStart() {
-        if Atlas.Advanced() {
-            Atlas.EditRow(0)
-            return
-        }
-        sel := Atlas.sel
-        if (sel != "" && IsMouseInput(sel)
-            && !Atlas.HasCode(Atlas.WIZ_BUTTONS, sel)) {
-            seed := NewBinding(Atlas.ScopeApp(), Atlas.ScopeLayer(), "", sel,
-                IsWheel(sel) ? "turn" : "tap", "keys", "")
-            Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
-            return
-        }
-        Atlas.OpenDlg(() => Atlas.WizardDlg({btn: sel}))
     }
 
     static SetApp(i) {
@@ -16622,13 +16731,8 @@ class Atlas {
 
         by := y + h - 78
         b := Atlas.BtnRow(lx, lw, [0.26, 0.16, 0.20, 0.38])
-        ; Simple mode gets the wizard here too -- the Mouse page has had it
-        ; since v0.6 and the Keyboard page was the odd one out.
-        Lumi.Btn(b[1].x, by, b[1].w, 34,
-            Atlas.Advanced() ? "Add new" : "Set a key…",
-            (*) => (Atlas.Advanced() ? Atlas.EditRow(0, true)
-                : Atlas.OpenDlg(() => Atlas.WizardDlg({btn: Atlas.keySel}))),
-            "primary")
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
+            (*) => Atlas.EditRow(0, true), "primary")
         hasSel := Atlas.HasSel(rows.Length)
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit",
             (*) => Atlas.EditSel(true), hasSel ? "accent" : "muted")
@@ -16767,26 +16871,465 @@ class Atlas {
 
     ; ── PANEL: MACROS / APPS (lists + the classic editors) ──────────────────
 
+    ; ── PANEL: MACROS (native, v0.6.6) ──────────────────────────────────
+    ; The page used to be a list and one button that opened the CLASSIC
+    ; window on its Macros tab. It is the editor now: macros on the left,
+    ; the picked macro's steps on the right, and a step dialog in the same
+    ; kit as every other dialog here. Nothing on this page opens the old
+    ; window.
+
+    static macroSel := ""          ; name of the picked macro
+    static macroList := 0          ; the macro list view (Atlas.list is the steps)
+    static macroName := 0          ; the name field under the macro list
+
+    static STEP_TYPES := ["keys", "text", "sleep", "focus", "psdictate",
+        "psnext", "psprev", "pskeys", "pacskeys", "run", "teleport", "tooltip"]
+    static STEP_LABELS := Map(
+        "keys",      "Send keys",
+        "text",      "Type text",
+        "sleep",     "Wait (milliseconds)",
+        "focus",     "Bring a program to the front",
+        "psdictate", "PowerScribe: dictate on / off",
+        "psnext",    "PowerScribe: next field",
+        "psprev",    "PowerScribe: previous field",
+        "pskeys",    "PowerScribe: send keys",
+        "pacskeys",  "PACS: send keys",
+        "run",       "Run a program or open a file",
+        "teleport",  "Move the pointer to a monitor",
+        "tooltip",   "Show a message")
+    static STEP_HINTS := Map(
+        "keys",      "AutoHotkey Send syntax, e.g. ^s or {F7}. Rec records a combo.",
+        "text",      "Typed literally, character by character.",
+        "sleep",     "A number of milliseconds, up to 5000.",
+        "focus",     "The name of a program from the Programs page.",
+        "psdictate", "No details needed.",
+        "psnext",    "No details needed.",
+        "psprev",    "No details needed.",
+        "pskeys",    "Keys sent to PowerScribe, wherever it is.",
+        "pacskeys",  "Keys sent to the PACS viewer, wherever it is.",
+        "run",       "A path or a command line.",
+        "teleport",  "prev, next, or a monitor number counted from the left.",
+        "tooltip",   "The text of the message.")
+    static StepLabel(t) => Atlas.STEP_LABELS.Has(t) ? Atlas.STEP_LABELS[t] : t
+
+    /** Names in config order, and the index of the picked one (0 = none). */
+    static MacroNames() {
+        names := []
+        for name in MGet(g_Cfg, "macros", Map())
+            names.Push(name)
+        return names
+    }
+
+    static MacroSteps() {
+        ms := MGet(g_Cfg, "macros", Map())
+        return (Atlas.macroSel != "" && ms.Has(Atlas.macroSel))
+            ? ms[Atlas.macroSel] : 0
+    }
+
     static PanelMacros(x, y, w, h) {
         Lumi.Label(x, y, 400, "Macros", "title")
         Lumi.Para(x, y + 28, w - 40, 40,
-            "Multi-step sequences: keys, text, sleep, focus-app, PowerScribe "
-            . "actions, teleport, run. Bind one with the “Run macro” action.",
-            "mute")
+            "A macro is a list of steps run in order: keys, typed text, a "
+            . "wait, a program brought forward, PowerScribe actions, a "
+            . "pointer move. Bind one with the “Run macro” action.", "mute")
+
+        names := Atlas.MacroNames()
+        ; the picked macro must still exist; otherwise the first one is it
+        if (Atlas.macroSel = "" || !MGet(g_Cfg, "macros", Map()).Has(Atlas.macroSel))
+            Atlas.macroSel := names.Length ? names[1] : ""
+
+        ; ── left: the macros ───────────────────────────────────────────
+        lw := 300
         rows := []
-        names := []
-        for name, steps in g_Cfg["macros"] {
-            rows.Push({cells: [name, steps.Length " step"
-                . (steps.Length = 1 ? "" : "s")]})
-            names.Push(name)
+        selRow := 0
+        for i, name in names {
+            n := g_Cfg["macros"][name].Length
+            rows.Push({cells: [name, n " step" (n = 1 ? "" : "s")]})
+            if (name = Atlas.macroSel)
+                selRow := i
         }
-        Atlas.list := Lumi.List(x, y + 78, w, h - 150, rows,
-            [{w: 300}, {w: 140, kind: "mute"}], 0, 30, ["Macro", "Steps"])
-        by := y + h - 62
-        Lumi.Btn(x, by, 170, 34, "Open macro editor",
-            (*) => Atlas.Classic("macros"), "accent")
+        Lumi.Label(x, y + 74, lw, "Macros", "section")
+        listY := y + 96
+        listH := h - 236
+        Atlas.macroList := Lumi.List(x, listY, lw, listH, rows,
+            [{w: 190}, {w: 90, kind: "mute"}],
+            (i, dbl) => Atlas.MacroPick(i, dbl), 30, ["Name", "Steps"])
+        if selRow {
+            Atlas.macroList.sel := selRow
+            try Lumi.__ListPaint(Atlas.macroList)
+        }
         if (rows.Length = 0)
-            Lumi.Label(x, y + 110, w, "No macros defined.", "mute")
+            Lumi.Label(x, listY + 40, lw, "No macros yet — name one below.", "mute")
+
+        ny := y + h - 132
+        Atlas.macroName := Lumi.Field(x, ny, lw - 70, 30, "", 0,
+            "new macro name", true)
+        Lumi.Btn(x + lw - 62, ny, 62, 30, "Add",
+            (*) => Atlas.MacroAddNew(), "primary")
+        hasMacro := (Atlas.macroSel != "")
+        b := Atlas.BtnRow(x, lw, [0.34, 0.33, 0.33])
+        by := y + h - 92
+        Lumi.Btn(b[1].x, by, b[1].w, 32, "Rename",
+            (*) => Atlas.MacroRename(), hasMacro ? "ghost" : "muted")
+        Lumi.Btn(b[2].x, by, b[2].w, 32, "Test run",
+            (*) => Atlas.MacroTest(), hasMacro ? "accent" : "muted")
+        Lumi.Btn(b[3].x, by, b[3].w, 32, "Delete",
+            (*) => Atlas.MacroDeleteSel(), hasMacro ? "danger" : "muted")
+        Lumi.Label(x, y + h - 52, lw,
+            "Rename uses the name typed above.", "mute", "left", 20)
+
+        ; ── right: the picked macro's steps ────────────────────────────
+        rx := x + lw + 24
+        rw := w - lw - 24
+        steps := Atlas.MacroSteps()
+        Lumi.Label(rx, y + 74, rw,
+            hasMacro ? ("Steps of “" Atlas.macroSel "”") : "Steps", "section")
+        srows := []
+        Atlas.rowRefs := []
+        if IsObject(steps) {
+            for i, st in steps {
+                srows.Push({cells: [String(i),
+                    Atlas.StepLabel(MGet(st, "type", "")),
+                    MGet(st, "value", "")]})
+                Atlas.rowRefs.Push(i)
+            }
+        }
+        Atlas.list := Lumi.List(rx, listY, rw, listH, srows,
+            [{w: 40, kind: "mono"}, {w: 230}, {w: rw - 290, kind: "code"}],
+            Atlas.Picker("step"), 30, ["#", "Step", "Details"])
+        if (IsObject(steps) && steps.Length = 0)
+            Lumi.Label(rx, listY + 40, rw,
+                "No steps yet — click “Add step”.", "mute")
+
+        hasSel := Atlas.HasSel(srows.Length)
+        b := Atlas.BtnRow(rx, rw, [0.22, 0.18, 0.2, 0.2, 0.2])
+        by := y + h - 132
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Add step",
+            (*) => Atlas.OpenDlg(() => Atlas.StepDlg(0)),
+            hasMacro ? "primary" : "muted")
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Edit",
+            (*) => Atlas.MacroStepEditSel(), hasSel ? "accent" : "muted")
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
+            (*) => Atlas.MacroStepDelete(), hasSel ? "danger" : "muted")
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "Move up",
+            (*) => Atlas.MacroStepMove(-1), hasSel ? "ghost" : "muted")
+        Lumi.Btn(b[5].x, by, b[5].w, 34, "Move down",
+            (*) => Atlas.MacroStepMove(1), hasSel ? "ghost" : "muted")
+        Lumi.Para(rx, y + h - 88, rw, 56,
+            "Double-click a step to edit it. Pick a step and press Delete "
+            . "to remove it, or right-click it. Steps run from the top; "
+            . "PowerScribe steps wait for PowerScribe before the next one.",
+            "mute")
+    }
+
+    /** A click on the macro list picks that macro; the steps follow. */
+    static MacroPick(i, dbl) {
+        names := Atlas.MacroNames()
+        if (i < 1 || i > names.Length)
+            return
+        if (dbl = "ctx") {
+            if (names[i] != Atlas.macroSel) {
+                Atlas.macroSel := names[i]
+                Atlas.selWant := 0
+                Atlas.Build()
+            }
+            m := Menu()
+            m.Add("Rename…", (*) => Atlas.MacroRename())
+            m.Add("Test run", (*) => Atlas.MacroTest())
+            m.Add("Delete", (*) => Atlas.MacroDeleteSel())
+            Atlas.StopTick()
+            try m.Show()
+            Atlas.StartTick()
+            return
+        }
+        if (names[i] = Atlas.macroSel)
+            return
+        Atlas.macroSel := names[i]
+        Atlas.selWant := 0                   ; a new macro, no step picked
+        Atlas.Build()
+    }
+
+    static MacroAddNew() {
+        Lumi.EndEdit()
+        name := Trim(Lumi.FieldValue(Atlas.macroName))
+        if (name = "") {
+            Lumi.Toast("Type a name for it first", "warn")
+            return
+        }
+        if !g_Cfg.Has("macros")
+            g_Cfg["macros"] := Map()
+        if g_Cfg["macros"].Has(name) {
+            Lumi.Toast("There is already a macro called “" name "”", "warn")
+            return
+        }
+        g_Cfg["macros"][name] := []
+        Atlas.macroSel := name
+        Atlas.selWant := 0
+        Atlas.SaveOrWarn()
+        Atlas.Build()
+        Lumi.Toast("Added “" name "” — now add its steps", "jade")
+    }
+
+    /** Rename the picked macro to the name in the field; bindings follow. */
+    static MacroRename() {
+        Lumi.EndEdit()
+        old := Atlas.macroSel
+        if (old = "" || !g_Cfg["macros"].Has(old)) {
+            Lumi.Toast("Pick a macro in the list first", "warn")
+            return
+        }
+        name := Trim(Lumi.FieldValue(Atlas.macroName))
+        if (name = "") {
+            Lumi.Toast("Type the new name in the field, then click Rename", "warn")
+            return
+        }
+        if (name = old)
+            return
+        if g_Cfg["macros"].Has(name) {
+            Lumi.Toast("There is already a macro called “" name "”", "warn")
+            return
+        }
+        g_Cfg["macros"][name] := g_Cfg["macros"][old]
+        g_Cfg["macros"].Delete(old)
+        n := 0
+        for row in g_Cfg["bindings"] {
+            a := MGet(row, "action", 0)
+            if (IsObject(a) && MGet(a, "type", "") = "macro"
+                && MGet(a, "value", "") = old) {
+                a["value"] := name
+                n += 1
+            }
+        }
+        Atlas.macroSel := name
+        Atlas.SaveOrWarn()
+        AfterCfgChange()
+        Atlas.Build()
+        Lumi.Toast("Renamed to “" name "”"
+            . (n ? (" — " n " setting" (n = 1 ? "" : "s") " updated") : ""), "jade")
+    }
+
+    static MacroDeleteSel() {
+        name := Atlas.macroSel
+        if (name = "" || !g_Cfg["macros"].Has(name)) {
+            Lumi.Toast("Pick a macro in the list first", "warn")
+            return
+        }
+        used := 0
+        for row in g_Cfg["bindings"] {
+            a := MGet(row, "action", 0)
+            if (IsObject(a) && MGet(a, "type", "") = "macro"
+                && MGet(a, "value", "") = name)
+                used += 1
+        }
+        if !Atlas.Confirm("Delete the macro “" name "”?`n`n"
+            . (used ? (used " setting" (used = 1 ? "" : "s") " run" (used = 1 ? "s" : "")
+                . " it and will do nothing until re-pointed.`n`n") : "")
+            . "This cannot be undone.")
+            return
+        g_Cfg["macros"].Delete(name)
+        Atlas.macroSel := ""
+        Atlas.selWant := 0
+        Atlas.SaveOrWarn()
+        AfterCfgChange()
+        Atlas.Build()
+        Lumi.Toast("Deleted “" name "”", "magenta")
+    }
+
+    /** Run it for real, after the window has had a moment to get out of the way. */
+    static MacroTest() {
+        name := Atlas.macroSel
+        if (name = "" || !g_Cfg["macros"].Has(name)) {
+            Lumi.Toast("Pick a macro in the list first", "warn")
+            return
+        }
+        Lumi.Toast("Running “" name "”…", "cyan")
+        SetTimer(RunMacro.Bind(name), -300)
+    }
+
+    /** The picked step's index in the macro, or 0. */
+    static MacroStepRef() {
+        steps := Atlas.MacroSteps()
+        if !IsObject(steps)
+            return 0
+        ref := Atlas.SelectedRef()
+        return (ref >= 1 && ref <= steps.Length) ? ref : 0
+    }
+
+    static MacroStepEditSel() {
+        ref := Atlas.MacroStepRef()
+        if !ref {
+            Lumi.Toast("Pick a step in the list first", "warn")
+            return
+        }
+        Atlas.OpenDlg(() => Atlas.StepDlg(ref))
+    }
+
+    static MacroStepDelete() {
+        ref := Atlas.MacroStepRef()
+        if !ref {
+            Lumi.Toast("Pick a step in the list first", "warn")
+            return
+        }
+        steps := Atlas.MacroSteps()
+        st := steps[ref]
+        if !Atlas.Confirm("Delete step " ref " (" Atlas.StepLabel(MGet(st, "type", ""))
+            . (MGet(st, "value", "") != "" ? (": " MGet(st, "value", "")) : "")
+            . ") from “" Atlas.macroSel "”?")
+            return
+        steps.RemoveAt(ref)
+        Atlas.selWant := 0
+        Atlas.SaveOrWarn()
+        Atlas.Build()
+        Lumi.Toast("Step removed", "magenta")
+    }
+
+    static MacroStepMove(d) {
+        ref := Atlas.MacroStepRef()
+        if !ref {
+            Lumi.Toast("Pick a step in the list first", "warn")
+            return
+        }
+        steps := Atlas.MacroSteps()
+        tgt := ref + d
+        if (tgt < 1 || tgt > steps.Length)
+            return
+        tmp := steps[ref]
+        steps[ref] := steps[tgt]
+        steps[tgt] := tmp
+        Atlas.selWant := tgt                 ; the picked step moves with it
+        Atlas.SaveOrWarn()
+        Atlas.Build()
+    }
+
+    /**
+     * The step dialog: what kind of step, and its details. Rec and Keys
+     * are the same two tools the binding editor offers for a Send keys
+     * value, wired to the same Details field.
+     */
+    static StepDlg(ref) {
+        steps := Atlas.MacroSteps()
+        if !IsObject(steps) {
+            Lumi.Toast("Pick a macro in the list first", "warn")
+            return
+        }
+        if (ref && ref > steps.Length)
+            ref := 0
+        step := ref ? steps[ref] : 0
+        w := 620
+        h := 330
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperStep")
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Lumi.Focus.Reset(dlg, true)
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, 520, ref ? ("Edit step " ref) : "Add a step", "title")
+        Lumi.Label(24, 42, w - 48, "In “" Atlas.macroSel "”", "mute", "left", 20)
+        Lumi.Rule(24, 66, w - 48)
+
+        code := step ? MGet(step, "type", "keys") : "keys"
+        labels := []
+        for t in Atlas.STEP_TYPES
+            labels.Push(Atlas.StepLabel(t))
+        st := {dlg: dlg, ref: ref, macro: Atlas.macroSel}
+        Lumi.Label(24, 84, 110, "Step", "dim", "left", 30)
+        st.type := Lumi.Select(140, 84, 340, 30, labels,
+            Max(1, Atlas.IndexOfText(Atlas.STEP_TYPES, code)),
+            (i, t) => Atlas.StepHint(st))
+
+        Lumi.Label(24, 126, 110, "Details", "dim", "left", 30)
+        st.value := Lumi.Field(140, 126, 300, 30,
+            step ? MGet(step, "value", "") : "", 0, "details", true)
+        st.ed := FieldEdit(st.value)
+        Lumi.Btn(446, 126, 60, 30, "Rec", Atlas.RecValue(st), "accent")
+        Lumi.Btn(512, 126, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
+
+        st.hint := Lumi.Para(140, 164, w - 164, 60, "", "mute")
+        Atlas.StepHint(st)
+
+        Lumi.Rule(24, h - 78, w - 48)
+        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+            (*) => Atlas.CloseDlg(), "ghost")
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
+            (*) => Atlas.DoSaveStep(st), "primary")
+
+        Atlas.dstate := st
+        Lumi.Focus.Restore()
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    static StepCode(st) {
+        return Atlas.STEP_TYPES.Has(st.type.index)
+            ? Atlas.STEP_TYPES[st.type.index] : "keys"
+    }
+
+    /** Re-say what the Details field wants for the step type showing. */
+    static StepHint(st) {
+        if !Atlas.DlgAlive(st) && !Lumi.Same(Atlas.dlg, st.dlg)
+            return
+        code := Atlas.StepCode(st)
+        txt := Atlas.STEP_HINTS.Has(code) ? Atlas.STEP_HINTS[code] : ""
+        try st.hint.Text(txt, Lumi.C["inkMute"], Lumi.Size["small"], Lumi.Face,
+            , , "left", "top")
+        Lumi.FullErase(st.dlg)
+        Lumi.Refresh(st.dlg)
+    }
+
+    static DoSaveStep(st) {
+        Lumi.EndEdit()
+        ms := MGet(g_Cfg, "macros", Map())
+        if (st.macro = "" || !ms.Has(st.macro)) {
+            Lumi.Toast("That macro is no longer there", "warn")
+            Atlas.CloseDlg()
+            return
+        }
+        steps := ms[st.macro]
+        code := Atlas.StepCode(st)
+        val := Trim(Lumi.FieldValue(st.value))
+        switch code {
+            case "sleep":
+                if (!IsInteger(val) || Integer(val) < 0) {
+                    Lumi.Toast("Wait needs a number of milliseconds", "warn")
+                    return
+                }
+                val := String(Min(Integer(val), 5000))
+            case "keys", "text", "pskeys", "pacskeys", "run", "tooltip", "focus":
+                if (val = "") {
+                    Lumi.Toast("This step needs its details filled in", "warn")
+                    return
+                }
+            case "teleport":
+                if (val = "")
+                    val := "next"
+            default:
+                val := ""
+        }
+        one := Map("type", code, "value", val)
+        if (st.ref && st.ref <= steps.Length) {
+            steps[st.ref] := one
+            Atlas.selWant := st.ref
+        } else {
+            steps.Push(one)
+            Atlas.selWant := steps.Length
+        }
+        Atlas.SaveOrWarn()
+        Atlas.CloseDlg()
+        Atlas.Build()
+        Lumi.Toast((st.ref ? "Step updated" : "Step added") " — "
+            . Atlas.StepLabel(code), "jade")
     }
 
     static PanelApps(x, y, w, h) {
@@ -17061,533 +17604,6 @@ class Atlas {
         return false
     }
 
-    ; ── SET A BUTTON: the three-step wizard ─────────────────────────────
-    ; One dialog, three numbered questions, in the order a person asks them:
-    ; which button, when, what. Tiles instead of dropdowns for the first two
-    ; because there are only a handful of answers and a tile can be read at
-    ; a glance. Picking a tile reopens the dialog with the choice recorded
-    ; (the same draft pattern MenuDlg uses for a size change), so every step
-    ; always shows the current state. "All options" hands the same draft to
-    ; the full editor for modifiers, hold layers and the rest.
-    static WIZ_BUTTONS := ["XButton1", "XButton2", "MButton"]
-
-    static WizardDlg(draft := 0) {
-        d := IsObject(draft) ? draft : {}
-        for k, v in Map("btn", "", "event", "tap", "act", "keys", "value", "",
-                        "app", "*") {
-            if !d.HasProp(k)
-                d.%k% := v
-        }
-        ; L/R/wheel are not wizard fare -- but say so instead of silently
-        ; clearing the choice the Mouse map had already made.
-        dropped := ""
-        if (d.btn != "" && !Atlas.HasCode(Atlas.WIZ_BUTTONS, d.btn)
-            && IsMouseInput(d.btn)) {
-            dropped := InputLabel(d.btn)
-            d.btn := ""
-        }
-        w := 660
-        ; Click lock is the one answer that asks a question of its own --
-        ; "which button should it hold?" -- so the dialog grows a fourth
-        ; step rather than hiding the answer behind a typed code.
-        askLock := (d.act = "clicklock")
-        h := askLock ? 710 : 666
-        Lumi.CloseSelect()
-        Lumi.EndEdit()
-        if IsObject(Atlas.dlg) {
-            Atlas.Disown(Atlas.dlg)
-            try Atlas.dlg.Dispose()
-            Atlas.dlg := 0
-        }
-        parent := Atlas.lyr
-        dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
-                     w, h, "RadMapperWizard")
-        Atlas.dlg := dlg
-        LayerStack.ActiveLayer := dlg
-        ; A dialog opens FOCUSED on its first control: it is a place you were
-        ; sent to answer something, so the ring is useful before Tab is
-        ; pressed. A page is not, which is why Build() does not do this.
-        ;
-        ; A REOPEN is not a new dialog, though -- pressing a tile rebuilds
-        ; the whole layer, and this is the same page to the person in front
-        ; of it. WizRefocus stamped the draft with where focus was and
-        ; whether it was showing at all, so Tab, Tab, Space does not throw
-        ; the walk back to control 1, and a mouse user still never sees a
-        ; ring. Restore() clamps the index to the ring this build produced,
-        ; which may be shorter (question 4 comes and goes).
-        fArmed := d.HasProp("focusArmed") ? (d.focusArmed ? true : false) : true
-        fIdx := d.HasProp("focusIdx") ? d.focusIdx : 0
-        try d.DeleteProp("focusArmed")
-        try d.DeleteProp("focusIdx")
-        Lumi.Focus.Reset(dlg, fArmed, fIdx)
-        Atlas.Own(dlg)
-        dlg.Drag()
-
-        st := {dlg: dlg, d: d, actCode: d.act}
-        Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Set a button", "title")
-        Lumi.Label(24, 40, w - 48, (askLock ? "Four questions" : "Three questions")
-            . ". Nothing changes until you press Save."
-            . "   ·   Tab, arrows and Enter work here too.", "mute", "left", 20)
-        Lumi.Rule(24, 64, w - 48)
-
-        ; 1 -- which button
-        Lumi.Label(24, 76, 400, "1 · Which button?", "section")
-        tiles := [["XButton1", "Button 4"], ["XButton2", "Button 5"],
-                  ["MButton", "Button 3"]]
-        tw := 118
-        tx := 24
-        for t in tiles {
-            Lumi.Btn(tx, 98, tw, 46, t[2], Atlas.WizPick(st, "btn", t[1]),
-                d.btn = t[1] ? "accent" : "ghost")
-            tx += tw + 10
-        }
-        keyLbl := (d.btn != "" && !IsMouseInput(d.btn))
-            ? "Key: " d.btn : "A keyboard key…"
-        Lumi.Btn(tx, 98, w - 24 - tx, 46, keyLbl, Atlas.WizRecKey(st),
-            (d.btn != "" && !IsMouseInput(d.btn)) ? "accent" : "ghost")
-        if (dropped != "")
-            Lumi.Label(24, 146, w - 48, dropped " is not in this short list — "
-                . "use “All options…” to set it up.", "mute", "left", 16)
-
-        ; 2 -- when
-        Lumi.Label(24, 160, 400, "2 · When?", "section")
-        half := (w - 48 - 10) // 2
-        Lumi.Btn(24, 182, half, 46, "Tap it  (a quick press)",
-            Atlas.WizPick(st, "event", "tap"), d.event = "tap" ? "accent" : "ghost")
-        Lumi.Btn(24 + half + 10, 182, half, 46, "Hold it  (press and keep it down)",
-            Atlas.WizPick(st, "event", "hold"), d.event = "hold" ? "accent" : "ghost")
-
-        ; 3 -- what
-        ; THE FIVE ONE-CLICK ANSWERS, first. A mouse button doing another
-        ; mouse button's job is the most ordinary thing on this dialog and it
-        ; used to be the hardest: choose "Act like another button" out of
-        ; sixteen, then type "MButton" into a box labelled Details. Each tile
-        ; sets the action AND its value in one press.
-        Lumi.Label(24, 244, 400, "3 · What should it do?", "section")
-        ; v0.6.5: seven tiles, four to a row. Zoom and Pan are the two
-        ; IntelliSpace gestures a reader asks for by name -- Alt held with a
-        ; left-drag is zoom, Ctrl held with a left-drag is pan -- and both
-        ; are the existing moddrag action with its value filled in, not a
-        ; new kind of output. The second row is why everything below the
-        ; tiles sits 46 px lower than it did, and why the dialog is 46 px
-        ; taller.
-        acts3 := [["Left click", "native", "LButton"],
-                  ["Right click", "native", "RButton"],
-                  ["Middle click", "native", "MButton"],
-                  ["Double-click", "dblclick", "LButton"],
-                  ["Click lock", "clicklock", "MButton"],
-                  ["Zoom (Alt+drag)", "moddrag", "LAlt"],
-                  ["Pan (Ctrl+drag)", "moddrag", "LCtrl"]]
-        tw3 := (w - 48 - 3 * 8) // 4
-        ti := 0                              ; tile index -> column and row
-        for a in acts3 {
-            on := (d.act = a[2]) && (a[2] = "clicklock" || d.value = a[3])
-            Lumi.Btn(24 + Mod(ti, 4) * (tw3 + 8), 264 + (ti // 4) * 46,
-                tw3, 38, a[1], Atlas.WizAct(st, a[2], a[3]),
-                on ? "accent" : "ghost")
-            ti += 1
-        }
-        Lumi.Label(24, 356, 110, "or choose", "mute", "left", 32)
-        st.act := Atlas.ActSelect(140, 356, 390, 32, d.act,
-            Atlas.WizActPicked(st))
-        ; Click lock's value is question 4, below -- asking for it twice on
-        ; one dialog would be two controls writing the same field.
-        if !askLock {
-            Lumi.Label(24, 396, 120, "Details", "dim", "left", 30)
-            if TakesInputValue(d.act) {
-                ch := InputValueChoices(d.act, d.value)
-                st.valueCodes := ch.codes
-                st.value := Lumi.Select(150, 396, 380, 30, ch.labels,
-                    Atlas.IndexOfText(ch.codes, d.value),
-                    Atlas.WizValuePicked(st))
-            } else {
-                st.value := Lumi.Field(150, 396, 300, 30, d.value, 0,
-                    "shortcut, text or menu name", true)
-                st.ed := FieldEdit(st.value)     ; the Keys picker writes here
-                Lumi.Btn(456, 396, 60, 30, "Rec", Atlas.RecValue(st), "accent")
-                Lumi.Btn(522, 396, 60, 30, "Keys", Atlas.PickKeys(st), "ghost")
-            }
-        }
-        ; WRAPPED, not clipped: several of these hints are a sentence and a
-        ; half, and a Label is one line that paints past its own box. With
-        ; question 4 showing there is no Details row above it, so the hint
-        ; moves up into its place rather than leaving a 34 px hole between
-        ; the action dropdown and a sentence about it.
-        st.hint := Lumi.Para(24, askLock ? 396 : 430, w - 48, 36,
-            ACT_HINTS.Has(d.act) ? ACT_HINTS[d.act] : "", "mute")
-
-        progY := 474
-        if askLock {
-            ; 4 -- which button the lock holds
-            Lumi.Label(24, 474, 460, "4 · Which button should it hold?", "section")
-            ch := InputValueChoices("clicklock", d.value)
-            st.valueCodes := ch.codes
-            st.value := Lumi.Select(24, 494, 380, 30, ch.labels,
-                Atlas.IndexOfText(ch.codes, d.value),
-                Atlas.WizValuePicked(st))
-            progY := 538
-        }
-
-        apps := AppChoices()
-        Lumi.Label(24, progY, 120, "In program", "dim", "left", 30)
-        st.app := Lumi.Select(150, progY, 300, 30, apps,
-            Atlas.IndexOfText(apps, AppDisp(d.app)))
-        Lumi.Label(24, progY + 34, w - 48,
-            "Global means everywhere. Pick a program to limit it there.",
-            "mute", "left", 20)
-
-        ; One plain sentence for what Save is about to do. Three tiles and
-        ; two dropdowns do not add up to a sentence on their own -- and the
-        ; sentence follows the button dropdown live, because "which button
-        ; should it hold?" is exactly the word that changes in it.
-        st.summary := Lumi.Label(24, h - 106, w - 48, Atlas.WizSummary(d),
-            d.btn = "" ? "body" : "dim", "left", 24)
-        Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Btn(24, h - 60, 130, 36, "All options…",
-            Atlas.WizFull(st), "ghost")
-        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
-            (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.WizSave(st), d.btn = "" ? "ghost" : "primary")
-
-        Atlas.dstate := st
-        Lumi.Focus.Restore()
-        Lumi.FullErase(dlg)
-        dlg.Draw()
-        dlg.Activate()
-    }
-
-    /** The wizard's draft, said out loud. */
-    static WizSummary(d) {
-        if (d.btn = "")
-            return "Pick a button to finish."
-        ev := EventLabelOf(d.event)
-        ev := StrLower(SubStr(ev, 1, 1)) SubStr(ev, 2)
-        what := Atlas.WizWhat(d)
-        if (what = "") {
-            what := DescribeAction(Map("type", d.act, "value", d.value))
-            ; lower-case the opening word unless it is a proper noun
-            ; ("PowerScribe", "PACS", "W/L") -- those carry an inner capital
-            word := RegExMatch(what, "^\w+", &m) ? m[0] : ""
-            if !RegExMatch(SubStr(word, 2), "[A-Z]")
-                what := StrLower(SubStr(what, 1, 1)) SubStr(what, 2)
-        }
-        where := (d.app = "*") ? "in every program" : "in " AppDisp(d.app)
-        return InputLabel(d.btn) ", when you " ev ", will " what " — " where "."
-    }
-
-    /**
-     * The middle of the summary sentence, for the actions that press a
-     * BUTTON.
-     *
-     * DescribeAction speaks the table's language -- "Click lock (hold a
-     * button down until pressed again): Button 3 (wheel click)" -- which is
-     * right for a column and wrong for a sentence. These three are the ones
-     * a person would say out loud, so they are written out: "will lock the
-     * middle button down until pressed again". "" means "not one of mine",
-     * and WizSummary falls back to the table.
-     */
-    static WizWhat(d) {
-        switch d.act {
-            ; v0.6.5. The Home card sends the wizard here with question 3
-            ; already answered, so these are the sentences a reader sees
-            ; most often -- and "will PowerScribe: toggle dictation" (the
-            ; table's words, dropped into a sentence) is not one of them.
-            case "ps_dictate":
-                return "start or stop dictation in PowerScribe"
-            case "ps_next":
-                return "move to the next field in PowerScribe"
-            case "ps_prev":
-                return "move to the previous field in PowerScribe"
-            case "tele_prev":
-                return "send the pointer to the monitor on the left"
-            case "tele_next":
-                return "send the pointer to the monitor on the right"
-            case "radial":
-                return (d.value = "")
-                    ? "open the menu that matches the program in front"
-                    : "open the “" d.value "” menu"
-            case "moddrag":
-                switch d.value {
-                    case "LAlt":
-                        return "zoom (Alt held with a left-drag) while held"
-                    case "LCtrl":
-                        return "pan (Ctrl held with a left-drag) while held"
-                }
-                return "hold " ModifierLabel(d.value) " with a left-drag"
-            case "clicklock":
-                return (d.value = "")
-                    ? "lock whichever button you are holding down until pressed again"
-                    : "lock the " InputPhrase(d.value) " down until pressed again"
-            case "native":
-                return (d.value = "") ? "act like the input you pressed"
-                    : "act like the " InputPhrase(d.value)
-            case "dblclick":
-                return "double-click the "
-                    . InputPhrase(d.value = "" ? "LButton" : d.value)
-        }
-        return ""
-    }
-
-    /**
-     * Carry the keyboard position across a reopen.
-     *
-     * Every wizard answer rebuilds the dialog on a NEW layer, and a new
-     * layer means a new focus ring: without this, Tab three times and press
-     * Space and the ring jumps back to control 1. `armed` travels too, so a
-     * dialog driven entirely by the mouse still shows no ring at all.
-     * Written onto the draft rather than kept in a static because the draft
-     * is the only thing that survives the deferred reopen.
-     */
-    static WizRefocus(d) {
-        d.focusArmed := Lumi.Focus.armed
-        d.focusIdx := Lumi.Focus.idx
-        return d
-    }
-
-    /** Snapshot the editable fields into the draft before a reopen. */
-    static WizDraft(st) {
-        d := st.d
-        try d.act := Atlas.ActCode(st.act)
-        try d.value := Atlas.DlgValue(st)
-        try {
-            apps := AppChoices()
-            d.app := AppCodeFromDisp(apps.Has(st.app.index)
-                ? apps[st.app.index] : "Global (all apps)")
-        }
-        return d
-    }
-    static WizPick(st, key, v) {
-        return (*) => Atlas.DoWizPick(st, key, v)
-    }
-    static DoWizPick(st, key, v) {
-        if !Atlas.DlgAlive(st)
-            return
-        Lumi.EndEdit()
-        d := Atlas.WizRefocus(Atlas.WizDraft(st))
-        d.%key% := v
-        ; unwind the click before the layer it came from is disposed
-        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
-    }
-    /** One of the five tiles under question 3: an action AND its value. */
-    static WizAct(st, act, value) {
-        return (*) => Atlas.DoWizAct(st, act, value)
-    }
-
-    static DoWizAct(st, act, value) {
-        if !Atlas.DlgAlive(st)
-            return
-        Lumi.EndEdit()
-        d := Atlas.WizRefocus(Atlas.WizDraft(st))
-        d.act := act
-        d.value := value
-        ; unwind the click before the layer it came from is disposed
-        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
-    }
-
-    /**
-     * The wizard's action dropdown.
-     *
-     * An action whose Details widget is the same shape only needs its hint
-     * refreshed. One that crosses the line -- into or out of the button
-     * dropdown, or into or out of click lock's fourth question -- reopens
-     * the dialog around the answers already given, which is the wizard's
-     * standing pattern for every tile.
-     */
-    static WizActPicked(st) {
-        return (i, t) => Atlas.DoWizActPicked(st)
-    }
-
-    static DoWizActPicked(st) {
-        if !Atlas.DlgAlive(st)
-            return
-        code := Atlas.ActCode(st.act)
-        if (Atlas.ValueFamily(code) = Atlas.ValueFamily(st.d.act)) {
-            Atlas.ActHint(st, 0)
-            return
-        }
-        ; STEPPED WITH AN ARROW KEY, not picked with the mouse. Left and
-        ; Right fire onChange on every press, so walking the sixteen actions
-        ; from "Send keys" to "Click lock" crossed the family line four or
-        ; five times and tried to rebuild the whole dialog each time -- each
-        ; rebuild disposing the very dropdown the next arrow press was aimed
-        ; at. Wait until the run stops. The hint still follows every press,
-        ; so the list is readable while it is being walked.
-        if Lumi.nudging {
-            ; the hint by hand, NOT through Atlas.ActHint: that one reopens
-            ; the BINDING dialog when the family changes, and the family has
-            ; just changed. It is the binding editor's handler; the wizard
-            ; only ever borrowed its matching-family tail.
-            try {
-                st.hint.str := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
-                Lumi.FullErase(st.dlg)
-                Lumi.Refresh(st.dlg)
-            }
-            if !Atlas.wizReopenFn
-                Atlas.wizReopenFn := ObjBindMethod(Atlas, "WizReopenDue")
-            Atlas.wizReopenSt := st
-            SetTimer(Atlas.wizReopenFn, -400)
-            return
-        }
-        Atlas.WizReopenNow(st)
-    }
-
-    /** The debounce expired: rebuild around whatever the arrows settled on. */
-    static WizReopenDue() {
-        st := Atlas.wizReopenSt
-        Atlas.wizReopenSt := 0
-        if (!IsObject(st) || !Atlas.DlgAlive(st))
-            return                           ; closed, or replaced, meanwhile
-        if (Atlas.ValueFamily(Atlas.ActCode(st.act))
-            = Atlas.ValueFamily(st.d.act))
-            return                           ; walked back where it started
-        Atlas.WizReopenNow(st)
-    }
-
-    /** Reopen the wizard around the action the dropdown is now showing. */
-    static WizReopenNow(st) {
-        Atlas.WizReopenCancel()
-        Lumi.EndEdit()
-        code := Atlas.ActCode(st.act)
-        d := Atlas.WizRefocus(Atlas.WizDraft(st))
-        d.act := code
-        d.value := Atlas.DefaultValueFor(code)
-        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
-    }
-
-    /** Drop a pending debounced reopen -- the dialog is going away. */
-    static WizReopenCancel() {
-        Atlas.wizReopenSt := 0
-        if Atlas.wizReopenFn
-            SetTimer(Atlas.wizReopenFn, 0)
-    }
-
-    /** The Details dropdown changed: re-say the sentence at the bottom. */
-    static WizValuePicked(st) {
-        return (i, t) => Atlas.WizRestate(st)
-    }
-
-    static WizRestate(st) {
-        if !Atlas.DlgAlive(st)
-            return
-        try {
-            st.summary.str := Atlas.WizSummary(Atlas.WizDraft(st))
-            ; Full erase: the new sentence is usually SHORTER than the old
-            ; one, and GpGFX exempts Text from the clipping that would keep
-            ; the tail of the old one inside the erased box.
-            Lumi.FullErase(st.dlg)
-            Lumi.Refresh(st.dlg)
-        }
-    }
-
-    static WizRecKey(st) {
-        return (*) => Atlas.DoWizRecKey(st)
-    }
-    static DoWizRecKey(st) {
-        Lumi.EndEdit()
-        name := RecordKeyName()
-        if (name = "" || !Atlas.DlgAlive(st))
-            return
-        d := Atlas.WizRefocus(Atlas.WizDraft(st))
-        d.btn := CanonicalInputName(NormalizeInputName(name))
-        SetTimer(() => Atlas.OpenDlg(() => Atlas.WizardDlg(d)), -1)
-    }
-    static WizFull(st) {
-        return (*) => Atlas.DoWizFull(st)
-    }
-    static DoWizFull(st) {
-        if !Atlas.DlgAlive(st)
-            return
-        Lumi.EndEdit()
-        d := Atlas.WizDraft(st)
-        keyMode := (d.btn != "" && !IsMouseInput(d.btn))
-        ; No button chosen means no button chosen: seeding XButton1 handed
-        ; the full editor an assignment the person never asked for.
-        seed := (d.btn = "") ? 0
-            : NewBinding(d.app, "*", "", d.btn, d.event, d.act, d.value)
-        SetTimer(() => Atlas.OpenDlg(() => Atlas.BindDlg(0, keyMode, seed)), -1)
-    }
-    static WizSave(st) {
-        return (*) => Atlas.DoWizSave(st)
-    }
-    static DoWizSave(st) {
-        if !Atlas.DlgAlive(st)
-            return
-        Lumi.EndEdit()
-        d := Atlas.WizDraft(st)
-        hwnd := Lumi.HwndOf(st.dlg)
-        btn := d.btn
-        if (btn = "") {
-            Lumi.Toast("Step 1: pick a button first", "warn")
-            return
-        }
-        keyMode := !IsMouseInput(btn)
-        if (keyMode && !KeyNameValid(btn)) {
-            Lumi.Toast("RadMapper cannot watch '" btn "'", "danger", 3000)
-            return
-        }
-        if (keyMode && IsBareTypingKey(btn) && d.event != "tap") {
-            if (MsgBox("'" btn "' is a key that types.`n`nSetting it on Hold makes "
-                . "RadMapper wait to tell a tap from a hold, so typing that "
-                . "character will feel delayed.`n`nSet it anyway?", "RadMapper",
-                "YesNo Icon! Owner" hwnd) != "Yes")
-                return
-        }
-        ; The mouse half of the same warning: Button 3 is one of the wizard's
-        ; four button tiles, and Hold is one of its two events, so this is
-        ; two clicks away from the Home page.
-        if MButtonHoldRisk(btn, d.event) {
-            if (MsgBox(MButtonHoldWarning(), "RadMapper",
-                "YesNo Icon! Owner" hwnd) != "Yes")
-                return
-        }
-        ok := true
-        val := ValidateActionValue(hwnd, d.act, d.value, &ok)
-        if !ok
-            return
-        b := NewBinding(d.app, "*", "", btn, d.event, d.act, val)
-        realDups := []
-        for i in FindDupBinding(b) {
-            old := g_Cfg["bindings"][i]
-            if !IsInertRow(old)
-                realDups.Push(DescribeAction(old["action"]))
-        }
-        if (realDups.Length > 0
-            && !Atlas.Confirm(InputLabel(btn) " on " d.event " in " AppDisp(d.app)
-                . " already does: " realDups[1] "`n`nReplace it?"))
-            return
-        try {
-            UpsertBinding(b)
-            AfterCfgChange()
-        } catch as e {
-            Problem("edit-error", "wizard save failed: " e.Message)
-            Lumi.Toast("Save failed: " e.Message, "danger", 3000)
-            return
-        }
-        ; land on the page that now shows the row, scoped to it
-        if keyMode {
-            Atlas.keySel := btn
-            Atlas.kbAppIdx := Atlas.IndexOfText(AppChoices(), AppDisp(d.app))
-            Atlas.kbLayerIdx := 1
-            Atlas.panel := Atlas.PanelIndex("Keyboard")
-        } else {
-            Atlas.sel := btn
-            Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(d.app))
-            Atlas.layerIdx := 1
-            Atlas.panel := Atlas.PanelIndex("Mouse")
-        }
-        Atlas.CloseDlg()
-        ok := Atlas.SaveOrWarn()
-        Atlas.Build()
-        if ok
-            Lumi.Toast("Saved: " InputLabel(btn) " " EventLabelOf(d.event)
-                . " → " ActLabelOf(d.act), "jade")
-        else
-            Lumi.Toast("Applied for now — not written to disk", "danger", 5000)
-    }
-
     /** The starter-pack list at the cursor: pick one and it is applied. */
     static PackChoose() {
         items := []
@@ -17782,7 +17798,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 96, w, h - 396, rows,
             [{w: 230}, {w: 100, kind: "mute"}, {w: 120, kind: "mono"},
              {w: 80, kind: "mono"}, {w: 130, kind: "mute"}],
-            (i, dbl) => (dbl ? Atlas.LayoutApplySel() : 0), 30,
+            (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : 0), 30,
             ["Arrangement", "Windows", "Keep in place", "Now", "Saved on"])
         if (rows.Length = 0)
             Lumi.Label(x, y + 136, w,
@@ -18581,11 +18597,18 @@ class Atlas {
             if IsObject(Atlas.list)
                 Atlas.list.sel := i
         }
+        if (dbl = "ctx") {                   ; a right-click: the row menu
+            if (Atlas.savedSel != i)
+                Atlas.Build()                ; the buttons wake up too
+            Atlas.RowMenu(i, mode)
+            return
+        }
         if dbl {
             switch mode {
                 case "mouse": Atlas.EditRow(i)
                 case "key":   Atlas.EditRow(i, true)
                 case "menu":  Atlas.MenuEditSel()
+                case "step":  Atlas.MacroStepEditSel()
             }
             return
         }
@@ -19477,7 +19500,6 @@ class Atlas {
     static CloseDlg() {
         Lumi.CloseSelect()               ; its lists die with it
         Lumi.EndEdit()
-        Atlas.WizReopenCancel()          ; nothing may reopen a closed wizard
         ; Never leave a Rec capture running headless -- the same rule
         ; ModalClose applies to the classic dialogs. Without it, closing the
         ; dialog mid-record left an InputHook swallowing keys until its
@@ -19533,7 +19555,13 @@ class Atlas {
                           "8 slices — every 45°"]
 
     static MenuDlg(draft := 0) {
-        w := 820
+        ; 1000 wide (v0.6.6): the eight-column row grid on the left, and a
+        ; live wheel on the right that shows the menu as it will open --
+        ; and that can be DRAGGED: one wedge onto another swaps the two
+        ; commands, rows and all. The header row is laid out on ONE line
+        ; with room to read: "Program" no longer wraps into "Progra / m",
+        ; and "Size" sits beside its label instead of under it.
+        w := 1000
         h := 624
         Lumi.CloseSelect()
         Lumi.EndEdit()
@@ -19568,32 +19596,38 @@ class Atlas {
             "Name each command, choose its action, then record its shortcut.", "mute", "left", 20)
         Lumi.Rule(24, 66, w - 48)
 
-        st := {ref: ref, dlg: dlg, rows: [], count: count, original: g_Cfg["menus"][ref]}
+        st := {ref: ref, dlg: dlg, rows: [], count: count,
+               original: g_Cfg["menus"][ref], wheel: 0}
 
-        Lumi.Label(24, 84, 60, "Name", "dim", "left", 30)
-        st.name := Lumi.Field(92, 84, 240, 30, MGet(menu, "name", ""), 0,
+        ; ── header row: Name · Program · Size, one line ─────────────────
+        Lumi.Label(24, 84, 56, "Name", "dim", "left", 30)
+        st.name := Lumi.Field(84, 84, 200, 30, MGet(menu, "name", ""), 0,
             "menu name", true)
 
         apps := AppChoices()
         cur := MGet(menu, "app", "")
-        Lumi.Label(352, 84, 48, "Program", "dim", "left", 30)
-        st.app := Lumi.Select(404, 84, 250, 30, apps,
+        Lumi.Label(300, 84, 70, "Program", "dim", "left", 30)
+        st.app := Lumi.Select(374, 84, 220, 30, apps,
             Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
 
-        Lumi.Label(676, 84, 50, "Size", "dim", "left", 30)
-        st.size := Lumi.Select(676, 118, 120, 30, ["4", "8", "9 (1-9)"],
+        Lumi.Label(612, 84, 40, "Size", "dim", "left", 30)
+        st.size := Lumi.Select(656, 84, 120, 30, ["4", "8", "9 (1-9)"],
             count = 9 ? 3 : (count = 8 ? 2 : 1), (i, t) => Atlas.MenuResize(st, i))
 
-        Lumi.Label(24, 122, 320,
+        Lumi.Label(24, 122, 752,
             "Program chooses the automatic menu. A named binding opens it directly.",
             "mute", "left", 22)
         Lumi.Rule(24, 156, w - 48)
 
-        Lumi.Label(24, 164, 90, count = 9 ? "Number" : "Direction", "section")
-        Lumi.Label(116, 164, 140, "Label", "section")
-        Lumi.Label(268, 164, 240, "It does", "section")
-        Lumi.Label(520, 164, 140, "Details", "section")
-        Lumi.Label(670, 164, 70, "Icon", "section")
+        ; ── the row grid ───────────────────────────────────────────────
+        ; Columns (x, w): direction 24/80, label 108/140, action 256/210,
+        ; details 472/134, icon 612/88, Rec 706/50. The icon column was
+        ; 70 px, which showed "magn…" and "dele…" for magnify and delete.
+        Lumi.Label(24, 164, 80, count = 9 ? "Number" : "Direction", "section")
+        Lumi.Label(108, 164, 140, "Label", "section")
+        Lumi.Label(256, 164, 210, "It does", "section")
+        Lumi.Label(472, 164, 134, "Details", "section")
+        Lumi.Label(612, 164, 88, "Icon", "section")
 
         icons := []
         for nm in RADIAL_ICONS
@@ -19608,23 +19642,43 @@ class Atlas {
             lbl := IsObject(sl) ? MGet(sl, "label", "") : ""
             ico := IsObject(sl) ? MGet(sl, "icon", "") : ""
             dir := (count = 4 ? RADIAL_DIR4 : (count = 8 ? RADIAL_DIR8 : RADIAL_DIR9))[i]
-            Lumi.Label(24, ry, 90, dir, "dim", "left", 30)
-            r := {dlg: dlg}
-            r.label := Lumi.Field(116, ry, 140, 30, lbl, 0, "label", true)
-            r.act := Atlas.ActSelect(268, ry, 240, 30, code)
-            r.value := Lumi.Field(520, ry, 144, 30, val, 0, "value", true)
-            r.icon := Lumi.Select(670, ry, 70, 30, icons,
+            Lumi.Label(24, ry, 80, dir, "dim", "left", 30)
+            r := {dlg: dlg, dir: dir}
+            ; The wheel on the right follows the Label field and the action
+            ; dropdown as they change, so what is typed is what is shown.
+            r.label := Lumi.Field(108, ry, 140, 30, lbl,
+                (v) => Atlas.MenuWheelPaint(st), "label", true)
+            r.act := Atlas.ActSelect(256, ry, 210, 30, code,
+                (i2, t) => Atlas.MenuWheelPaint(st))
+            r.value := Lumi.Field(472, ry, 134, 30, val, 0, "value", true)
+            r.icon := Lumi.Select(612, ry, 88, 30, icons,
                 Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
-            Lumi.Btn(746, ry, 50, 30, "Rec", Atlas.DeckRec(r), "accent")
+            Lumi.Btn(706, ry, 50, 30, "Rec", Atlas.DeckRec(r), "accent")
             st.rows.Push(r)
             i += 1
         }
 
-        Lumi.Para(24, Min(494, 186 + count * pitch + 6), w - 48, 56,
+        Lumi.Para(24, Min(494, 186 + count * pitch + 6), 732, 56,
             "For a PACS shortcut, choose Send keys and use Rec to press the "
             . "shortcut from your viewer settings. Disabled leaves a direction "
             . "empty. A direction set to Radial menu opens that menu inside "
             . "this one: rest on it while holding, or release on it.", "mute")
+
+        ; ── the wheel ──────────────────────────────────────────────────
+        ; 200 px across, in the column to the right of the rows. Its
+        ; shapes are rebuilt by MenuWheelPaint whenever a label or an
+        ; action changes; the invisible Container over it is the ONE hit
+        ; target, because every Pie shares the same bounding box and
+        ; GpGFX hit-tests boxes, not arcs -- so the wedge under the
+        ; pointer is worked out from the angle here, never by GpGFX.
+        st.wheel := {x: 776, y: 176, d: 200, shapes: [], src: 0, dst: 0}
+        Lumi.Label(776, 156, 200, "As it opens", "section", "center")
+        Atlas.MenuWheelPaint(st)
+        grab := Container(st.wheel.x, st.wheel.y, st.wheel.d, st.wheel.d)
+        grab.OnEvent("LeftMouseDown", ObjBindMethod(Atlas, "MenuWheelDown", st))
+        Lumi.Para(776, 388, 200, 60,
+            "Drag one wedge onto another to swap the two commands. "
+            . "The rows on the left swap with them.", "mute")
 
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
@@ -19639,6 +19693,184 @@ class Atlas {
         Lumi.FullErase(dlg)
         dlg.Draw()
         dlg.Activate()
+    }
+
+    /**
+     * The row grid as a menu Map -- name, program, and one slice per row
+     * exactly as the fields hold them right now. MenuResize and the wheel
+     * drag both hand this to a fresh MenuDlg as a draft, which is the one
+     * honest way this kit rebuilds a dialog around answers already given.
+     */
+    static MenuDraftFrom(st) {
+        slices := []
+        for r in st.rows
+            slices.Push(MenuSlice(Lumi.FieldValue(r.label),
+                Atlas.ActCode(r.act),
+                Lumi.FieldValue(r.value),
+                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
+        app := AppCodeFromDisp(st.app.items[st.app.index])
+        return Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
+            "slices", slices)
+    }
+
+    /**
+     * (Re)draw the wheel from the rows. Slice i points where the real ring
+     * points it: north first, then clockwise, a full sector each (this is
+     * a root ring; RadialSliceAngles). GDI+ measures its arcs clockwise
+     * from east, so a bearing b from north is the angle b - 90 here.
+     *
+     * A filled wedge is one whose action is set; an empty one is drawn in
+     * the sunk tone so the gaps in a half-built menu are visible at a
+     * glance. During a drag the source is outlined pink and the wedge
+     * under the pointer cyan.
+     */
+    static MenuWheelPaint(st) {
+        wh := st.wheel
+        ; Paint only onto the dialog that is actually up. Atlas.dlg is set
+        ; before the first paint (dstate is not, so DlgAlive cannot be the
+        ; test here), and a field commit arriving after the dialog closed
+        ; must not build shapes into a disposed layer.
+        if (!IsObject(wh) || !IsObject(Atlas.dlg) || !Lumi.Same(Atlas.dlg, st.dlg))
+            return
+        prev := LayerStack.ActiveLayer
+        LayerStack.ActiveLayer := st.dlg
+        try {
+            for shp in wh.shapes {
+                try shp.Hide()
+                try shp.Dispose()
+            }
+            wh.shapes := []
+            n := st.count
+            cx := wh.x + wh.d / 2
+            cy := wh.y + wh.d / 2
+            step := 360.0 / n
+            gap := 3
+            for i, r in st.rows {
+                if (i > n)
+                    break
+                bearing := (i - 1) * step
+                start := bearing - 90 - step / 2 + gap / 2
+                live := (Atlas.ActCode(r.act) != "none")
+                fill := live ? Lumi.C["raised2"] : Lumi.C["sunk"]
+                if (i = wh.src)
+                    fill := Lumi.Mix(fill, Lumi.C["magenta"], 0.35)
+                else if (i = wh.dst)
+                    fill := Lumi.Mix(fill, Lumi.C["cyan"], 0.35)
+                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
+                    step - gap, fill, true))
+                edge := (i = wh.src) ? Lumi.C["magenta"]
+                    : ((i = wh.dst) ? Lumi.C["cyan"] : Lumi.C["hair"])
+                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
+                    step - gap, edge, false))
+                ; the label, on the wedge's centre line at 0.66 R
+                rad := bearing * 0.0174532925
+                tx := cx + (wh.d / 2) * 0.66 * Sin(rad)
+                ty := cy - (wh.d / 2) * 0.66 * Cos(rad)
+                txt := Trim(Lumi.FieldValue(r.label))
+                if (txt = "")
+                    txt := live ? ActLabelOf(Atlas.ActCode(r.act)) : r.dir
+                lw := (n = 4) ? 84 : 62
+                wh.shapes.Push(Lumi.Label(Round(tx - lw / 2), Round(ty - 10), lw,
+                    Lumi.Elide(txt, lw, live ? "body" : "mute"),
+                    live ? "body" : "mute", "center", 20))
+            }
+            ; the hub: release here to cancel, as on the real ring
+            hub := 22
+            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
+                hub * 2, Lumi.C["surface"], true))
+            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
+                hub * 2, Lumi.C["hair"], false))
+        } finally {
+            if IsObject(prev)
+                LayerStack.ActiveLayer := prev
+        }
+        Lumi.FullErase(st.dlg)
+        Lumi.Refresh(st.dlg)
+    }
+
+    /** Which wedge a layer-local point is on: 1..count, or 0 (hub / outside). */
+    static MenuWheelAt(st, mx, my) {
+        wh := st.wheel
+        cx := wh.x + wh.d / 2
+        cy := wh.y + wh.d / 2
+        dx := mx - cx
+        dy := my - cy
+        dist := Sqrt(dx * dx + dy * dy)
+        if (dist < 24 || dist > wh.d / 2)
+            return 0
+        bearing := RadialAngle(dx, dy)       ; degrees clockwise from north
+        step := 360.0 / st.count
+        return Mod(Round(bearing / step), st.count) + 1
+    }
+
+    /** A press on the wheel: remember the wedge, then drag OUTSIDE the
+     *  handler -- the loop below repaints the layer it was called from. */
+    static MenuWheelDown(st, shp := 0, mx := 0, my := 0) {
+        if !Atlas.DlgAlive(st)
+            return
+        i := Atlas.MenuWheelAt(st, mx, my)
+        if (i < 1)
+            return
+        Lumi.EndEdit()
+        SetTimer(() => Atlas.MenuWheelDrag(st, i), -1)
+    }
+
+    /**
+     * Drag a wedge. Polls the physical button the way Shelf.RowDrag does
+     * (no capture, so nothing can stick), lights the wedge under the
+     * pointer as it moves, and on release over a DIFFERENT wedge swaps
+     * the two slices and reopens the editor around the result -- the
+     * same draft reopen a size change does. Released on the same wedge,
+     * the hub or outside the ring: nothing happens.
+     */
+    static MenuWheelDrag(st, i) {
+        if !Atlas.DlgAlive(st)
+            return
+        wh := st.wheel
+        wh.src := i
+        wh.dst := 0
+        Atlas.MenuWheelPaint(st)
+        j := 0
+        try {
+            while GetKeyState("LButton", "P") {
+                if !Atlas.DlgAlive(st)
+                    return
+                RM_GetPos(&sx, &sy)
+                k := Atlas.MenuWheelAt(st, sx - st.dlg.x, sy - st.dlg.y)
+                if (k = i)
+                    k := 0
+                if (k != j) {
+                    j := k
+                    wh.dst := j
+                    Atlas.MenuWheelPaint(st)
+                }
+                Sleep(15)
+            }
+        } finally {
+            wh.src := 0
+            wh.dst := 0
+        }
+        if (j < 1 || j = i || !Atlas.DlgAlive(st)) {
+            Atlas.MenuWheelPaint(st)
+            return
+        }
+        if (st.ref > g_Cfg["menus"].Length
+            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
+            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
+            Atlas.MenuWheelPaint(st)
+            return
+        }
+        menu := Atlas.MenuDraftFrom(st)
+        sl := menu["slices"]
+        tmp := sl[i]
+        sl[i] := sl[j]
+        sl[j] := tmp
+        draft := {ref: st.ref, menu: menu}
+        ; Unwind before disposing the layer this drag was started from.
+        SetTimer(() => (Atlas.DlgAlive(st)
+            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
+        SetTimer(() => Lumi.Toast("Swapped " st.rows[i].dir " and "
+            . st.rows[j].dir " — Save keeps it", "cyan"), -60)
     }
 
     static MenuResize(st, index) {
@@ -19672,15 +19904,8 @@ class Atlas {
             Lumi.Refresh(st.dlg)
             return
         }
-        slices := []
-        for r in st.rows
-            slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                Atlas.ActCode(r.act),
-                Lumi.FieldValue(r.value),
-                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
-        app := AppCodeFromDisp(st.app.items[st.app.index])
-        menu := Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
-            "slices", ResizeMenuSlices(slices, count))
+        menu := Atlas.MenuDraftFrom(st)
+        menu["slices"] := ResizeMenuSlices(menu["slices"], count)
         draft := {ref: st.ref, menu: menu}
         ; Unwind the dropdown callback before disposing its owning layer.
         SetTimer(() => (Atlas.DlgAlive(st)
@@ -19809,15 +20034,36 @@ class Atlas {
      * most one tick instead of for the rest of the session.
      */
     static LeaveCheck() {
-        lyr := Atlas.lyr
-        try {
-            if (!lyr.HasProp("__hoveredShapeId") || !lyr.__hoveredShapeId)
-                return
-            RM_GetPos(&mx, &my)
-            if (mx >= lyr.x && mx <= lyr.x + lyr.w
-                && my >= lyr.y && my <= lyr.y + lyr.h)
-                return                       ; still inside; leave will come
-            PostMessage(0x02A3, 0, 0, , "ahk_id " lyr.hwnd)   ; WM_MOUSELEAVE
+        ; Every layer that can hold a hover: the window, the dialog over it
+        ; and the open option list (v0.6.6). Only the main window used to
+        ; be checked, so a highlight in the binding dialog or a dropdown
+        ; row that missed its leave stayed lit until the pointer happened
+        ; to cross that exact shape again.
+        lyrs := [Atlas.lyr, Atlas.dlg]
+        if (IsObject(Lumi.openSel) && IsObject(Lumi.openSel.pop))
+            lyrs.Push(Lumi.openSel.pop)
+        under := 0
+        RM_GetPos(&mx, &my)
+        try under := DllCall("user32\WindowFromPoint", "int64",
+            (my << 32) | (mx & 0xFFFFFFFF), "ptr")
+        for lyr in lyrs {
+            if !IsObject(lyr)
+                continue
+            try {
+                if (!lyr.HasProp("__hoveredShapeId") || !lyr.__hoveredShapeId)
+                    continue
+                ; Still inside this layer's rectangle AND this layer is the
+                ; window under the pointer: the leave will come by itself.
+                ; A dialog or a dropdown sitting on top of the window is
+                ; the case the rectangle test alone got wrong -- the pointer
+                ; is inside the window's rectangle but over another layer,
+                ; and the window's highlight never got its leave.
+                if (mx >= lyr.x && mx <= lyr.x + lyr.w
+                    && my >= lyr.y && my <= lyr.y + lyr.h
+                    && (!under || under = lyr.hwnd))
+                    continue
+                PostMessage(0x02A3, 0, 0, , "ahk_id " lyr.hwnd)   ; WM_MOUSELEAVE
+            }
         }
     }
 
@@ -19870,8 +20116,7 @@ class Atlas {
     ; is unreachable while they are being ported.
 
     /** Panel names in the CLASSIC window, by the word the caller used. */
-    static CLASSIC_PAGES := Map("test", "Diagnostics", "macros", "Macros",
-        "apps", "Apps")
+    static CLASSIC_PAGES := Map("test", "Diagnostics", "apps", "Apps")
 
     static Classic(which) {
         Lumi.CloseSelect()
