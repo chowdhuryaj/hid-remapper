@@ -4,7 +4,12 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6.5).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.6).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.6:
+- MatchScore: layer component +16 (was +2) so a held layer row beats a program's plain row.
+- Field edit loop ends when EditGuard zeroed `Lumi.editing` or after 10 idle minutes.
+- Conflicts report line for layer-vs-plain-row precedence.
 
 Done in 0.6.6.5:
 - `LAYER_KEY_HOSTS := ["CapsLock"]`: always in LayerChoices; `HoldReservedForLayer()` refuses a
@@ -53,4 +58,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.6 for the next iteration.
+0.6.6.7 for the next iteration.

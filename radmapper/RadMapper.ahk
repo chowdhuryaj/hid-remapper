@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.5  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.6  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,21 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.6 -- A HELD LAYER OUTRANKS A PROGRAM'S PLAIN ROW.
+;    * MatchScore: each held layer component is worth 16, a program match
+;      8, a modifier 1. It was 2 / 8 / 1, so in PACS "button 4 = F7"
+;      (program row, no layer) beat "hold right + button 4 = previous
+;      field" (everywhere, layer) -- the layer only worked once the same
+;      row was copied into PACS. Now: the layer row wins wherever it was
+;      written; a PACS layer row still beats an everywhere layer row; and
+;      with nothing held, PACS's plain row beats the everywhere plain row
+;      exactly as before. The Conflicts report says which row wins while
+;      a layer is held.
+;    * A live text field ends its own edit when the guard has given up on
+;      it, or after ten minutes with no keystroke, instead of running on
+;      with the program believing no field is open -- the way a dialog
+;      left open for a long time could stop taking clicks.
 ;
 ;  v0.6.6.5 -- CAPS LOCK HOSTS A LAYER.
 ;    "Hold CapsLock" is always in the "Only while holding" list, on the
@@ -1240,7 +1255,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.5"
+global RM_VERSION := "0.6.6.6"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -3987,8 +4002,9 @@ HeldHas(ctx, btn) {
 }
 
 ; Specificity score of a binding row against a context, or -1 if it does not
-; apply. app exact +8, each held-input layer component +2 (so a depth-2 nested
-; layer outscores depth-1 outscores Base -- deepest wins), each modifier +1.
+; apply. Each held-input layer component +16 (so a depth-2 nested layer
+; outscores depth-1 outscores Base -- deepest wins, and ANY held layer row
+; outscores a program's plain row, v0.6.6.6), app exact +8, each modifier +1.
 ; checkLayer=false skips the held-path requirement AND its score: used by the
 ; layer-host probe, which asks "could this row apply if the path were held"
 ; while deciding what a press should arm.
@@ -4008,7 +4024,7 @@ MatchScore(row, ctx, checkLayer := true) {
                     continue
                 if !HeldHas(ctx, part)
                     return -1
-                sc += 2
+                sc += 16
             }
         }
     }
@@ -5240,6 +5256,28 @@ ConflictReport(focus := "") {
                     . DescribeAction(r2["action"])
                     . ((MGet(r1, "layer", "*") != "*") ? " (while holding "
                         LayerLabelFromCode(MGet(r1, "layer", "*")) ")" : "") "."})
+            }
+        }
+        ; 1b. while a layer is held, a layer row (from anywhere) beats a
+        ;     program's plain row for the same gesture (v0.6.6.6)
+        for r1 in list {
+            lay := MGet(r1, "layer", "*")
+            if (lay = "*" || lay = "" || lay = "Base")
+                continue
+            for r2 in list {
+                if (MGet(r2, "app", "*") = "*" || MGet(r2, "layer", "*") != "*"
+                    || MGet(r1, "event", "") != MGet(r2, "event", "")
+                    || MGet(r1, "mods", "") != MGet(r2, "mods", ""))
+                    continue
+                if (MGet(r1, "app", "*") != "*" && MGet(r1, "app", "*") != MGet(r2, "app", "*"))
+                    continue
+                out.Push({kind: "info", text: "In " AppDisp(MGet(r2, "app", "*"))
+                    . " while holding " LayerLabelFromCode(lay) ", " lbl " "
+                    . EventLabelOf(MGet(r1, "event", "")) " does "
+                    . DescribeAction(r1["action"]) " (the layer row"
+                    . (MGet(r1, "app", "*") = "*" ? ", from everywhere," : "")
+                    . " beats " AppDisp(MGet(r2, "app", "*")) "'s plain row: "
+                    . DescribeAction(r2["action"]) ")."})
             }
         }
         ; 2. two rows for exactly the same thing
@@ -14167,9 +14205,23 @@ class Lumi {
         ; that skipped it would pin Lumi.editing above zero and leave every
         ; field in the program permanently unclickable.
         Lumi.editBeat := A_TickCount
+        idleAt := A_TickCount
+        lastBuf := ctx.buf
         try {
             while (!ctx.done && Lumi.__FieldMine(ctx)) {
                 Lumi.editBeat := A_TickCount     ; proof of life -- see EditGuard
+                ; The guard gave up on this edit (a stall longer than its
+                ; window) and told the program no field is open. Running
+                ; on from here means a second field can open a nested loop
+                ; over this one -- end this one instead (v0.6.6.6).
+                if (Lumi.editing < 1)
+                    break
+                if (ctx.buf !== lastBuf) {
+                    lastBuf := ctx.buf
+                    idleAt := A_TickCount
+                }
+                if (A_TickCount - idleAt > 600000)   ; ten idle minutes: commit
+                    break
                 Sleep(10)
             }
         } finally {
