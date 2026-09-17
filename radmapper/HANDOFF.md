@@ -4,7 +4,12 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6.3).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.4).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.4:
+- Watchdog sweeps only synthetic-down states (passthru/eager1/held); pending/armedmod get
+  the 30 s cap. `HookChanged()` stamps hook (re)installs; physical "up" must persist 2 ticks.
+  Swept states set `down := false` before ClearBS.
 
 Done in 0.6.6.3:
 - Tilt (WheelLeft/Right) bypasses the own-window native passthrough in OnWheelHK.
@@ -44,4 +49,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.4 for the next iteration.
+0.6.6.5 for the next iteration.

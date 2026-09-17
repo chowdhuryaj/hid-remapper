@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.3  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.4  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,26 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.4 -- THE WATCHDOG STOPS KILLING HELD LAYERS.
+;    "Hold button 4, scroll to switch windows": the switcher appeared and
+;    vanished, with "RadMapper recovered a stuck XButton1". The watchdog
+;    swept any state whose input no longer read as physically held, and
+;    AutoHotkey's physical-state table is WIPED whenever a hook is
+;    (re)installed -- which the switcher itself does the first time it
+;    binds its Delete key, and which SendInput, the tester and the radial
+;    cancel hooks do too. A held layer host then read as "up" and was
+;    released mid-gesture.
+;    * The sweep now applies ONLY to states that hold a SYNTHETIC button
+;      down (passthru, eager1, held): those are the ones a lost Up can
+;      leave stuck in the OS. A pending / armed layer host has nothing
+;      out, so a lost Up costs nothing; it gets the 30 s runaway cap only.
+;    * For the states it does sweep, a hook change since the press makes
+;      the physical reading untrustworthy (HookChanged stamps it), and an
+;      "up" reading has to persist for two ticks in a row.
+;    * A swept state is marked released (down := false) before it is
+;      cleared, so a switcher or a menu watching that holder commits
+;      cleanly instead of hanging on a state that no longer exists.
 ;
 ;  v0.6.6.3 -- TILT WHEEL RELIABILITY.
 ;    * A tilt over one of RadMapper's own windows went native. Every wheel
@@ -1209,7 +1229,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.3"
+global RM_VERSION := "0.6.6.4"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1621,6 +1641,17 @@ global g_FollowCandAt := 0     ; tick it first appeared in front
 global g_FollowAt := 0         ; tick of the last warp (cooldown)
 global g_FollowOn := false     ; the follow-focus timer is armed
 global g_TeleAt := 0           ; tick of the last monitor teleport (follow-focus grace)
+global g_HookChangedAt := 0    ; tick of the last hook (re)install: physical
+                               ;   key state may have been wiped at that moment
+
+; Every place that registers or unregisters a hotkey calls this. AutoHotkey
+; zeroes its physical-state table when a hook is (re)installed, so any
+; press older than this stamp cannot be judged "physically up" from that
+; table (v0.6.6.4).
+HookChanged() {
+    global g_HookChangedAt
+    g_HookChangedAt := A_TickCount
+}
 
 global g_DialFree := ""        ; dial state when not tied to a held button
 global g_LastEvWhat := ""      ; last event; formatted lazily by LastEventText
@@ -6680,6 +6711,7 @@ AppSwitchBindKeys() {
         return
     try {
         HotIf((*) => IsObject(g_AppSw))
+        HookChanged()
         Hotkey("Delete", AppSwitchDelKey, "On")
         bound := true
     } catch {
@@ -8917,6 +8949,7 @@ RadialBindCancel() {
     ; inherits it (the engine's own hooks are registered that way).
     try {
         HotIf(RadialCancelActive)
+        HookChanged()
         for b in ["LButton", "RButton", "MButton"] {
             if g_HookState.Has(b)            ; already ours: OnPressHK cancels
                 continue
@@ -8939,6 +8972,7 @@ RadialUnbindCancel() {
         return
     try {
         HotIf(RadialCancelActive)            ; Off must run under the SAME
+        HookChanged()
         for b in g_RadialCancelKeys          ; context the hotkey was made in
             try Hotkey("*" b, "Off")
     } catch {
@@ -10074,6 +10108,7 @@ RunMacro(name, *) {
 ; completely native.
 SyncHooks() {
     global g_BadKeyWarned                    ; declared here, not in the try
+    HookChanged()
     needed := Map()
     needed.CaseSense := "Off"                ; hand-edited "xbutton1" must
     if g_Enabled {                           ; still hook XButton1
@@ -10446,14 +10481,40 @@ Watchdog() {
     for name, st in g_BS.Clone() {
         if !st.down
             continue
-        if st.physSeen {
-            if InputHeldPhysical(st.btn)
+        age := now - st.pressTick
+        if (age < 0)                         ; A_TickCount wrapped: be patient
+            age := 0
+        ; Only a state with a SYNTHETIC down out can leave a button stuck
+        ; in the OS if its Up is lost. A pending / armed / waiting state has
+        ; sent nothing, so it is never judged on the physical table -- the
+        ; table is wiped by every hook (re)install and by SendInput, and
+        ; judging a held layer host on it released the layer mid-gesture
+        ; (v0.6.6.4). Such a state gets the runaway cap only.
+        synthetic := (st.mode = "passthru" || st.mode = "eager1"
+            || st.mode = "held")
+        why := ""
+        if !synthetic {
+            if (age < 30000)
                 continue
-        } else if (now - st.pressTick >= 0 && now - st.pressTick < 30000)
-            continue                         ; injected source: no physical
-                                             ; reading to trust; runaway cap only
-        if (now - st.pressTick < 500)        ; too fresh: the real Up event
-            continue                         ; may simply not have run yet
+            why := "held 30 s with nothing out"
+        } else if (!st.physSeen || (g_HookChangedAt - st.pressTick) >= 0) {
+            ; an injected source, or a hook change since the press: the
+            ; physical reading is not evidence either way
+            if (age < 30000)
+                continue
+            why := st.physSeen ? "held 30 s, hooks changed since the press"
+                : "held 30 s, injected source"
+        } else if InputHeldPhysical(st.btn) {
+            st.upTicks := 0
+            continue
+        } else {
+            if (age < 500)                   ; too fresh: the real Up event
+                continue                     ; may simply not have run yet
+            st.upTicks := (st.HasProp("upTicks") ? st.upTicks : 0) + 1
+            if (st.upTicks < 2)              ; two ticks in a row, not one
+                continue                     ; transient reading
+            why := "input physically up"
+        }
         if st.consumed {                     ; nothing owns a consumed state
             ClearBS(name)                    ; any more; just drop it
             continue
@@ -10462,9 +10523,9 @@ Watchdog() {
             SendNativeUp(st.passBtn != "" ? st.passBtn : name)
         else if (st.mode = "held")
             ActionUp(st.holdBinding, st)
-        ClearBS(name)
-        Problem("recovered", "released stuck " name " (" st.mode
-            . (st.physSeen ? ", input physically up)" : ", held 30 s, injected source)"))
+        st.down := false                     ; watchers of this holder (the
+        ClearBS(name)                        ; switcher, a menu) see a release
+        Problem("recovered", "released stuck " name " (" st.mode ", " why ")")
         HUD("RadMapper recovered a stuck " name)
     }
     ; 2) momentary speed states whose holder is gone entirely (state cleared
@@ -10727,6 +10788,7 @@ TestStart() {
     ; double-report; over OUR windows the engine variant is gated off (native
     ; clicks) and without a global reporter the tester bars went dead for
     ; hooked buttons -- the cursor is usually over the GUI while watching them.
+    HookChanged()
     for btn in BUTTONS {
         try {
             Hotkey("~*" btn, TestNotifyHK.Bind(btn, 1), "On")
@@ -10749,6 +10811,7 @@ TestStop() {
         return
     g_Testing := false
     SetTimer(TestTick, 0)
+    HookChanged()
     for hk in g_TestHooks
         try Hotkey(hk, "Off")
     g_TestHooks := []
