@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.6.1  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,15 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.6.1 -- FOLLOW-FOCUS EXCEPTIONS. Settings > Behaviour has a "Follow
+;  focus except in" field: programs and windows where the cursor is never
+;  moved, however they come to the front. Entries are separated by ";" --
+;  a program file name (IntelliSpacePACSRadiology.exe), "title:" and part
+;  of a window title, or "class:" and a window class. "Grab window in
+;  front" adds the program that is in front three seconds after the click.
+;  This is on top of the per-program "No pointer jump" switch on the
+;  Programs page, which Simple mode hides.
 ;
 ;  v0.6.6 -- the wizard is gone, the macro editor is native, the radial
 ;  editor has a wheel you can drag, and deleting a row takes one key:
@@ -1156,7 +1165,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6"
+global RM_VERSION := "0.6.6.1"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1477,6 +1486,10 @@ global DEFAULTS := Map(
     ; it, so a dialog that flashes up and vanishes never earns a warp.
     "followSettleMs", 220,
     "followCooldownMs", 700,   ; minimum gap between two follow warps
+    ; Where follow-focus never moves the pointer, whatever comes to the
+    ; front (v0.6.6.1). ";"-separated: "name.exe", "title:part of a title",
+    ; "class:WindowClass". Edited on Settings > Behaviour.
+    "followExcept", "",
     "hkPause", "NumLock",
     "hkPanic", "^!q",
     ; Ctrl+Alt+C / Ctrl+Alt+N. Deliberately NOT ^!s or ^!l: Epic uses
@@ -5978,6 +5991,9 @@ FollowTick(*) {
     name := ActiveAppName()
     if AppNoFollow(name)
         return
+    ; 7b. ... or is on the exceptions list on Settings (v0.6.6.1)
+    if FollowExcepted(hwnd)
+        return
     ; 8. one warp per followCooldownMs, whatever happens. A burst of app
     ;    switches moves the pointer once, at the end, not once per step.
     if (g_FollowAt && now - g_FollowAt < Max(Cfg("followCooldownMs"), 0)
@@ -6021,6 +6037,41 @@ FollowTick(*) {
     FocusSignal(cx, cy)
     if Cfg("hud")
         HUD(parked ? ("Parked for " name) : "Cursor followed focus", "cyan")
+}
+
+/**
+ * Is this window one follow-focus must leave alone? The list is the
+ * "Follow focus except in" field on Settings: ";"-separated entries, each
+ * a program file name (case-insensitive, "exe:" prefix optional), "title:"
+ * plus part of the window title, or "class:" plus the window class.
+ */
+FollowExcepted(hwnd) {
+    raw := Trim(String(Cfg("followExcept")))
+    if (raw = "")
+        return false
+    exe := "", title := "", cls := ""
+    try exe := WinGetProcessName("ahk_id " hwnd)
+    try title := WinGetTitle("ahk_id " hwnd)
+    try cls := WinGetClass("ahk_id " hwnd)
+    for one in StrSplit(raw, ";") {
+        e := Trim(one)
+        if (e = "")
+            continue
+        if (SubStr(e, 1, 6) = "title:") {
+            t := Trim(SubStr(e, 7))
+            if (t != "" && InStr(title, t, false))
+                return true
+        } else if (SubStr(e, 1, 6) = "class:") {
+            if (cls != "" && cls = Trim(SubStr(e, 7)))
+                return true
+        } else {
+            if (SubStr(e, 1, 4) = "exe:")
+                e := Trim(SubStr(e, 5))
+            if (exe != "" && exe = e)
+                return true
+        }
+    }
+    return false
 }
 
 /**
@@ -18227,7 +18278,7 @@ class Atlas {
         ; they are shown next to the buttons and menus that also fire them.
         ; What is left here is the four keys that are about RadMapper itself,
         ; so the band needs two rows instead of three.
-        bands := Atlas.Bands(y + 34, h - 34, [0.36, 0.34, 0.30], [172, 160, 118])
+        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [172, 160, 156])
         half := (w - 20) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
@@ -18358,6 +18409,56 @@ class Atlas {
         Lumi.Label(x + w - 300, B.y + 90, 86, "HUD corner", "dim", "left", 26)
         Lumi.Select(x + w - 210, B.y + 88, 186, 28, Atlas.HUD_CORNER_LABELS,
             Atlas.HudCornerIdx(), (i, t) => Atlas.SetHudCorner(i))
+        ; ── follow-focus exceptions (v0.6.6.1) ──────────────────────────
+        ; Where the pointer is never moved, whatever comes to the front.
+        ; A plain text field, because the list is short and every entry
+        ; is a word: a program file name, title:part, or class:Name.
+        fy := B.y + 120
+        Lumi.Label(x + 24, fy, 176, "Follow focus except in", "dim", "left", 30)
+        Lumi.Field(x + 204, fy, w - 204 - 24 - 214, 30, Cfg("followExcept"),
+            (t) => Atlas.SetCfgStr("followExcept", t),
+            "e.g. IntelliSpacePACSRadiology.exe; title:Report", true)
+        Lumi.Btn(x + w - 24 - 204, fy, 204, 30, "Grab window in front (3 s)",
+            (*) => Atlas.FollowGrab(), "accent")
+    }
+
+    /**
+     * Add the program that is in front three seconds from now to the
+     * follow-focus exceptions. The settings window hides for the count so
+     * it cannot be the window in front, exactly as CaptureSpot does.
+     */
+    static FollowGrab() {
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        Lumi.Toast("Click into the program the pointer should never be moved in "
+            . "— adding it in 3 seconds", "magenta", 3000)
+        Atlas.Hide()
+        SetTimer(ObjBindMethod(Atlas, "FollowGrabDone"), -3000)
+    }
+
+    static FollowGrabDone(*) {
+        exe := ""
+        try exe := WinGetProcessName("A")
+        Atlas.Show()
+        if (exe = "") {
+            Lumi.Toast("Could not read the window in front", "warn")
+            return
+        }
+        cur := Trim(String(Cfg("followExcept")))
+        for one in StrSplit(cur, ";") {
+            e := Trim(one)
+            if (SubStr(e, 1, 4) = "exe:")
+                e := Trim(SubStr(e, 5))
+            if (e = exe) {
+                Lumi.Toast(exe " is already on the list", "cyan")
+                return
+            }
+        }
+        CfgSet("followExcept", cur = "" ? exe : (cur "; " exe))
+        Atlas.SaveOrWarn()
+        AfterCfgChange()
+        Atlas.Build()
+        Lumi.Toast("Follow focus will leave " exe " alone", "jade")
     }
 
     ; Corner codes in the order the picker shows them.

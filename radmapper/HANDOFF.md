@@ -4,7 +4,11 @@
 step with the copy running on the reading workstation, and land requested
 UI fixes.
 
-**State (v0.6.6).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+**State (v0.6.6.1).** Branch `claude/determined-sagan-7w3fl7`, draft PR #9.
+
+Done in 0.6.6.1:
+- Follow-focus exceptions: `followExcept` setting (";"-separated exe / title: / class:),
+  `FollowExcepted()` in FollowTick, Settings > Behaviour field + "Grab window in front".
 
 Done in 0.6.6:
 - Set-a-button wizard removed; Home / Mouse / Keyboard open `BindDlg` directly.
@@ -28,4 +32,4 @@ run should open: Home, Mouse > Add new, Menus > Edit commands (drag a
 wedge), Macros (add/edit/move a step), right-click and Delete on a row.
 
 **Next.** Run on Windows, fix anything the first run turns up; bump to
-0.6.6.1 for the next iteration.
+0.6.6.2 for the next iteration.
