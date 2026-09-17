@@ -36,10 +36,11 @@
 ;  does" and the Mouse page's "Set a button…" open; Advanced mode keeps
 ;  the full editor there.
 ;
-;  v0.6.1e: STARTER PACKS. Home > "Apply a starter pack" lists five named
+;  v0.6.1e: STARTER PACKS. Home > "Apply a starter pack" lists six named
 ;  sets of ordinary bindings -- PowerScribe on the thumb buttons, the PACS
-;  wheel on button 4, Window presets on button 5, drag scroll on button 5,
-;  and the shipped monitor hopping -- and applies one in a click through
+;  wheel on button 4, Window presets on button 5, PACS zoom and pan on the
+;  thumb buttons (Alt+drag / Ctrl+drag), drag scroll on button 5, and the
+;  shipped monitor hopping -- and applies one in a click through
 ;  the same UpsertBinding the editor uses. Anything a pack would replace is
 ;  listed and confirmed first. There is no pack state: the result is rows
 ;  on the Mouse page, editable and deletable like any other. "Test my
@@ -1629,6 +1630,10 @@ StarterPacks() {
         {name: "Window presets on button 5",
          sub:  "hold button 5 in PACS for the numbered preset ring",
          rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
+        {name: "PACS zoom and pan on the thumb buttons",
+         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)",
+         rows: [["PACS", "*", "", "XButton1", "hold", "moddrag", "LAlt"],
+                ["PACS", "*", "", "XButton2", "hold", "moddrag", "LCtrl"]]},
         {name: "Drag scroll on button 5",
          sub:  "hold button 5 and move the mouse to scroll, everywhere",
          rows: [["*", "*", "", "XButton2", "hold", "scrollptr", ""]]},
