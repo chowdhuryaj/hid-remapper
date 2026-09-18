@@ -1,4 +1,4 @@
-# RadMapper 0.6.1-preview
+# RadMapper 0.6.6.5
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
