@@ -16132,10 +16132,12 @@ class Atlas {
                 m.Add("Edit…", (*) => Atlas.EditRow(i))
                 m.Add("Duplicate", (*) => Atlas.DuplicateRow(i))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
+                Atlas.RowCalibItem(m, i)
             case "key":
                 m.Add("Edit…", (*) => Atlas.EditRow(i, true))
                 m.Add("Duplicate", (*) => Atlas.DuplicateRow(i))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
+                Atlas.RowCalibItem(m, i)
             case "menu":
                 m.Add("Edit commands…", (*) => Atlas.MenuEditSel())
                 m.Add("Delete", (*) => Atlas.MenuDelete())
@@ -16150,6 +16152,27 @@ class Atlas {
         Atlas.StopTick()
         try m.Show()
         Atlas.StartTick()
+    }
+
+    /**
+     * "Calibrate…" on a binding row. Only hold and tap-then-hold rows wait on
+     * a threshold, so they are the only ones with anything to measure -- and
+     * the only ones a measured number could be written onto.
+     */
+    static RowCalibItem(m, listRow) {
+        if (listRow < 1 || listRow > Atlas.rowRefs.Length)
+            return
+        idx := Atlas.rowRefs[listRow]
+        all := g_Cfg["bindings"]
+        if (idx < 1 || idx > all.Length)
+            return
+        row := all[idx]
+        code := MGet(row, "button", "")
+        if (code = "" || IsWheel(code)
+            || !EventUsesHoldMs(MGet(row, "event", "")))
+            return
+        m.Add("Calibrate timing for " InputLabel(code) "…",
+            (*) => Calib.Show(code))
     }
 
     /**
@@ -17718,6 +17741,11 @@ class Atlas {
                 (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)))
         m.Add(keyMode ? "Conflicts for this key…" : "Conflicts for this button…",
             (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(code)))
+        ; A wheel notch has no duration, so there is nothing to time on one.
+        if (keyMode || !IsWheel(code))
+            m.Add(keyMode ? "Calibrate timing for this key…"
+                          : "Calibrate timing for this button…",
+                (*) => Calib.Show(code))
         Atlas.StopTick()
         try m.Show()
         Atlas.StartTick()
@@ -21679,7 +21707,11 @@ class Calib {
 
     static lyr := 0
     static ih := 0
-    static phase := 0              ; 1 taps · 2 holds · 3 doubles · 4 results
+    static phase := 0              ; 0 pick · 1 taps · 2 holds · 3 doubles · 4 results
+    static target := ""            ; "" = any key (the two GLOBAL settings)
+    static opts := []              ; phase 0 list: "" first, then input codes
+    static hkBtn := ""             ; the mouse button whose "*btn" we registered
+    static wrong := ""             ; last key seen that was not the target
     static taps := []
     static holds := []
     static gaps := []
@@ -21692,12 +21724,24 @@ class Calib {
 
     static NEED := Map(1, 8, 2, 5, 3, 6)
 
-    static TITLE := Map(1, "Phase 1 of 3 — ordinary taps",
+    ; A mouse press has no virtual key, but OnDown / OnUp are the only timing
+    ; logic there is and they are keyed on one. 0x1000 is past every real vk
+    ; (a vk is a byte), so a synthetic id can never collide with a keystroke.
+    static MVK := 0x1000
+    static tvk := 0                ; the chosen key's vk / sc, resolved once at
+    static tsc := 0                ; Show: an sc-only key has no vk, and a
+                                   ; numpad twin shares the sc but not the vk
+
+    static TITLE := Map(0, "Which input?",
+                        1, "Phase 1 of 3 — ordinary taps",
                         2, "Phase 2 of 3 — deliberate holds",
                         3, "Phase 3 of 3 — double taps",
                         4, "Results")
 
     static PROMPT := Map(
+        0, "Measure any key to set the two timings everything falls back to, "
+         . "or pick one input to give ITS hold rows a hold time of their own. "
+         . "Click a line to start.",
         1, "Tap any one key 8 times, at the speed you would really use "
          . "mid-study. Do not try to be quick — be typical.",
         2, "Now press and HOLD the same key 5 times. Hold it just long "
@@ -21708,8 +21752,17 @@ class Calib {
 
     ; ── lifecycle ───────────────────────────────────────────────────────────
 
-    static Show() {
+    /**
+     * input := "" opens on the picker (or straight into phase 1 when nothing
+     * on this machine has a hold row); a code preselects that input, which is
+     * how the map, the tile grid and a row's own menu get here.
+     */
+    static Show(input := "") {
         if IsObject(Calib.lyr) {
+            ; Already up, and someone asked for a DIFFERENT input: retarget
+            ; rather than show a panel measuring something else.
+            if (input != "" && !(input = Calib.target))
+                Calib.Aim(input)
             try {
                 Calib.lyr.Show()
                 Calib.lyr.Activate()
@@ -21717,6 +21770,7 @@ class Calib {
             return
         }
         Calib.Reset()
+        Calib.Aim(input)
         prev := LayerStack.ActiveLayer
         lyr := Layer(Calib.W, Calib.H, "RadMapperCalibrate")
         Calib.lyr := lyr
@@ -21729,7 +21783,6 @@ class Calib {
             Calib.wasEnabled := g_Enabled
             if g_Enabled
                 ToggleEnabled()        ; measure the hand, not the bindings
-            Calib.phase := 1
             Calib.StartHook()
             Calib.Paint()
             lyr.Activate()
@@ -21740,7 +21793,14 @@ class Calib {
     }
 
     static Close(*) {
-        Calib.StopHook()
+        ; StopHook already releases the button, but a throw anywhere in it
+        ; would otherwise leave "*btn" suppressing with no handler -- a mouse
+        ; button dead across the whole machine, which no panel may risk.
+        try {
+            Calib.StopHook()
+        } finally {
+            Calib.StopKeys()
+        }
         if IsObject(Calib.lyr) {
             Atlas.Disown(Calib.lyr)
             try Calib.lyr.Dispose()
@@ -21762,12 +21822,134 @@ class Calib {
         Calib.lastUp := 0
         Calib.recTap := 0
         Calib.recHold := 0
+        Calib.wrong := ""
     }
 
     static Restart(*) {
         Calib.Reset()
         Calib.phase := 1
+        Calib.StartHook()          ; phase 4 gave the button back; take it again
         Calib.Paint()
+    }
+
+    /** Back to the picker from a measurement in progress. */
+    static Rechoose(*) {
+        Calib.Aim("")
+    }
+
+    /**
+     * Point the calibrator at one input (or at "" for any key). Rebuilds the
+     * picker list, resolves the key's vk/sc once, and re-arms capture.
+     *
+     * A wheel is never a target: a notch is an instant, it has no duration to
+     * measure and no hold row to write to.
+     */
+    static Aim(input) {
+        if (input != "" && (IsWheel(input) || !IsInputTarget(input)))
+            input := ""
+        Calib.opts := Calib.Targets()
+        ; A caller may name an input with no hold row yet (the map and the
+        ; tile grid offer this on any button). Keep it in the list so the
+        ; panel can say what it is measuring; Apply reports a write of 0 rows.
+        if (input != "") {
+            seen := false
+            for c in Calib.opts {
+                if (c = input)
+                    seen := true
+            }
+            if !seen
+                Calib.opts.Push(input)
+        }
+        Calib.target := input
+        Calib.tvk := 0
+        Calib.tsc := 0
+        if (input != "" && !IsMouseInput(input)) {
+            try Calib.tvk := GetKeyVK(input)
+            try Calib.tsc := GetKeySC(input)
+        }
+        Calib.Reset()
+        ; Straight to phase 1 when an input was named, and also when there is
+        ; nothing to choose between -- a picker with one line on it is a step
+        ; that only ever asks you to confirm the obvious.
+        Calib.phase := (input != "" || Calib.opts.Length < 2) ? 1 : 0
+        if IsObject(Calib.lyr) {
+            Calib.StartHook()
+            Calib.Paint()
+        }
+    }
+
+    /**
+     * "Any key", then every input that has a hold or tap-then-hold row right
+     * now -- those are the only rows a measured hold time could be written
+     * onto, so anything else would be a line that leads nowhere.
+     */
+    static Targets() {
+        out := [""]
+        seen := Map()
+        seen.CaseSense := "Off"        ; a hand-edited "xbutton1" is XButton1
+        for row in g_Cfg["bindings"] {
+            if !EventUsesHoldMs(MGet(row, "event", ""))
+                continue
+            b := MGet(row, "button", "")
+            if (b = "" || IsWheel(b) || seen.Has(b))
+                continue
+            seen[b] := 1
+            out.Push(b)
+        }
+        return out
+    }
+
+    /** How many rows an Apply for this input would touch, across apps and layers. */
+    static RowsFor(code) {
+        n := 0
+        if (code = "")
+            return 0
+        for row in g_Cfg["bindings"] {
+            if (MGet(row, "button", "") = code
+                && EventUsesHoldMs(MGet(row, "event", "")))
+                n += 1
+        }
+        return n
+    }
+
+    /** True when this input also waits on the TAP window (a tap dance). */
+    static HasDance(code) {
+        if (code = "")
+            return false
+        for row in g_Cfg["bindings"] {
+            ev := MGet(row, "event", "")
+            if (MGet(row, "button", "") = code && (ev = "double" || ev = "triple"))
+                return true
+        }
+        return false
+    }
+
+    static Pick(idx, dbl := false) {
+        if (idx < 1 || idx > Calib.opts.Length)
+            return
+        Calib.Aim(Calib.opts[idx])
+        if (Calib.phase = 0)           ; "Any key" -- Aim leaves the picker up
+            Calib.phase := 1           ; because nothing was named; start it
+        Calib.Paint()
+    }
+
+    static TargetLabel() {
+        return (Calib.target = "") ? "Any key (global)" : InputLabel(Calib.target)
+    }
+
+    /**
+     * The phase prompt with the chosen input's name in it. "Tap any one key"
+     * and "the same key" are wrong instructions when the thing being measured
+     * is button 4, and a prompt that names something else is the fastest way
+     * to get a sample of the wrong hand movement.
+     */
+    static PromptFor(p) {
+        s := Calib.PROMPT[p]
+        if (Calib.target = "")
+            return s
+        lab := InputLabel(Calib.target)
+        s := StrReplace(s, "any one key", lab)
+        return StrReplace(s, "the same key", lab)
     }
 
     ; ── capture ─────────────────────────────────────────────────────────────
@@ -21802,13 +21984,87 @@ class Calib {
             Problem("calibrate", "key capture failed to start: " e.Message)
             Lumi.Toast("Could not start key capture: " e.Message, "danger", 4000)
         }
+        Calib.StartKeys()
+    }
+
+    /**
+     * A mouse button is not a keystroke: no InputHook ever sees it, so the
+     * only way to time one is a pair of SUPPRESSING hotkeys feeding the same
+     * OnDown / OnUp. They are registered with the context CLEARED, because we
+     * have to see the press wherever the pointer is -- the engine's own "*btn"
+     * lives under HotIf(HookActive) and is a separate variant, so switching
+     * ours off later cannot disturb it.
+     */
+    static StartKeys() {
+        Calib.StopKeys()
+        btn := Calib.target
+        if (btn = "" || !IsMouseInput(btn) || IsWheel(btn))
+            return
+        HotIf()
+        try {
+            Hotkey("*" btn, ObjBindMethod(Calib, "MouseDown", btn), "On")
+            Hotkey("*" btn " Up", ObjBindMethod(Calib, "MouseUp", btn), "On")
+            Calib.hkBtn := btn            ; assigned LAST: see the roll-back
+        } catch as e {
+            ; Never leave half a pair behind. hkBtn was not set, so StopKeys
+            ; would not clean up for us and this has to do it here.
+            try Hotkey("*" btn, "Off")
+            try Hotkey("*" btn " Up", "Off")
+            Problem("calibrate", "could not capture " btn ": " e.Message)
+            Lumi.Toast("Could not capture " InputLabel(btn) ": " e.Message,
+                "danger", 4000)
+        } finally {
+            HotIf()                       ; clear again even if Hotkey threw
+        }
+    }
+
+    static StopKeys() {
+        btn := Calib.hkBtn
+        if (btn = "")
+            return
+        Calib.hkBtn := ""                 ; cleared FIRST: a throw below must
+        HotIf()                           ; not make this re-entrant
+        try {
+            try Hotkey("*" btn, "Off")
+            try Hotkey("*" btn " Up", "Off")
+        } finally {
+            HotIf()
+        }
     }
 
     static StopHook() {
-        if IsObject(Calib.ih) {
-            try Calib.ih.Stop()
-            Calib.ih := 0
+        try {
+            if IsObject(Calib.ih) {
+                try Calib.ih.Stop()
+                Calib.ih := 0
+            }
+        } finally {
+            Calib.StopKeys()
         }
+    }
+
+    static MouseDown(btn, *) {
+        Calib.OnDown(0, Calib.MVK, 0)
+    }
+
+    static MouseUp(btn, *) {
+        Calib.OnUp(0, Calib.MVK, 0)
+    }
+
+    /**
+     * True when this press is the thing we were asked to measure. With no
+     * target every key counts, exactly as before. With a KEY target both the
+     * vk and the sc are checked: an sc-only key has no vk, and a numpad key
+     * changes vk with NumLock while keeping its sc.
+     */
+    static Wanted(vk, sc) {
+        if (Calib.target = "")
+            return true
+        if IsMouseInput(Calib.target)
+            return (vk = Calib.MVK)
+        if (vk = Calib.MVK)
+            return false
+        return (Calib.tvk && vk = Calib.tvk) || (Calib.tsc && sc = Calib.tsc)
     }
 
     static OnDown(ih, vk, sc) {
@@ -21816,8 +22072,25 @@ class Calib {
             Calib.Close()
             return
         }
+        ; Enter applies the result. It is a convenience everywhere and the
+        ; ONLY way through when the input being measured is the left button:
+        ; while its hotkeys are live no button on this panel can be clicked.
+        if (vk = 13 && Calib.phase = 4) {
+            Calib.Apply()
+            return
+        }
         if (Calib.phase < 1 || Calib.phase > 3)
             return
+        if !Calib.Wanted(vk, sc) {
+            ; Say so rather than ignoring it silently -- "the calibrator does
+            ; not do anything" is the bug this whole class already has a
+            ; comment about.
+            Calib.wrong := "That is not " Calib.TargetLabel() " — press "
+                         . Calib.TargetLabel() "."
+            Calib.Paint()
+            return
+        }
+        Calib.wrong := ""
         if Calib.downAt                       ; auto-repeat, or a second key
             return
         now := A_TickCount
@@ -21865,8 +22138,13 @@ class Calib {
         p := Calib.phase
         if (p >= 1 && p <= 3 && Calib.Done(p) >= Calib.NEED[p]) {
             Calib.phase := p + 1
-            if (Calib.phase = 4)
+            if (Calib.phase = 4) {
                 Calib.Compute()
+                ; Measuring is over: give the button back. Without this an
+                ; LButton calibration would leave Apply / Start over / Cancel
+                ; unclickable, because our own hotkey is still eating clicks.
+                Calib.StopKeys()
+            }
         }
         Calib.Paint()
     }
@@ -21934,9 +22212,52 @@ class Calib {
 
     ; ── apply ───────────────────────────────────────────────────────────────
 
+    /**
+     * A calibration of ONE input writes that input's rows, never the globals:
+     * the globals are the fallback for every other input on the machine, and
+     * a thumb button that wants 350 ms must not slow down the keyboard. The
+     * tap window stays global either way -- it is measured from gaps between
+     * taps, and no row carries a tap window of its own.
+     */
+    static ApplyInput() {
+        code := Calib.target
+        ht := Calib.recHold
+        lab := InputLabel(code)
+        n := 0
+        ; Straight through the row Maps, so every other field on the row --
+        ; action, app, layer, modifiers -- survives untouched.
+        for row in g_Cfg["bindings"] {
+            if (row is Map && MGet(row, "button", "") = code
+                && EventUsesHoldMs(MGet(row, "event", ""))) {
+                row["holdMs"] := ht
+                n += 1
+            }
+        }
+        if (n = 0) {
+            ; The rows can be deleted from another page while this panel is
+            ; open. Say nothing was written rather than claim a silent success.
+            Calib.Close()
+            HUD(lab " has no hold rows any more — nothing written", "danger")
+            return
+        }
+        AfterCfgChange()
+        ok := Atlas.SaveOrWarn()
+        Calib.Close()
+        try Atlas.Build()
+        if ok
+            HUD("Hold after " ht " ms on " n " row" (n = 1 ? "" : "s")
+                . " for " lab, "jade")
+        else
+            HUD("Applied for now — not written to disk", "danger")
+    }
+
     static Apply(*) {
         if (Calib.phase != 4)
             return
+        if (Calib.target != "") {
+            Calib.ApplyInput()
+            return
+        }
         tw := Calib.recTap
         ht := Calib.recHold
         CfgSet("tapWindow", tw)
@@ -21982,9 +22303,34 @@ class Calib {
         Lumi.Rule(24, 72, w - 48)
 
         Lumi.Label(24, 86, w - 48, Calib.TITLE[p], "section")
+        if (p >= 1) {
+            ; Which input this run is about, on every phase -- and a way back
+            ; to the picker, so choosing the wrong line is not a reopen.
+            Lumi.Label(280, 84, 200, "Measuring " Calib.TargetLabel(),
+                "mute", "right", 20)
+            if (Calib.opts.Length > 1)
+                Lumi.Btn(w - 116, 80, 92, 24, "Change…",
+                    (*) => Calib.Rechoose(), "ghost")
+        }
 
-        if (p <= 3) {
-            Lumi.Para(24, 112, w - 48, 56, Calib.PROMPT[p], "dim")
+        if (p = 0) {
+            Lumi.Para(24, 112, w - 48, 56, Calib.PROMPT[0], "dim")
+            rows := []
+            for c in Calib.opts {
+                if (c = "")
+                    rows.Push({cells: ["Any key (global)", "—",
+                        "tap window + hold threshold"]})
+                else
+                    rows.Push({cells: [InputLabel(c), c,
+                        Calib.RowsFor(c) " hold row"
+                        . (Calib.RowsFor(c) = 1 ? "" : "s")]})
+            }
+            Lumi.List(24, 172, w - 48, h - 250, rows,
+                [{w: 240}, {w: 130, kind: "mono"}, {w: 190, kind: "mute"}],
+                (idx, dbl) => Calib.Pick(idx), 30,
+                ["Measure", "Code", "What it sets"])
+        } else if (p <= 3) {
+            Lumi.Para(24, 112, w - 48, 56, Calib.PromptFor(p), "dim")
             Calib.Ticks(24, 178, Calib.NEED[p], Calib.Done(p))
             Lumi.Label(24, 206, w - 48,
                 Calib.Done(p) " of " Calib.NEED[p] " recorded", "mono", "left", 20)
@@ -21993,9 +22339,49 @@ class Calib {
             Calib.Stat(44, 276, "Taps",    Calib.taps)
             Calib.Stat(44, 302, "Holds",   Calib.holds)
             Calib.Stat(44, 328, "Doubles", Calib.gaps)
+            wait := (Calib.target = "") ? "waiting for a key…"
+                                        : "waiting for " Calib.TargetLabel() "…"
+            ; While we hold "*LButton" nothing on this panel can be clicked,
+            ; so the keyboard has to carry the exits until the last phase ends
+            ; and StopKeys hands the button back.
+            if (Calib.target = "LButton")
+                wait .= "  (Esc cancels — the buttons below come back when "
+                      . "the last phase is done)"
             Lumi.Label(24, 372, w - 48,
-                Calib.downAt ? "holding…" : "waiting for a key…",
-                Calib.downAt ? "accent" : "mute", "left", 20)
+                Calib.wrong != "" ? Calib.wrong
+                                  : (Calib.downAt ? "holding…" : wait),
+                Calib.wrong != "" ? "accent"
+                                  : (Calib.downAt ? "accent" : "mute"),
+                "left", 20)
+        } else if (Calib.target != "") {
+            ; One input: the hold time is the whole result, and it lands on
+            ; that input's rows. The tap window is still shown when the input
+            ; has a tap dance, but only so the number is not lost -- Apply
+            ; does not touch it, because no row carries one.
+            k := Calib.RowsFor(Calib.target)
+            Lumi.Card(24, 108, w - 48, 168)
+            Lumi.Label(44, 122, 300, "Recommended", "section")
+            Lumi.Label(44, 148, 170, "Hold after", "dim", "left", 32)
+            Lumi.Label(220, 148, 110, Calib.recHold " ms", "accent", "left", 32)
+            Lumi.Label(344, 148, 250,
+                "on " k " row" (k = 1 ? "" : "s") " for " Calib.TargetLabel(),
+                "mute", "left", 32)
+            if Calib.HasDance(Calib.target)
+                Lumi.Label(44, 192, w - 88,
+                    "For reference only: your double taps suggest a "
+                    . Calib.recTap " ms tap window (now " Cfg("tapWindow")
+                    . " ms). That setting stays global.", "mute", "left", 32)
+            Lumi.Para(44, 232, w - 88, 40,
+                k = 0 ? "This input has no hold rows, so Apply has nothing to "
+                      . "write. Add a hold row first."
+                      : "Apply writes this onto every hold and tap-then-hold "
+                      . "row for this input, in every program and layer. The "
+                      . "global settings are left alone.", "mute")
+            Lumi.Card(24, 288, w - 48, 84)
+            Lumi.Label(44, 300, 300, "Measured", "section")
+            Calib.Stat(44, 322, "Taps",    Calib.taps)
+            Calib.Stat(260, 322, "Holds",  Calib.holds)
+            Calib.Stat(440, 322, "Gaps",   Calib.gaps)
         } else {
             Lumi.Card(24, 108, w - 48, 168)
             Lumi.Label(44, 122, 300, "Recommended", "section")
