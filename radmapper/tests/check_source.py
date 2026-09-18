@@ -3,7 +3,7 @@ from pathlib import Path
 from collections import Counter
 import re
 s = (Path(__file__).parents[1] / 'RadMapper.ahk').read_text(encoding='utf-8-sig')
-for name, end in [('Lumi', 'Atlas'), ('Atlas', 'Calib')]:
+for name, end in [('Lumi', 'Atlas'), ('Atlas', 'Calib'), ('Calib', 'Shelf'), ('Shelf', 'Chooser'), ('Chooser', 'Warp'), ('Warp', 'GpGFX')]:
     part = s[s.index('class ' + name + ' {'):s.index('class ' + end + ' {')]
     members = re.findall(r'^    static (\w+)\s*(?:\(|:=)', part, re.M)
     assert not [n for n, count in Counter(m.lower() for m in members).items() if count > 1], name
@@ -20,4 +20,4 @@ for ink in ['ink', 'inkDim', 'inkMute']:
     for ground in ['abyss', 'surface', 'raised', 'raised2', 'sunk']:
         a,b = sorted([luminance(tokens[ink]),luminance(tokens[ground])])
         assert (b+.05)/(a+.05) >= 4.5, (ink, ground)
-print('PASS: UI member references, case-insensitive collisions, timer identity, 15 text/background contrast pairs')
+print('PASS: UI member references (Lumi, Atlas, Calib, Shelf, Chooser, Warp), case-insensitive collisions, timer identity, 15 text/background contrast pairs')

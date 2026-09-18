@@ -1,4 +1,4 @@
-# RadMapper 0.6.1-preview
+# RadMapper 0.6.6.5
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -13,8 +13,9 @@ workstation. Treat it as a candidate for testing.
 2. Double-click `RadMapper.ahk`. A tray icon appears and the settings window
    opens on **Home** the first time each version runs.
 3. On Home, pick what you want to do:
-   - **Change what a mouse button does** (a three-question wizard: which
-     button, tap or hold, what it should do; "All options" opens the full editor)
+   - **Change what a mouse button does** (the binding editor: pick the
+     button on the mouse map, then Add new — or right-click the button on
+     the map and choose "Add an assignment here")
    - **Change what a keyboard key does**
    - **Set up a radial menu** (commands around the pointer, picked by direction)
    - **Apply a starter pack** (one click sets up a common arrangement, such as
@@ -71,6 +72,8 @@ inside this one. Size 9 is the numbered ring for presets.
 | Problem | Do this |
 |---|---|
 | A button or modifier seems stuck | Press **Ctrl+Alt+Q**, or **Unstick my buttons** at the bottom of the settings window |
+| One button is too slow (or too quick) to hold | Edit that hold or tap-then-hold row and set **Hold after (ms)**; blank keeps the global threshold, so a heavy thumb button can wait longer than a light side button |
+| I do not know what number to put there | Right-click that button on the mouse map, that key in the tile grid, or the row itself, and pick **Calibrate timing for this button…**: press it a few times and the measured hold time is written onto every hold row for that one input, leaving the global settings alone |
 | I want everything native right now | **Ctrl+Alt+Shift+F11** pauses the whole engine; press again to resume. NumLock also pauses. |
 | The settings window will not open | Tray icon > *Settings (classic)…* opens the plain Windows version |
 | I lost my bindings after updating | You did not. Config lives in `%APPDATA%\RadMapper\RadMapperConfig.json`; the path is shown on Home. |
