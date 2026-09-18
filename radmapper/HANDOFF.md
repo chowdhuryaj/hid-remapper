@@ -22,6 +22,11 @@ Fix: the whole computer froze whenever the user copied or cut (Ctrl+C / Ctrl+X) 
 - `ClipChanged`/`ClipHarvest` blocks byte-identical between repo copy and live copy.
 - Runtime test on Windows still needed: copy/cut in Word/browser/PowerScribe with RadMapper running; confirm no freeze and the Ctrl+Alt+C shelf still fills.
 
+## Leads from the read-only scan (not applied; none causes an every-copy freeze)
+- `Warp.Key` (~L22262 in v0.6.6.5): while the keyboard pointer overlay is open, its suppressing InputHook eats Ctrl+C/X as grid letters. Fix: return early on letters when Ctrl is physically down.
+- `KeyNameValid` (~L2237): accepts bare modifier names (`Ctrl`, `LControl`...) and `c`/`x` as key rows, which puts a main-thread `#HotIf` evaluation on every such press. Consider rejecting bare modifiers in the key picker.
+- GpGFX `Dialog.MsgBox` Ctrl+C handler (~L37473): writes `A_Clipboard` without stamping `g_ClipMine`, so its own copy is re-harvested. Minor.
+
 ## Next steps
 - User runs the fixed v0.6.6.5 copy on the workstation and confirms.
 - Consider syncing the repo copy up to v0.6.6.5 in a separate PR.
