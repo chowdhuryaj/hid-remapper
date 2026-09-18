@@ -4731,8 +4731,11 @@ OnPressHK(btn, *) {
         ; on purpose -- leaving the first press's watch armed would convert
         ; that travel into a native drag and cancel the very gesture it was
         ; aimed at. Eager buttons never armed it on a second press either, so
-        ; this keeps them identical too.
-        if (IsObject(prev.spec) && prev.spec.heldBack)
+        ; this keeps them identical too. Every non-layer-host reason to arm
+        ; the watch is dropped here, not just heldBack: the hold-row watch
+        ; added below the pending branch would otherwise turn the tap-hold's
+        ; own drag into a native drag on the very press that is the hold.
+        if (IsObject(prev.spec) && !prev.spec.layerHost)
             prev.dragEligible := false
         ArmTimers(prev)
         return
@@ -4838,6 +4841,40 @@ OnPressHK(btn, *) {
     ; only: a key cannot drag. Two plain ifs, not if/else -- both merely raise
     ; the same flag, and either reason alone is enough.
     if (spec.heldBack && IsMouseInput(btn))
+        st.dragEligible := true
+    ; And so does ANY mouse button whose tap is a native click of itself and
+    ; whose hold has not fired yet. Without this, a click that turns into a
+    ; DRAG on a button carrying both a tap row and a hold row still fired the
+    ; hold at the threshold: nothing but the two cases above ever cancelled a
+    ; hold on movement, so dragging with the button held past 200 ms opened a
+    ; radial menu / engaged sniper mid-drag. Travel past dragThreshold says
+    ; the gesture was a drag, not a hold, exactly as it does above -- so the
+    ; native down goes out now, the up on release, and MovePoll's gen bump
+    ; kills the pending HoldTimer. A stationary hold is untouched: jitter
+    ; under the threshold resolves nothing.
+    ;   - Requires a hold or tap-hold row: with neither, the press is either
+    ;     eager/pure (never pending) or a pure dance, which heldBack covers.
+    ;   - Requires a REAL native tap row (IsObject, not just tapNative, which
+    ;     is also true for NO tap row). A hold-ONLY button has no click of its
+    ;     own to stretch into a drag, and the pending hold-only case is
+    ;     exactly the one-shot hold -- a radial menu, a macro -- that instant
+    ;     engagement refuses; letting 8 px of trackball drift replace the
+    ;     radial with a dead native drag would be a plain regression.
+    ;   - Keys are excluded (a key cannot drag) and so are wheel/tilt inputs
+    ;     (a notch has no down/up to stretch into a drag).
+    ;   - RBUTTON STAYS OUT, for the reason above it: right-drag IS
+    ;     window/level in IntelliSpace, and a phantom W/L started by a
+    ;     drifting hand is both immediately visible and annoying to undo.
+    ;   - MBUTTON IS IN, but only via the hold requirement -- i.e. only when a
+    ;     row explicitly asked for a hold on it, which the binding editor
+    ;     already warns about (MButtonHoldWarning) precisely because the
+    ;     withheld middle-click makes IntelliSpace panning feel dead for the
+    ;     threshold. Resolving travel into the native middle-drag is the cure
+    ;     for that warning, not a new risk; a middle button with no hold row
+    ;     never reaches here at all.
+    if (IsObject(spec.tap) && spec.tapNative && !spec.layerHost
+        && (IsObject(spec.hold) || IsObject(spec.taphold))
+        && IsMouseInput(btn) && !IsWheel(btn) && btn != "RButton")
         st.dragEligible := true
     ArmTimers(st)
 }
