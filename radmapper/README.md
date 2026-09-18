@@ -72,6 +72,7 @@ inside this one. Size 9 is the numbered ring for presets.
 | Problem | Do this |
 |---|---|
 | A button or modifier seems stuck | Press **Ctrl+Alt+Q**, or **Unstick my buttons** at the bottom of the settings window |
+| One button is too slow (or too quick) to hold | Edit that hold or tap-then-hold row and set **Hold after (ms)**; blank keeps the global threshold, so a heavy thumb button can wait longer than a light side button |
 | I want everything native right now | **Ctrl+Alt+Shift+F11** pauses the whole engine; press again to resume. NumLock also pauses. |
 | The settings window will not open | Tray icon > *Settings (classic)…* opens the plain Windows version |
 | I lost my bindings after updating | You did not. Config lives in `%APPDATA%\RadMapper\RadMapperConfig.json`; the path is shown on Home. |

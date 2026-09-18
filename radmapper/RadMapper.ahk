@@ -1977,6 +1977,18 @@ EventLabelOf(code) {
     return code
 }
 
+; The trigger as a LIST shows it: the words, plus the row's own hold
+; threshold when it has one. An override that is invisible in the list is an
+; override nobody can find again -- and "why does this one button feel slow"
+; is exactly the question the list has to answer.
+RowTriggerLabel(row) {
+    out := EventLabelOf(MGet(row, "event", ""))
+    if (row is Map && row.Has("holdMs")
+        && EventUsesHoldMs(MGet(row, "event", "")))
+        out .= " (" row["holdMs"] " ms)"
+    return out
+}
+
 EventCodeOf(label) {
     for code, l in EVENT_LABELS {
         if (l = label)
@@ -2343,7 +2355,7 @@ CfgSet(k, v) {
 ; held-button path ("XButton2" or nested "XButton2/XButton1", cap depth 2).
 ; The old separate "while" field is gone -- a button hosts a layer simply by
 ; having rows scoped to it, and holding it arms that layer (see MatchScore).
-NewBinding(app, layer, mods, button, event, type, value) {
+NewBinding(app, layer, mods, button, event, type, value, holdMs := "") {
     b := Map()
     b["app"] := app
     b["layer"] := layer
@@ -2354,6 +2366,13 @@ NewBinding(app, layer, mods, button, event, type, value) {
     a["type"] := type
     a["value"] := value
     b["action"] := a
+    ; The per-row hold threshold is PRESENT only when it is really set: an
+    ; absent key is what "use the global" means everywhere downstream, so a 0
+    ; or a blank must leave no key behind at all rather than a third state
+    ; nothing reads. See RowHoldMs.
+    n := ClampInt(IsObject(holdMs) ? "" : holdMs, 50, 2000, 0)
+    if n
+        b["holdMs"] := n
     return b
 }
 
@@ -3254,8 +3273,24 @@ ValidateCfg() {
     kept := []
     for row in g_Cfg["bindings"] {
         if (row is Map && row.Has("button") && row.Has("event")
-            && MGet(row, "action") is Map && MGet(row, "action").Has("type"))
+            && MGet(row, "action") is Map && MGet(row, "action").Has("type")) {
+            ; The optional per-row hold threshold is DROPPED, not clamped,
+            ; when a hand edit puts something unusable there: "fast", 5 or an
+            ; object must fall back to the global the Settings page shows,
+            ; not to a silently invented 50 ms that no page explains. Same
+            ; treatment the app-profile fields below get, and the same reason.
+            ; An in-range value is coerced to Integer because JSON hands "350"
+            ; back as a String and SetTimer wants a number.
+            if row.Has("holdMs") {
+                v := row["holdMs"]
+                if (IsObject(v) || !IsInteger(v)
+                    || Integer(v) < 50 || Integer(v) > 2000)
+                    row.Delete("holdMs")
+                else
+                    row["holdMs"] := Integer(v)
+            }
             kept.Push(row)
+        }
     }
     g_Cfg["bindings"] := kept
     kept := []
@@ -4286,6 +4321,14 @@ SpecFor(btn, ctx) {
     heldBack := !eager && tapNative && !IsObject(hold) && !layerHost
         && (IsObject(double) || IsObject(triple) || IsObject(taphold))
 
+    ; The threshold this press must wait, resolved here with everything else
+    ; so ArmTimers stays two lines. TWO numbers, because the second press of a
+    ; tap-then-hold fires the TAPHOLD row -- HoldTimer picks its binding the
+    ; same way -- and that row carries its own override; with both bound and
+    ; disagreeing, the one that will actually fire wins.
+    holdMs := RowHoldMs(hold)
+    tapHoldMs := RowHoldMs(taphold)
+
     waitTaps := 1
     if IsObject(double)
         waitTaps := 2
@@ -4298,7 +4341,7 @@ SpecFor(btn, ctx) {
         taphold: taphold, layerHost: layerHost, pure: pure,
         instantTap: instantTap, instantHold: instantHold, eager: eager,
         waitTaps: waitTaps, tapNative: tapNative, remap: remap,
-        heldBack: heldBack}
+        heldBack: heldBack, holdMs: holdMs, tapHoldMs: tapHoldMs}
 }
 
 
@@ -4814,10 +4857,47 @@ TapMs() {
     return ClampInt(Cfg("tapWindow"), 30, 1000, 100)
 }
 
+; The two triggers that WAIT on the hold threshold, and therefore the only
+; two a per-row "holdMs" can change. Anything else would carry a number that
+; never runs, so the editors neither offer it nor keep it.
+EventUsesHoldMs(event) {
+    return (event = "hold" || event = "taphold")
+}
+
+; This row's own hold threshold, or the global.
+;
+; One global 200 ms cannot suit every input on one hand: a heavy thumb button
+; needs longer or its deliberate taps read as holds, while a light side button
+; wants less than 200 ms of wait before it engages. A hold or tap-then-hold
+; row may therefore carry "holdMs"; ABSENT means "the global", which is why
+; nothing writes a 0 or a "" there. Clamped to the same 50-2000 the Settings
+; page and the calibrator enforce, and falling back to the GLOBAL rather than
+; to a bound nobody chose -- ValidateCfg drops junk on the way in, this is the
+; guard on the way out, exactly as HoldMs() is for the setting.
+RowHoldMs(row) {
+    if !(row is Map) || !row.Has("holdMs")
+        return HoldMs()
+    v := row["holdMs"]
+    return ClampInt(IsObject(v) ? "" : v, 50, 2000, HoldMs())
+}
+
 ArmTimers(st) {
     st.gen += 1
-    SetTimer(HoldTimer.Bind(st, st.gen), -HoldMs())
+    SetTimer(HoldTimer.Bind(st, st.gen), -SpecHoldMs(st))
     StartPollIfNeeded(st)
+}
+
+; Which of the spec's two thresholds THIS press waits on. tapCount > 0 means
+; the next thing that can fire is the tap-then-hold, which is exactly how
+; HoldTimer chooses its binding -- the wait and the row that ends it have to
+; agree, or a taphold row's 350 ms would be armed for the hold row's 200 ms.
+; A state with no spec (there should be none) falls back to the global rather
+; than throwing inside a hotkey thread.
+SpecHoldMs(st) {
+    sp := st.spec
+    if !IsObject(sp)
+        return HoldMs()
+    return (st.tapCount > 0 && IsObject(sp.taphold)) ? sp.tapHoldMs : sp.holdMs
 }
 
 StartPollIfNeeded(st) {
@@ -5308,7 +5388,7 @@ ConflictScope(row) {
 
 ConflictRowText(row) {
     return InputLabel(MGet(row, "button", "")) " · "
-        . EventLabelOf(MGet(row, "event", "")) " → "
+        . RowTriggerLabel(row) " → "
         . DescribeAction(MGet(row, "action", Map()))
 }
 
@@ -5426,13 +5506,18 @@ ConflictReport(focus := "") {
                         . TapMs() " ms before it fires, because a double-tap, "
                         . "triple-tap or tap-hold is bound on the same button."})
             }
+            ; RowHoldMs, not HoldMs: a row with its own threshold waits ITS
+            ; number, and a report that quotes the global instead is the one
+            ; place someone would go to find out why this button feels slow.
             if (IsObject(sc.hold) && !tapNative)
                 out.Push({kind: "info", text: lbl " " where ": the tap fires on "
-                    . "release (a hold is bound); holding past " HoldMs()
+                    . "release (a hold is bound); holding past "
+                    . RowHoldMs(sc.hold)
                     . " ms does " DescribeAction(sc.hold["action"]) "."})
             if (IsObject(sc.hold) && b = "MButton")
                 out.Push({kind: "warn", text: "Middle button " where ": the hold "
-                    . "withholds the physical middle click for " HoldMs()
+                    . "withholds the physical middle click for "
+                    . RowHoldMs(sc.hold)
                     . " ms, so a middle-drag starts late."})
         }
     }
@@ -12548,6 +12633,28 @@ ReadModBoxes(boxes) {
 
 ; preset ({btn, app, layer} object) prefills a NEW row's context -- the
 ; mouse-map view opens dialogs already aimed at the clicked zone + selectors.
+; ── the classic dialogs' "Hold ms" box ───────────────────────────────────
+; Blank means the global threshold, which downstream is an ABSENT key (see
+; RowHoldMs). The box is a Number edit, so there is nothing to validate --
+; the only reachable mistakes are out of range, and NewBinding clamps those
+; to the same 50-2000 the Settings page enforces.
+;
+; This window cannot rebuild itself around the trigger the way the Atlas
+; editor does, so the box is GREYED instead of removed: only "hold" and
+; "tap, then hold" wait on the threshold, and an editable box on a "tap" row
+; invites a number that could never run. Both OK paths ignore it regardless.
+SyncHoldMsField(dlg, ddEvent) {
+    try dlg["HoldMs"].Enabled := EventUsesHoldMs(ddEvent.Text)
+}
+
+ReadHoldMsField(dlg, event) {
+    if !EventUsesHoldMs(event)
+        return ""
+    v := ""
+    try v := Trim(dlg["HoldMs"].Value)
+    return v
+}
+
 BindingDlg(editRow, preset := 0) {
     row := editRow ? g_Cfg["bindings"][editRow] : 0
     dlg := Gui("+Owner" . g_UI.g.Hwnd, editRow ? "Edit binding" : "Add binding")
@@ -12583,7 +12690,16 @@ BindingDlg(editRow, preset := 0) {
     dlg.AddText("x12 y142 w70", "Event:")
     ddEvent := dlg.AddDropDownList("x120 y138 w200", EVENT_ITEMS)
     ChooseText(ddEvent, EVENT_ITEMS, row ? MGet(row, "event", "tap") : "tap")
-    ddBtn.OnEvent("Change", (*) => AutoTurnEvent(ddBtn, ddEvent))
+    dlg.AddText("x326 y142 w58", "Hold ms:")
+    dlg.AddEdit("x386 y138 w64 Number vHoldMs",
+        row ? String(MGet(row, "holdMs", "")) : "")
+    SyncHoldMsField(dlg, ddEvent)
+    ; AutoTurnEvent can move the trigger to "turn" from under the box, so the
+    ; input change re-syncs it too -- a Change on a control nothing typed in
+    ; does not fire on its own.
+    ddBtn.OnEvent("Change", (*) => (AutoTurnEvent(ddBtn, ddEvent),
+        SyncHoldMsField(dlg, ddEvent)))
+    ddEvent.OnEvent("Change", (*) => SyncHoldMsField(dlg, ddEvent))
 
     dlg.AddText("x12 y174 w70", "Action:")
     ddAct := dlg.AddDropDownList("x120 y170 w330", ACT_LABELS)
@@ -12651,7 +12767,7 @@ BindingOkRun(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) 
     if !ok
         return
     b := NewBinding(AppCodeFromDisp(ddApp.Text), lay, ReadModBoxes(boxes), btn,
-        event, atype, val)
+        event, atype, val, ReadHoldMsField(dlg, event))
     try {
         ; The list edit alone is indivisible; SaveCfg (a disk write) and the
         ; refreshes are deliberately left interruptible. The HUD waits until
@@ -12836,6 +12952,11 @@ KeyDlg(editRow) {
     }
     ddEvent := dlg.AddDropDownList("x120 y138 w200", keyEvents)
     ChooseText(ddEvent, keyEvents, row ? MGet(row, "event", "tap") : "tap")
+    dlg.AddText("x326 y142 w58", "Hold ms:")
+    dlg.AddEdit("x386 y138 w64 Number vHoldMs",
+        row ? String(MGet(row, "holdMs", "")) : "")
+    SyncHoldMsField(dlg, ddEvent)
+    ddEvent.OnEvent("Change", (*) => SyncHoldMsField(dlg, ddEvent))
 
     dlg.AddText("x12 y174 w70", "Action:")
     ddAct := dlg.AddDropDownList("x120 y170 w330", ACT_LABELS)
@@ -12942,7 +13063,7 @@ KeyOkRun(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     if !ok
         return
     b := NewBinding(AppCodeFromDisp(ddApp.Text), lay, mods, key,
-        event, atype, val)
+        event, atype, val, ReadHoldMsField(dlg, event))
     try {
         Critical "On"                ; only the list edit is indivisible; the
         msg := ""                    ; disk write, the refreshes and the toast
@@ -17339,12 +17460,16 @@ class Atlas {
                 continue
             act := IsInertRow(row) ? "Native (system default)"
                 : DescribeAction(row["action"])
-            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")), act,
+            rows.Push({cells: [RowTriggerLabel(row), act,
                                MGet(row, "mods", "")]})
             Atlas.rowRefs.Push(i)
         }
+        ; "When you" is wider than it was because it now has to fit "Hold it
+        ; down (350 ms)" -- a per-row threshold elided away is one nobody can
+        ; see. The width comes out of "It does", so the three columns still
+        ; add up to the same list.
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
-            [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
+            [{w: 160, kind: "mute"}, {w: lw - 290}, {w: 90, kind: "code"}],
             Atlas.Picker("mouse"), 30,
             ["When you", "It does", "Also hold"])
 
@@ -17770,12 +17895,16 @@ class Atlas {
             ; and therefore impossible to edit or delete from here.
             act := IsInertRow(row) ? "Native (system default)"
                 : DescribeAction(row["action"])
-            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")), act,
+            rows.Push({cells: [RowTriggerLabel(row), act,
                                MGet(row, "mods", "")]})
             Atlas.rowRefs.Push(i)
         }
+        ; "When you" is wider than it was because it now has to fit "Hold it
+        ; down (350 ms)" -- a per-row threshold elided away is one nobody can
+        ; see. The width comes out of "It does", so the three columns still
+        ; add up to the same list.
         Atlas.list := Lumi.List(lx, y + 118, lw, h - 210, rows,
-            [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
+            [{w: 160, kind: "mute"}, {w: lw - 290}, {w: 90, kind: "code"}],
             Atlas.Picker("key"), 30,
             ["When you", "It does", "Also hold"])
 
@@ -19812,7 +19941,9 @@ class Atlas {
             MGet(r, "mods", ""), MGet(r, "button", ""),
             MGet(r, "event", "tap"),
             IsObject(a) ? MGet(a, "type", "keys") : "keys",
-            IsObject(a) ? MGet(a, "value", "") : "")
+            IsObject(a) ? MGet(a, "value", "") : "",
+            MGet(r, "holdMs", ""))       ; a copy that waits differently is
+                                         ; not a copy
         Atlas.OpenDlg(() => Atlas.BindDlg(0,
             IsKeyInput(MGet(r, "button", "")), seed))
     }
@@ -20013,7 +20144,22 @@ class Atlas {
         for e in events
             evWords.Push(EventLabelOf(e))
         st.event := Lumi.Select(150, 196, 240, 30, evWords,
-            Atlas.IndexOfText(events, ev))
+            Atlas.IndexOfText(events, ev), Atlas.EventPicked(st))
+
+        ; ── this row's own hold threshold (v0.6.6.5+) ────────────────────
+        ; Only where it can fire: "hold" and "tap, then hold" are the two
+        ; triggers that WAIT, and a number on any other row would never run.
+        ; Blank is the ordinary answer and means the global, so the field
+        ; SAYS what the global currently is instead of pre-filling it -- a
+        ; number typed here is a deliberate override for this one row, which
+        ; is the whole point (a heavy thumb button needs longer than a light
+        ; side button, and one setting cannot be both).
+        if EventUsesHoldMs(ev) {
+            Lumi.Label(400, 196, 110, "Hold after (ms)", "dim", "left", 30)
+            st.holdMs := Lumi.Field(514, 196, 122, 30,
+                row ? String(MGet(row, "holdMs", "")) : "", 0,
+                "blank = global " HoldMs() " ms", true)
+        }
 
         Lumi.Label(24, 238, 120, "Also hold", "dim", "left", 30)
         mods := row ? MGet(row, "mods", "") : ""
@@ -20096,6 +20242,43 @@ class Atlas {
      */
     static EventChoices(keyMode) {
         return ["tap", "double", "triple", "hold", "taphold", "turn"]
+    }
+
+    /**
+     * Trigger changed: "Hold after (ms)" belongs to 'hold' and 'taphold' and
+     * to nothing else, and this kit can no more add or remove a widget in
+     * place than it can swap the Details one. Same answer as ActHint --
+     * reopen the dialog around the answers already given -- and only when
+     * the field actually has to appear or disappear, so walking the trigger
+     * list with the arrow keys does not rebuild on every step.
+     */
+    static EventPicked(st) {
+        return (i, t) => Atlas.EventHold(st, i)
+    }
+
+    static EventHold(st, i) {
+        ev := st.events.Has(i) ? st.events[i] : "tap"
+        if (EventUsesHoldMs(ev) = (st.HasProp("holdMs") ? 1 : 0))
+            return                           ; the dialog is already right
+        Lumi.EndEdit()
+        seed := Atlas.BindDraft(st, Atlas.ActCode(st.act))
+        ; BindDraft resets Details to the action's default, which is right
+        ; when the ACTION moved under it and wrong here: the action has not
+        ; moved, so whatever has been typed must survive the reopen. A
+        ; threshold already typed rides along in BindDraft.
+        seed["action"]["value"] := Atlas.DlgValue(st)
+        SetTimer(() => Atlas.OpenDlg(()
+            => Atlas.BindDlg(st.idx, st.keyMode, seed)), -1)
+    }
+
+    /**
+     * The "Hold after (ms)" field as it stands, or "" when the dialog is not
+     * showing one. Blank means the global, and the global is an ABSENT key.
+     */
+    static DlgHoldMs(st) {
+        if !st.HasProp("holdMs")
+            return ""
+        return Trim(Lumi.FieldValue(st.holdMs))
     }
 
     /** A new row starts on the only trigger its input can actually fire. */
@@ -20210,7 +20393,8 @@ class Atlas {
             btn := InputCodeFromLabel(st.input.items.Has(st.input.index)
                 ? st.input.items[st.input.index] : "")
         return NewBinding(app, lay, mods, btn, event, atype,
-            Atlas.DefaultValueFor(atype))
+            Atlas.DefaultValueFor(atype),
+            EventUsesHoldMs(event) ? Atlas.DlgHoldMs(st) : "")
     }
 
     ; ── VALUE TOOLS ─────────────────────────────────────────────────────────
@@ -20400,7 +20584,22 @@ class Atlas {
         if !ok
             return
 
-        b := NewBinding(app, lay, mods, btn, event, atype, val)
+        ; Blank = the global, and the global is an absent key: NewBinding
+        ; builds a fresh row every save, so clearing the field deletes it.
+        ; Junk is refused rather than quietly ignored -- a number that does
+        ; not take is worse than no field at all.
+        ; Out of range is REFUSED here rather than clamped: 5 becoming 50
+        ; without a word is exactly the kind of number nobody can account for
+        ; later. NewBinding still clamps, for every other caller.
+        hms := EventUsesHoldMs(event) ? Atlas.DlgHoldMs(st) : ""
+        if (hms != "" && (!IsInteger(hms) || Integer(hms) < 50
+            || Integer(hms) > 2000)) {
+            Lumi.Toast("Hold after (ms) takes a whole number from 50 to 2000,"
+                . " or nothing at all for the global " HoldMs() " ms",
+                "warn", 3600)
+            return
+        }
+        b := NewBinding(app, lay, mods, btn, event, atype, val, hms)
         ; An EDIT can collide too: change the button or the event of an
         ; existing row onto one that already exists and a row is silently
         ; dropped. Count the duplicates that are not this row and not inert.
