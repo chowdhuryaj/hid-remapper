@@ -2229,13 +2229,42 @@ NormalizeInputName(s) {
     return s
 }
 
+; A BARE modifier, as the key of a key row. Hotkey() would happily take it,
+; which is exactly why it has to be refused here: a key row registers
+; "*<key>" under HotIf(KbHookActive) (SyncHooks), and that both forces a
+; main-thread #HotIf evaluation on every press AND suppresses the key. A row
+; on Ctrl therefore sits on top of every Ctrl+C, Ctrl+V and Ctrl+Z in
+; PowerScribe -- the modifier stops reaching the app as a modifier and the
+; workstation loses copy/paste. Modifiers belong in the Modifiers checkboxes
+; (they qualify a row), or in a layer, never as the row's own key.
+; Case-insensitive: "ctrl" and "CTRL" are the same key name to AHK.
+IsBareModifierName(name) {
+    static mods := ["Ctrl", "Control", "LControl", "RControl", "LCtrl", "RCtrl",
+        "Shift", "LShift", "RShift", "Alt", "LAlt", "RAlt",
+        "Win", "LWin", "RWin"]
+    for m in mods {
+        if (m = name)                        ; "=" is AHK's case-insensitive compare
+            return true
+    }
+    return false
+}
+
 ; A name AHK can actually build a hotkey from. GetKeyVK/GetKeySC throw on an
 ; unknown name, which is exactly the test we want -- and unlike a trial
 ; Hotkey() registration it leaves NO variant behind (a stray disabled global
 ; variant would shadow the context-scoped one the engine registers later and
 ; silently un-remap the key).
+; TRADEOFF, deliberately not fixed here: a row on a single LETTER ("c") is
+; still accepted, because a letter under a layer is a legitimate binding --
+; but a letter row with no layer suppresses that letter everywhere
+; KbHookActive is true, which breaks plain typing and Ctrl+C. ConflictReport
+; does not flag that case today (it reasons about rows against each other,
+; not about a row against the OS), so nothing warns the user. Adding that
+; warning belongs in ConflictReport, not in this validator.
 KeyNameValid(name) {
     if (name = "" || InStr(name, "{") || InStr(name, "}") || InStr(name, " "))
+        return false
+    if IsBareModifierName(name)
         return false
     try {
         if (GetKeyVK(name) != 0 || GetKeySC(name) != 0)
@@ -10236,8 +10265,14 @@ SyncHooks() {
             continue
         if !KeyNameValid(name) {             ; braces, a combo, or a typo: say
             bad .= (bad = "" ? "" : ", ") name        ; so, never fail silently
-            Problem("bad-key", "'" name "' is not a key AutoHotkey can hook"
-                . " -- the row does nothing. Edit it in the Keyboard tab.")
+            Problem("bad-key", IsBareModifierName(name)
+                ? ("A bare modifier (Ctrl, Shift, Alt, Win) cannot be a key"
+                    . " row -- combine it with another key. '" name "' is"
+                    . " refused rather than hooked, because hooking it would"
+                    . " suppress the modifier and break Ctrl+C. Edit it in the"
+                    . " Keyboard tab.")
+                : ("'" name "' is not a key AutoHotkey can hook"
+                    . " -- the row does nothing. Edit it in the Keyboard tab."))
             continue
         }
         done := []
@@ -12621,6 +12656,16 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     if IsMouseInput(key) {
         MsgBox("That is a mouse input. Add it in the Mouse tab, where the"
             . " mouse map applies.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
+    if IsBareModifierName(key) {
+        MsgBox("A bare modifier (Ctrl, Shift, Alt, Win) cannot be a key row"
+            . " -- combine it with another key.`n`nA row on " key " is hooked"
+            . " as '*" key "' and SUPPRESSED, so every Ctrl+C, Ctrl+V and"
+            . " Ctrl+Z in PowerScribe would lose its modifier.`n`nUse the"
+            . " Modifiers checkboxes above to say '" key " + something', or"
+            . " put the rows under a layer.",
+            "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
     if !KeyNameValid(key) {
@@ -19736,6 +19781,11 @@ class Atlas {
                 "danger", 2800)
             return
         }
+        if (st.keyMode && IsBareModifierName(btn)) {
+            Lumi.Toast("A bare modifier (Ctrl, Shift, Alt, Win) cannot be a key"
+                . " row — combine it with another key", "danger", 3600)
+            return
+        }
         if (st.keyMode && !KeyNameValid(btn)) {
             Lumi.Toast("RadMapper cannot watch '" btn "' — use a"
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
@@ -20038,6 +20088,11 @@ class Atlas {
         if (!st.keyMode && !IsMouseInput(host)) {
             Lumi.Toast("'" host "' is a key — set this up on the Keyboard"
                 . " tab", "danger", 3000)
+            return
+        }
+        if (st.keyMode && IsBareModifierName(host)) {
+            Lumi.Toast("A bare modifier (Ctrl, Shift, Alt, Win) cannot be a key"
+                . " row — combine it with another key", "danger", 3600)
             return
         }
         if (st.keyMode && !KeyNameValid(host)) {
@@ -22267,6 +22322,28 @@ class Warp {
         Warp.Idle()
         shift := GetKeyState("Shift", "P")
         ctrl := GetKeyState("Ctrl", "P")
+        ; Ctrl+letter / Ctrl+digit belongs to the APP, not the grid. Ctrl+C and
+        ; Ctrl+X were being eaten as grid hops because this hook suppresses
+        ; everything (StartHook: KeyOpt "{All}","N" plus VisibleText and
+        ; VisibleNonText false) and the letter branch never looked at Ctrl.
+        ; KeyOpt cannot express "visible only when chorded" -- its option
+        ; string applies to a key, not to a key+modifier combination -- so
+        ; there is no clean way to let just the chord through the hook.
+        ; Instead we get out of the way: close the overlay (which stops the
+        ; hook) and re-send the bare key. Ctrl is still PHYSICALLY down --
+        ; StartHook deliberately leaves the modifiers visible -- so {Blind}
+        ; leaves that state alone and the app sees the real chord. Our own
+        ; synthetic key cannot come back around: SendLevel is 0, so it does
+        ; not re-trigger this hook or the engine's own "*key" rows.
+        if (ctrl && ((vk >= 48 && vk <= 57) || (vk >= 65 && vk <= 90)
+            || (vk >= 96 && vk <= 105))) {
+            name := ""
+            try name := GetKeyName(Format("vk{:X}", vk))
+            Warp.Close(true)
+            if (name != "")
+                SafeSend("{Blind}{" name "}")
+            return
+        }
         try {
             switch vk {
                 case 27: Warp.Close(true)                    ; Esc
@@ -23014,7 +23091,7 @@ class Warp {
 ;  two engines to hook the mouse at once), and nothing RadMapper does uses
 ;  the worker pool.
 ; ------------------------------------------------------------------------------
-;  MODIFICATIONS -- SEVEN, all marked in place. Nothing else is changed.
+;  MODIFICATIONS -- EIGHT, all marked in place. Nothing else is changed.
 ;
 ;  1. `#Warn All` -> `#Warn All, Off` (a few lines below). It is a development
 ;     aid; AutoHotkey applies the directive across the whole script, so left
@@ -23066,6 +23143,11 @@ class Warp {
 ;  7. GDI+ startup installs `RadUnhandledError` instead of hiding every layer
 ;     and allowing AutoHotkey's default modal error box. The failing thread
 ;     still ends; the reading workstation stays free of background modals.
+;
+;  8. `Dialog.MsgBox`'s Ctrl+C handler writes the clipboard through
+;     `_GpGfx_DlgCopy`, which stamps `g_ClipMine` first. Without it the
+;     dialog's own copy is re-harvested by RadMapper's clipboard Shelf as
+;     though the user had copied it, evicting whatever they really copied.
 ; ------------------------------------------------------------------------------
 ; MIT License
 ;
@@ -37111,6 +37193,24 @@ class systext {
 ; Github:    https://github.com/bceenaeiklmr/GpGFX
 
 
+; --- RadMapper modification #8 (see the §15 header) ---------------------------
+; Dialog.MsgBox copies its own text to the clipboard on Ctrl+C. RadMapper
+; watches the clipboard (ClipChanged -> ClipHarvest) to build the Shelf, so
+; without a stamp the dialog's copy is harvested as if the USER had copied
+; something -- a RadMapper error box would push its own text onto the Shelf and
+; displace a finding the radiologist had just copied out of PowerScribe.
+; Stamping the tick before the write is exactly what Shelf.SetClip does.
+; IsSet: g_ClipMine is RadMapper's global, so if this library section is ever
+; lifted back out on its own the helper still just writes the clipboard.
+_GpGfx_DlgCopy(text) {
+    global g_ClipMine
+    if IsSet(g_ClipMine)
+        g_ClipMine := A_TickCount
+    A_Clipboard := text
+    return text                  ; the call site is a ternary operand
+}
+; -----------------------------------------------------------------------------
+
 /**
  * Modern Minimalist Vector Dialog & MsgBox Engine for GpGFX.
  * Features:
@@ -37520,7 +37620,7 @@ class Dialog {
             (!WinActive("ahk_id " . dlgHwnd) && DllCall("user32\GetForegroundWindow", "ptr") != dlgHwnd) ? 0 :
             (vk == 13 && !GetKeyState("Shift", "P") && !GetKeyState("Ctrl", "P") && !GetKeyState("Alt", "P")) ? (resultVal := (btnType == "YesNo" ? "Yes" : "OK"), isDone := true) :
             (vk == 27) ? (resultVal := (btnType == "YesNo" ? "No" : "Cancel"), isDone := true) :
-            ((vk == 67 || vk == 99) && (GetKeyState("Ctrl", "P") || GetKeyState("Control", "P"))) ? (A_Clipboard := clipFormatted) : 0
+            ((vk == 67 || vk == 99) && (GetKeyState("Ctrl", "P") || GetKeyState("Control", "P"))) ? _GpGfx_DlgCopy(clipFormatted) : 0
         )
         ih.Start()
 
