@@ -13,6 +13,7 @@
 - Ctrl+C leads: Warp passes Ctrl+letter/digit to the app (closes overlay, re-sends with {Blind}); `KeyNameValid` rejects bare modifiers; GpGFX dialog stamps `g_ClipMine`.
 - UX (12 items): Duplicate row (Ctrl+D), hotkey rows for Shelf/Scratchpad/Warp/Click lock on Settings (4-column band), "Change…" edits the existing essential, single-row delete with Ctrl+Z undo toast, row 1 selected on Menus/Macros/Apps, "Save & practice", Ctrl+S/Ctrl+Enter commit, dropdown typeahead, right-click on zones/tiles, starter pack offers to create a missing menu, help/README text, 26 px Home buttons.
 - Freeze/crash sweep (16 items): see commit 6bb7f3f message.
+- Calibrator: picker for "Any key (global)" or one input with hold rows; aimed at an input it captures that key/mouse button and Apply writes holdMs onto that input's hold/taphold rows (globals untouched). Entry from zone/tile/row right-click. check_source.py now covers Calib, Shelf, Chooser, Warp.
 - Tap/hold: per-row `holdMs` on hold/taphold rows (engine `RowHoldMs`/`SpecHoldMs`, editor field "Hold after (ms)", classic dialogs, list suffix, conflicts text). Pointer travel past dragThreshold during a pending tap+hold press on any mouse button except RButton becomes a native drag and cancels the hold (`OnPressHK` dragEligible broadening).
 
 ## Decisions
@@ -31,6 +32,7 @@
   - Practice wheel from "Save & practice": settings window does not flash back.
   - Hold thumb button, scroll the app switcher, release (ClearBS now clears st.down).
   - Animations still run on a machine without GpGFX.Core.dll (FrameTimer Stop now works).
+  - Calibrator: Diagnostics entry still global; right-click button 4 → Calibrate → rows show "(N ms)", globals unchanged; LButton run: Esc cancels, Apply clickable at results, nothing stuck afterwards; wrong key shows a hint.
   - Tap/hold: set "Hold after (ms)" on one thumb-button hold row and confirm it fires at that time; drag button 4 (tap+hold) > 8 px → native drag, no hold; stationary hold fires; jitter < 8 px does not resolve; taphold second press keeps its own travel; hold-only radial still opens while drifting.
 
 ## Key files
