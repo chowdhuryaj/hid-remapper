@@ -685,6 +685,8 @@
 #SingleInstance Force
 #UseHook
 SendMode "Event"            ; Event + zero delays: injected input flows through
+#ClipboardTimeout 250       ; bound any A_Clipboard read: a locked clipboard
+                            ; must never stall the hook thread for the default 1 s
 SetKeyDelay -1, -1          ; our own hooks (and is ignored by them) without
 SetMouseDelay -1            ; SendInput's temporary hook removal
 CoordMode "Mouse", "Screen"
@@ -15868,6 +15870,54 @@ ClipChanged(type) {
     if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
         return
     if (A_TickCount - g_ClipMine < 1200)     ; our own paste, not the user's
+        return
+    ; NO CLIPBOARD I/O ON THIS THREAD. WM_CLIPBOARDUPDATE arrives while the
+    ; source app may still own the clipboard or render it only on demand
+    ; (Office, browsers, Citrix, PowerScribe RTF), so reading A_Clipboard here
+    ; blocks waiting on that app -- and because this script carries the
+    ; low-level keyboard and mouse hooks, a blocked thread stalls ALL input on
+    ; the machine. That is the whole-computer freeze on copy. Arm a one-shot
+    ; timer and get out; a second notification re-arms the SAME timer instead
+    ; of stacking, so a burst of copies collapses into one harvest.
+    SetTimer(ClipHarvest, -150)
+}
+
+/** The real work, off the hook thread, once the source app has finished. */
+ClipHarvest() {
+    global g_Clip, g_ClipMine
+    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
+        return
+    ; Asking which formats are present never touches the data, so it cannot
+    ; block on a delayed-render owner the way a read can. Text only.
+    if (!DllCall("IsClipboardFormatAvailable", "uint", 13))   ; CF_UNICODETEXT
+        return
+    ; A hung owner would make any read wait on a process that is not answering.
+    own := DllCall("GetClipboardOwner", "ptr")
+    if (own && DllCall("IsHungAppWindow", "ptr", own))
+        return
+    ; Size check WITHOUT materialising the text: measuring StrLen(A_Clipboard)
+    ; means copying the whole payload first, which is the expensive half of
+    ; what we are trying to avoid. Bounded retry -- if another app holds the
+    ; clipboard right now, give up silently and catch the next copy.
+    size := 0
+    opened := false
+    Loop 5 {
+        if (DllCall("OpenClipboard", "ptr", 0)) {
+            opened := true
+            break
+        }
+        Sleep(10)
+    }
+    if (!opened)
+        return
+    try {
+        h := DllCall("GetClipboardData", "uint", 13, "ptr")
+        if (h)
+            size := DllCall("GlobalSize", "ptr", h, "uptr")
+    } finally {
+        DllCall("CloseClipboard")            ; must run on every exit path
+    }
+    if (size > 2 * (20000 + 1))              ; UTF-16 bytes vs the 20000-char cap
         return
     try {
         txt := A_Clipboard
