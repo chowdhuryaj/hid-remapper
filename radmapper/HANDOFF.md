@@ -1,36 +1,34 @@
 # RadMapper handoff
 
 ## Objective
-Fix: the whole computer froze whenever the user copied or cut (Ctrl+C / Ctrl+X) in any app while RadMapper was running.
+1. Fix: whole computer froze on every copy/cut with RadMapper running. (done)
+2. Follow-ups: three Ctrl+C leads, a full freeze/crash sweep with fixes, and a UX pass to cut clicks. (done)
 
-## Root cause
-`ClipChanged` (registered via `OnClipboardChange`) read `A_Clipboard` synchronously inside the clipboard hook. WM_CLIPBOARDUPDATE fires while the source app may still hold the clipboard or use delayed rendering, so the read blocked or deadlocked. RadMapper's low-level keyboard/mouse hooks live on the same thread, so a blocked thread stalled all input system-wide.
+## Branch / PR
+`claude/charming-lamport-6k3h7e`, draft PR #10. Repo copy is now the canonical v0.6.6.5 script (was stale at 0.6.1-preview).
 
-## Completed
-- `ClipChanged` no longer touches the clipboard; it arms a one-shot `ClipHarvest` timer (bursts coalesce).
-- `ClipHarvest` checks CF_UNICODETEXT, skips hung owners, size-checks via GlobalSize before any read, then reads `A_Clipboard` off the hook thread. Dedupe / MAXCLIP logic unchanged.
-- `#ClipboardTimeout 250` added beside `SendMode "Event"`.
-- Same edit applied to the user's live v0.6.6.5 copy (delivered as a file in the session); the repo copy is v0.6.1-preview and has diverged (repo copy carries the `RM_TEST` guard and tests).
-- Installed `.claude/skills/efficient-fable` (from BuilderIO/skills) for orchestrating Fable with cheaper subagents.
+## Completed (commits, newest last)
+- Clipboard hook: `ClipChanged` only arms a `ClipHarvest` timer; `#ClipboardTimeout 250`.
+- Repo synced to the live v0.6.6.5 script.
+- Ctrl+C leads: Warp passes Ctrl+letter/digit to the app (closes overlay, re-sends with {Blind}); `KeyNameValid` rejects bare modifiers; GpGFX dialog stamps `g_ClipMine`.
+- UX (12 items): Duplicate row (Ctrl+D), hotkey rows for Shelf/Scratchpad/Warp/Click lock on Settings (4-column band), "Change…" edits the existing essential, single-row delete with Ctrl+Z undo toast, row 1 selected on Menus/Macros/Apps, "Save & practice", Ctrl+S/Ctrl+Enter commit, dropdown typeahead, right-click on zones/tiles, starter pack offers to create a missing menu, help/README text, 26 px Home buttons.
+- Freeze/crash sweep (16 items): see commit 6bb7f3f message.
 
 ## Decisions
-- Did not replace the repo copy with the newer v0.6.6.5 upload: the lineages diverged (762 repo-only lines, incl. test hooks). Fix was ported to both instead.
-- No version bump or changelog entry in the header; comment at the fix site only.
+- One canonical file; the user's workstation copy is delivered from the repo file after each pass.
+- Deferred UX items: 7 (conflicts report → jump to row), 9 ("Try it" in binding editor), 12 (segmented controls). Deferred sweep items: 14 (RadialPaint Critical cost, measure first), 18 (PSDrain ordering), 19 (Field Ctrl+V read).
+- No version bump / changelog entry; the user owns the header.
 
 ## Verification
-- `python3 radmapper/tests/check_source.py` → PASS.
-- `ClipChanged`/`ClipHarvest` blocks byte-identical between repo copy and live copy.
-- Runtime test on Windows still needed: copy/cut in Word/browser/PowerScribe with RadMapper running; confirm no freeze and the Ctrl+Alt+C shelf still fills.
-
-## Leads from the read-only scan (not applied; none causes an every-copy freeze)
-- `Warp.Key` (~L22262 in v0.6.6.5): while the keyboard pointer overlay is open, its suppressing InputHook eats Ctrl+C/X as grid letters. Fix: return early on letters when Ctrl is physically down.
-- `KeyNameValid` (~L2237): accepts bare modifier names (`Ctrl`, `LControl`...) and `c`/`x` as key rows, which puts a main-thread `#HotIf` evaluation on every such press. Consider rejecting bare modifiers in the key picker.
-- GpGFX `Dialog.MsgBox` Ctrl+C handler (~L37473): writes `A_Clipboard` without stamping `g_ClipMine`, so its own copy is re-harvested. Minor.
-
-## Next steps
-- User runs the fixed v0.6.6.5 copy on the workstation and confirms.
-- Consider syncing the repo copy up to v0.6.6.5 in a separate PR.
+- `python3 radmapper/tests/check_source.py` PASS after every pass. Brace-depth scans clean.
+- NOT runtime-tested (no Windows/AHK here). Workstation checks to run:
+  - Copy/cut in Word, browser, PowerScribe: no freeze; Ctrl+Alt+C shelf fills.
+  - Settings band at 940x640 and 1120x720 (4-column hotkey band, tilt guard on heading line).
+  - CapsLock layer host while paused: Caps state unchanged, nothing stuck.
+  - Practice wheel from "Save & practice": settings window does not flash back.
+  - Hold thumb button, scroll the app switcher, release (ClearBS now clears st.down).
+  - Animations still run on a machine without GpGFX.Core.dll (FrameTimer Stop now works).
 
 ## Key files
-- `radmapper/RadMapper.ahk` — `ClipChanged`, `ClipHarvest`, `#ClipboardTimeout`
-- `.claude/skills/efficient-fable/SKILL.md`
+- `radmapper/RadMapper.ahk`, `radmapper/README.md`, `radmapper/tests/check_source.py`
+- `.claude/skills/efficient-fable/SKILL.md` (orchestration pattern used for all subagent work)
