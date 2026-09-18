@@ -3047,8 +3047,27 @@ AdoptCfg() {
         roots := [home "\Downloads", A_Desktop, A_MyDocuments,
                   home "\OneDrive\Downloads", home "\OneDrive\Desktop",
                   home "\OneDrive\Documents"]
+        ; A NO-NETWORK rule and a time budget, because this sweep runs before
+        ; the first window appears. Documents and Desktop are routinely
+        ; folder-redirected to a share on a hospital login, and every
+        ; DirExist / FileExist / FileGetTime against a share that is not
+        ; answering blocks for the SMB timeout -- RadMapper then looks like it
+        ; failed to start. The drive type is tested BEFORE DirExist, since
+        ; DirExist is itself one of the calls that blocks. A config we cannot
+        ; reach in 1.5 s is not worth a frozen startup: defaults load and the
+        ; file can still be imported by hand. Only these guessed locations are
+        ; skipped -- A_ScriptDir above is checked unconditionally.
+        sweepStart := A_TickCount
         for root in roots {
-            if (root = "" || !DirExist(root))
+            if (A_TickCount - sweepStart > 1500)
+                break
+            if (root = "" || SubStr(root, 1, 2) = "\\")
+                continue
+            dt := ""
+            try dt := DriveGetType(SubStr(root, 1, 3))
+            if (dt = "Network")
+                continue
+            if !DirExist(root)
                 continue
             ; The root itself, then ONE level of subfolders. Not recursive:
             ; a full sweep of a user profile at startup is not acceptable on a
@@ -3064,6 +3083,8 @@ AdoptCfg() {
                 }
             }
             loop files root "\*", "D" {
+                if (A_TickCount - sweepStart > 1500)
+                    break
                 for nm in [CFG_NAME, OLD_CFG_NAME] {
                     cand := A_LoopFileFullPath "\" nm
                     if FileExist(cand) {
@@ -3278,6 +3299,33 @@ ValidateCfg() {
                 v := g_Cfg["settings"][k]
                 g_Cfg["settings"][k] := ClampInt(IsObject(v) ? "" : v,
                     0, 1000, DEFAULTS[k])
+            }
+        }
+        ; ...and the same treatment for every other number the ENGINE reads
+        ; straight out of the config, because a hand-edited (or half-written)
+        ; file gets to choose them. The dangerous ones are not the silly ones,
+        ; they are the plausible ones: SPTick loops scrollPtrMax times per
+        ; 10 ms tick, RepeatKick hands repeatRate to SetTimer (a negative
+        ; period makes it one-shot, so the repeat re-arms forever and the
+        ; timers pile up), PSDeliverNow Sleeps psReturnDelay with the hooks
+        ; live, and layoutGuardMs / followFocusMs are timer periods too.
+        ; Bounds match the GUI's own clamp for every key that has one (the
+        ; Behaviour page and the Atlas settings rows); the rest are set wide
+        ; enough to keep anything a user could mean and narrow enough that
+        ; the read cannot hang the engine.
+        lim := Map(
+            "scrollPtrMax",    [1, 50],      "scrollPtrPx",     [2, 200],
+            "repeatRate",      [10, 1000],   "psReturnDelay",   [0, 2000],
+            "followFocusMs",   [40, 2000],   "followSettleMs",  [0, 5000],
+            "radialDwellMs",   [0, 2000],    "radialSubMs",     [120, 3000],
+            "radialRestMs",    [120, 3000],  "radialDead",      [8, 200],
+            "layoutGuardMs",   [200, 60000], "stationSettleMs", [500, 30000],
+            "holdThreshold",   [50, 2000],   "tapWindow",       [30, 1000])
+        for k, b in lim {
+            if g_Cfg["settings"].Has(k) {
+                v := g_Cfg["settings"][k]
+                g_Cfg["settings"][k] := ClampInt(IsObject(v) ? "" : v,
+                    b[1], b[2], DEFAULTS[k])
             }
         }
     }
@@ -4270,8 +4318,18 @@ BS(btn) {
 ClearBS(btn) {
     ; universal teardown funnel: release, panic, ForceReleaseActive and the
     ; watchdog all land here
-    if g_BS.Has(btn)
+    if g_BS.Has(btn) {
+        ; Mark the state RELEASED before dropping it. Watchers of a holder
+        ; (the window switcher, an open radial) keep their own reference to
+        ; the state object and poll st.down; a state deleted while it still
+        ; reads "down" leaves them hanging on a holder that no longer exists
+        ; -- ForceReleaseActive and the orphan-release paths in OnPressHK hit
+        ; exactly that. The watchdog always set it by hand before clearing;
+        ; every other caller either sets it first or wants it set, so it
+        ; belongs here, once.
+        g_BS[btn].down := false
         g_BS.Delete(btn)
+    }
 }
 
 NewBS(btn) {
@@ -4317,6 +4375,13 @@ NativeName(btn) {
             return tw
     }
     return btn
+}
+
+; The three LOCK keys. Their press does not merely arrive somewhere -- it
+; flips a desktop-wide state, so "reproduce it natively" is never neutral for
+; one of these.
+IsLockKey(btn) {
+    return (btn = "CapsLock" || btn = "NumLock" || btn = "ScrollLock")
 }
 
 ; SafeSend, not RM_Send: an unusable input name (the "Right Button" class of
@@ -4515,6 +4580,26 @@ OnPressHK(btn, *) {
                     ActionUp(prev.holdBinding, prev)
             }
             ClearBS(btn)
+        }
+        ; A LOCK KEY is not reproduced here. The engine's hook on it is the
+        ; suppressing "*CapsLock" variant, so by the time this thread runs the
+        ; physical press has already been swallowed and the OS has toggled
+        ; NOTHING: the Caps Lock light is exactly where the user left it.
+        ; Sending {CapsLock Down}{CapsLock Up} to stand in for it would then
+        ; TOGGLE the lock -- on the one branch where the engine has decided to
+        ; keep its hands off (paused, or our own GUI in front), and on a key
+        ; that is usually here only because it hosts a layer. Worse, that Down
+        ; is a synthetic hold whose Up depends on a release we may never see.
+        ; Sending nothing leaves the lock state untouched and leaves nothing
+        ; out that could stick. The state is still recorded (down+consumed) so
+        ; the matching physical release is inert rather than a native Up with
+        ; no Down behind it.
+        if IsLockKey(btn) {
+            st := NewBS(btn)
+            st.down := true
+            st.consumed := true
+            st.pressTick := A_TickCount
+            return
         }
         SendNativeDown(btn)
         st := NewBS(btn)
@@ -5827,8 +5912,14 @@ SysCursorHide() {
                32645, 32646, 32648, 32649, 32650, 32651] {
         h := DllCall("CreateCursor", "ptr", 0, "int", 0, "int", 0, "int", 32,
             "int", 32, "ptr", andMask, "ptr", xorMask, "ptr")
-        if h
-            DllCall("SetSystemCursor", "ptr", h, "uint", id)   ; takes ownership
+        ; SetSystemCursor takes ownership of the handle -- but only when it
+        ; SUCCEEDS. A failed call (another process holding the cursor table,
+        ; a locked desktop) leaves us owning a cursor nobody will ever free,
+        ; and this runs once per drag scroll, fourteen handles at a time.
+        if h {
+            if !DllCall("SetSystemCursor", "ptr", h, "uint", id)
+                DllCall("DestroyCursor", "ptr", h)
+        }
     }
     g_SysCursorHidden := true
 }
@@ -5837,8 +5928,14 @@ SysCursorShow() {
     global g_SysCursorHidden
     if !g_SysCursorHidden
         return
-    g_SysCursorHidden := false
-    DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
+    ; Clear the flag ONLY if the restore actually happened. Clearing it first
+    ; meant a failed SPI_SETCURSORS left the desktop with no pointer at all
+    ; and the watchdog's "cursor hidden with nothing running" retry disarmed
+    ; -- the one recovery path for exactly this, switched off by the failure
+    ; it exists for. Still hidden = still true = the watchdog tries again in
+    ; 750 ms.
+    if DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
+        g_SysCursorHidden := false
 }
 
 SPMarkerShow(x, y) {
@@ -6668,6 +6765,14 @@ AppSwitchStep(st, v) {
 
 AppSwitchOpen(st) {
     global g_AppSw
+    ; The keyboard pointer owns the KEYBOARD: its InputHook swallows every
+    ; key. Warp.Open refuses to open on top of a menu or the switcher for
+    ; exactly that reason, but the reverse is reachable and was not covered --
+    ; a MOUSE row opens the switcher while the pointer is up, and the panel
+    ; then cannot hear its holder's release. The newer gesture wins here, since
+    ; it is the one the user is making: drop the pointer, keep the switcher.
+    if Warp.active
+        Warp.Close(true)
     list := AppSwitchList()
     if (list.Length < 1) {
         HUD("Nothing to switch to", "warn")
@@ -6792,7 +6897,11 @@ AppSwitchBindKeys() {
 
 AppSwitchDelKey(*) {
     AppSwitchCloseWindow()
-    KeyWait("Delete")        ; one window per press: swallow the OS auto-repeat
+    ; One window per press: swallow the OS auto-repeat. WITH A TIMEOUT -- an
+    ; untimed KeyWait never returns if the Up is lost (a hook change, focus
+    ; theft, the window we just closed taking the foreground with it), and
+    ; this runs on the hotkey thread that the switcher needs back.
+    KeyWait("Delete", "T2")
 }
 
 /**
@@ -9062,6 +9171,14 @@ RadialUnbindCancel() {
  */
 RadialOpen(name, holder := 0, trial := false) {
     global g_Radial
+    ; The keyboard pointer owns the KEYBOARD: its InputHook swallows every
+    ; key. Warp.Open refuses to open on top of a menu or the switcher for
+    ; exactly that reason, but the reverse is reachable and was not covered --
+    ; a MOUSE row opens a menu while the pointer is up, and the menu then
+    ; cannot hear its own cancel key. The newer gesture wins here, since it is
+    ; the one the user is making: drop the keyboard pointer, keep the menu.
+    if Warp.active
+        Warp.Close(true)
     if IsObject(g_Radial)
         RadialClose(false)
     mn := RadialFind(name)
@@ -10529,8 +10646,23 @@ WatchdogHolderAlive(type) {
     return false
 }
 
+; Emit what the watchdog collected -- OUTSIDE its Critical section. Problem()
+; and HUD() DRAW (a GDI+ toast is a layered window and tens of milliseconds of
+; work), and drawing under Critical parks every hotkey, PSDrain, the radial
+; tick and the next watchdog sweep behind it while the hooks go on swallowing
+; input. A recovery that freezes the engine for the length of its own toast is
+; not a recovery. The sweep itself stays Critical; only the telling does not.
+WatchdogReport(say) {
+    Critical "Off"
+    for r in say {
+        Problem("recovered", r.detail)
+        HUD(r.hud)
+    }
+}
+
 Watchdog() {
     Critical "On"
+    say := []                                ; reported after Critical is off
     ; Before the enabled test: a wedged UI count is not an engine state, and
     ; it must clear even while the engine is paused. See Lumi.EditGuard.
     try Lumi.EditGuard()
@@ -10545,12 +10677,19 @@ Watchdog() {
     if (g_SysCursorHidden && !IsObject(g_ScrollPtr)) {
         SysCursorShow()
         SPMarkerHide()
-        Problem("recovered", "system cursor was hidden with no drag scroll"
-            . " running -- restored")
-        HUD("RadMapper restored the mouse pointer")
+        ; Only announce it if the restore actually took (SysCursorShow keeps
+        ; the flag set when SPI_SETCURSORS fails, so this retries) -- a retry
+        ; that keeps failing must not toast every 750 ms.
+        if !g_SysCursorHidden {
+            say.Push({detail: "system cursor was hidden with no drag scroll"
+                . " running -- restored",
+                hud: "RadMapper restored the mouse pointer"})
+        }
     }
-    if !g_Enabled
+    if !g_Enabled {
+        WatchdogReport(say)
         return
+    }
     now := A_TickCount
     ; 1) input states whose physical input is no longer down (lost Up)
     for name, st in g_BS.Clone() {
@@ -10600,8 +10739,8 @@ Watchdog() {
             ActionUp(st.holdBinding, st)
         st.down := false                     ; watchers of this holder (the
         ClearBS(name)                        ; switcher, a menu) see a release
-        Problem("recovered", "released stuck " name " (" st.mode ", " why ")")
-        HUD("RadMapper recovered a stuck " name)
+        say.Push({detail: "released stuck " name " (" st.mode ", " why ")",
+            hud: "RadMapper recovered a stuck " name})
     }
     ; 2) momentary speed states whose holder is gone entirely (state cleared
     ;    without ActionUp -- e.g. a lost Up followed by nothing). Held LAYERS
@@ -10612,8 +10751,8 @@ Watchdog() {
         if (g_SpeedMods.Has(name) && g_SpeedMods[name] = "m"
             && !WatchdogHolderAlive(name)) {
             SpeedMod(name, false)
-            Problem("recovered", "released orphaned momentary " name " speed")
-            HUD("RadMapper restored pointer speed")
+            say.Push({detail: "released orphaned momentary " name " speed",
+                hud: "RadMapper restored pointer speed"})
         }
     }
     ; 3) a momentary drag scroll whose holder is gone (a toggled one is the
@@ -10622,9 +10761,10 @@ Watchdog() {
         && !WatchdogHolderAlive("scrollptr")
         && !WatchdogHolderAlive("zoomptr")) {
         ScrollPtrStop()
-        Problem("recovered", "stopped orphaned drag scroll")
-        HUD("RadMapper stopped drag scroll")
+        say.Push({detail: "stopped orphaned drag scroll",
+            hud: "RadMapper stopped drag scroll"})
     }
+    WatchdogReport(say)
 }
 
 ToggleEnabled() {
@@ -10676,6 +10816,9 @@ PanicRelease() {
     ClickLockWatchStop()                     ; and its watcher must not outlive it
     ScrollPtrStop()
     try Warp.Close(true)                     ; the keyboard comes back, too
+    try AppSwitchClose(false)                ; the switcher is a holder-driven
+                                             ; panel like the radial, and panic
+                                             ; never commits one either
     RadialClose(false)                       ; a menu over the image, firing
                                              ; nothing: panic never commits
     RadialSweepLayers()                      ; and any wheel layer that lost
@@ -10752,7 +10895,11 @@ HUD(msg, tone := "cyan") {
     ; match the Atlas toast.
     m := HUDCorner()
     CoordMode("ToolTip", "Screen")
-    ToolTip(Lumi.ToneMark(tone) msg, m.x, m.y)
+    ; This is the path taken when Lumi is NOT there (GDI+ failed to start),
+    ; so it cannot ask Lumi for the tone glyph: that throw lands inside a
+    ; Critical hook thread, which is the one place we can least afford it.
+    mark := IsSet(Lumi) ? Lumi.ToneMark(tone) : ""
+    ToolTip(mark msg, m.x, m.y)
     SetTimer(HUDOff, -900)   ; same Func each call = timer resets, so a burst
 }                            ; of HUDs never hides the newest one early
 
@@ -11617,17 +11764,35 @@ MapEditSelected() {
 }
 
 MapDelete() {
-    Critical "On"                    ; a second click thread must not run
-    m := MapRowRef(g_UI.lvMap.GetNext())     ; between RemoveAt and the
-    if !IsObject(m) {                        ; refresh, or it would act on a
-        Critical "Off"                       ; stale mapRows view
+    ; A second click thread must not run between RemoveAt and the refresh, or
+    ; it would act on a stale mapRows view. That guard used to be Critical for
+    ; the whole body -- which parked the Watchdog, PSDrain and every hotkey
+    ; behind SaveCfg's disk write while the hooks kept swallowing input. The
+    ; busy flag gives the same once-only guarantee without stalling the engine;
+    ; Critical now covers the g_Cfg mutation alone.
+    static busy := false
+    if busy
         return
+    busy := true
+    try {
+        m := MapRowRef(g_UI.lvMap.GetNext())
+        if !IsObject(m)
+            return
+        Critical "On"
+        ; mapRows can outlive the rows it points at (a delete, an import or a
+        ; profile switch between the click and this thread): RemoveAt past the
+        ; end throws out of a click handler and takes the page with it.
+        if (m.idx < 1 || m.idx > g_Cfg[m.kind].Length)
+            return
+        g_Cfg[m.kind].RemoveAt(m.idx)
+        Critical "Off"
+        SaveCfg()
+        AfterCfgChange()
+        RefreshMappings()
+    } finally {
+        Critical "Off"               ; never leave a throw holding Critical
+        busy := false
     }
-    g_Cfg[m.kind].RemoveAt(m.idx)
-    SaveCfg()
-    AfterCfgChange()
-    RefreshMappings()
-    Critical "Off"
 }
 
 ; ---- Mouse-map view (G4): the schematic front-end for button-layers.
@@ -12440,9 +12605,26 @@ BindingDlg(editRow, preset := 0) {
 }
 
 BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
-    Critical "On"                    ; a re-entrant OK (double-click /
-                                     ; Enter autorepeat) must not run
-                                     ; against pruned, stale indexes
+    ; A re-entrant OK (double-click / Enter autorepeat) must not run against
+    ; pruned, stale indexes. That used to be Critical "On" for the whole body
+    ; -- but this body puts up MsgBoxes and writes the config, and a Critical
+    ; thread sitting on a modal blocks the Watchdog, PSDrain, RadialTick and
+    ; every hotkey while the hooks go on suppressing input: the click that
+    ; dismisses the warning is itself queued behind it. The busy flag is the
+    ; same once-only guarantee with nothing held; Critical is narrowed below
+    ; to the g_Cfg mutation alone.
+    static busy := false
+    if busy
+        return
+    busy := true
+    try {
+        BindingOkRun(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal)
+    } finally {
+        busy := false
+    }
+}
+
+BindingOkRun(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
     btn := InputCodeFromLabel(ddBtn.Text)
     event := ddEvent.Text
     if (IsWheel(btn) && event != "turn") {
@@ -12471,15 +12653,24 @@ BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
     b := NewBinding(AppCodeFromDisp(ddApp.Text), lay, ReadModBoxes(boxes), btn,
         event, atype, val)
     try {
+        ; The list edit alone is indivisible; SaveCfg (a disk write) and the
+        ; refreshes are deliberately left interruptible. The HUD waits until
+        ; Critical is off, since a toast is a layered window.
+        Critical "On"
+        msg := ""
         if editRow {
             if UpsertRowEdit("bindings", b, FindDupBinding(b), editRow)
-                HUD("Removed duplicate row(s) for that input + context")
+                msg := "Removed duplicate row(s) for that input + context"
         } else if UpsertBinding(b)
-            HUD("Replaced the existing row for that input + context")
+            msg := "Replaced the existing row for that input + context"
+        Critical "Off"
+        if (msg != "")
+            HUD(msg)
         SaveCfg()
         AfterCfgChange()
         RefreshMappings()
     } catch as e {
+        Critical "Off"                        ; a throw must not carry Critical
         Problem("edit-error", "applying the binding edit failed: " e.Message)
         HUD("Edit failed: " e.Message)
     } finally {
@@ -12666,7 +12857,18 @@ KeyDlg(editRow) {
 }
 
 KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
-    Critical "On"                    ; same re-entrancy guard as BindingOk
+    static busy := false             ; same re-entrancy guard as BindingOk,
+    if busy                          ; and for the same reason: this body
+        return                       ; shows modals and writes the config, so
+    busy := true                     ; it must never run under Critical
+    try {
+        KeyOkRun(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal)
+    } finally {
+        busy := false
+    }
+}
+
+KeyOkRun(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     ; NormalizeInputName first: a pasted or hand-typed Send token ("{Numpad1}")
     ; is silently repaired here rather than saved as a row that can never be
     ; hooked. KeyNameValid then refuses anything Hotkey() would throw on --
@@ -12742,16 +12944,23 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     b := NewBinding(AppCodeFromDisp(ddApp.Text), lay, mods, key,
         event, atype, val)
     try {
+        Critical "On"                ; only the list edit is indivisible; the
+        msg := ""                    ; disk write, the refreshes and the toast
+                                     ; are not -- same as BindingOkRun
         if editRow {
             if UpsertRowEdit("bindings", b, FindDupBinding(b), editRow)
-                HUD("Removed duplicate row(s) for that key + context")
+                msg := "Removed duplicate row(s) for that key + context"
         } else if UpsertBinding(b)
-            HUD("Replaced the existing row for that key + context")
+            msg := "Replaced the existing row for that key + context"
+        Critical "Off"
+        if (msg != "")
+            HUD(msg)
         SaveCfg()
         AfterCfgChange()
         RefreshMappings()
         RefreshKeys()
     } catch as e {
+        Critical "Off"               ; a throw must not carry Critical
         Problem("edit-error", "applying the key edit failed: " e.Message)
         HUD("Edit failed: " e.Message)
     } finally {
@@ -13175,6 +13384,8 @@ Cleanup(*) {
     SetTimer(FollowTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
+    try AppSwitchClose(false)                ; no switcher panel (or its study
+                                             ; thumbnails) outlives us either
     RadialClose(false)
     RadialSweepLayers()                      ; no wheel layer outlives us
     TeleportSignalStop()
@@ -14965,6 +15176,13 @@ class Lumi {
         col := Lumi.Col(tone)
         msg := Lumi.ToneMark(tone) msg
         prev := LayerStack.ActiveLayer
+        lyr := 0
+        ; A bare `try` with no catch swallowed the failure and skipped
+        ; everything after it: a throw between Layer() and Lumi._toast := lyr
+        ; orphaned a layered window that nothing owned (so nothing would ever
+        ; dispose it) AND left ActiveLayer pointing at it, which is the exact
+        ; dangling-pointer shape §15 modification #3 exists to prevent. A
+        ; toast is feedback -- it still fails silently, but it cleans up.
         try {
             if IsObject(Lumi._toast) {
                 try Lumi._toast.Dispose()
@@ -14988,9 +15206,15 @@ class Lumi {
             lyr.NoActivate()
             lyr.Draw(-ms)
             Lumi._toast := lyr
+        } catch {
+            if IsObject(lyr) {
+                try lyr.Dispose()            ; _toast is already 0 here: the
+                Lumi._toast := 0             ; old one is dropped up top
+            }
+        } finally {
+            if IsObject(prev)                ; the restore is not optional --
+                LayerStack.ActiveLayer := prev   ; it has to run on both paths
         }
-        if IsObject(prev)
-            LayerStack.ActiveLayer := prev
     }
 
     /**
@@ -15980,8 +16204,16 @@ class Atlas {
             ; GetAsyncKeyState is independent of AutoHotkey's mouse hook. The
             ; old deferred GetKeyState("LButton", "P") could observe Up on
             ; the first timer tick and finish at the original size.
+            ; ...and it is just as independent of whether the button will ever
+            ; read up again: ClickLockToggle LATCHES LButton, and a latched (or
+            ; driver-stuck) button left this loop spinning with the mouse
+            ; captured and no way to let go. Nobody drags a window edge for
+            ; twenty seconds, so that is the cap.
+            start := A_TickCount
             while (DllCall("user32\GetAsyncKeyState", "int", 0x01, "short")
                     & 0x8000) {
+                if (A_TickCount - start > 20000)
+                    break
                 MouseGetPos(&cx, &cy)
                 if (Atlas.resizeMode = "right" || Atlas.resizeMode = "both")
                     nw := Max(Atlas.MINW, w0 + (cx - sx))
@@ -21997,7 +22229,15 @@ class Shelf {
         try {
             CoordMode("Mouse", "Screen")
             MouseGetPos(&sx, &sy)
+            ; A wall-clock cap, because "the button is physically down" is not
+            ; a promise it will ever read up: a latched LButton (click lock),
+            ; a driver-injected press or a lost hook leaves this spinning with
+            ; Shelf.busy held, and the shelf is then dead for the session.
+            ; Nobody drags a shelf row for fifteen seconds.
+            start := A_TickCount
             while GetKeyState("LButton", "P") {
+                if (A_TickCount - start > 15000)
+                    break
                 MouseGetPos(&cx, &cy)
                 if (Abs(cx - sx) > 12 || Abs(cy - sy) > 12)
                     moved := true
@@ -23447,7 +23687,7 @@ class Warp {
 ;  two engines to hook the mouse at once), and nothing RadMapper does uses
 ;  the worker pool.
 ; ------------------------------------------------------------------------------
-;  MODIFICATIONS -- EIGHT, all marked in place. Nothing else is changed.
+;  MODIFICATIONS -- NINE, all marked in place. Nothing else is changed.
 ;
 ;  1. `#Warn All` -> `#Warn All, Off` (a few lines below). It is a development
 ;     aid; AutoHotkey applies the directive across the whole script, so left
@@ -23504,6 +23744,16 @@ class Warp {
 ;     `_GpGfx_DlgCopy`, which stamps `g_ClipMine` first. Without it the
 ;     dialog's own copy is re-harvested by RadMapper's clipboard Shelf as
 ;     though the user had copied it, evicting whatever they really copied.
+;
+;  9. `FrameTimer` keeps ONE bound function object for its fallback timer
+;     (search "RadMapper modification #9"). Start, Stop and SetFPS each
+;     called `SetTimer(ObjBindMethod(this, "__FallbackTick"), ...)`, and
+;     SetTimer identifies a timer by that object -- so every call named a
+;     DIFFERENT timer: Stop deleted one that was never set and left the real
+;     one running, and SetFPS added a second alongside it. This is the
+;     fallback path taken whenever GpGFX.Core.dll is absent, which it is on
+;     every machine RadMapper runs on, so a stopped animation kept redrawing
+;     its layers forever. Upstream bug.
 ; ------------------------------------------------------------------------------
 ; MIT License
 ;
@@ -35754,6 +36004,23 @@ class FrameTimer {
     static layers := []
     static fps := 60.0
     static autoMode := 1
+    ; ██ RadMapper modification #9 ███████████████████████████████████████████
+    ; The ONE bound function object the fallback timer is ever registered
+    ; under. ObjBindMethod mints a NEW object every call, and SetTimer
+    ; identifies a timer by that object: minting one in Start, another in
+    ; Stop and a third in SetFPS meant Stop deleted a timer that had never
+    ; been set (so the fallback kept drawing every frame forever, on a
+    ; machine with no GpGFX.Core.dll -- which is every reading workstation
+    ; here) and SetFPS stacked a second one beside the first. Created once,
+    ; lazily, and reused by all three. See the §15 header.
+    static __tickFn := 0
+
+    /** The single fallback-tick function object; see modification #9. */
+    static __Tick() {
+        if (!this.__tickFn)
+            this.__tickFn := ObjBindMethod(this, "__FallbackTick")
+        return this.__tickFn
+    }
 
     ; DLL export function pointers
     static pStart := 0
@@ -35872,7 +36139,7 @@ class FrameTimer {
         ; Fallback: Pure AHK timer loop if native DLL is not present
         this.isRunning := true
         interval := Max(1, Floor(1000.0 / fps))
-        SetTimer(ObjBindMethod(this, "__FallbackTick"), interval)
+        SetTimer(this.__Tick(), interval)     ; RadMapper modification #9
         return true
     }
 
@@ -35892,7 +36159,7 @@ class FrameTimer {
             DllCall(this.pStop)
         }
 
-        SetTimer(ObjBindMethod(this, "__FallbackTick"), 0)
+        SetTimer(this.__Tick(), 0)            ; RadMapper modification #9
         this.isRunning := false
     }
 
@@ -35912,7 +36179,7 @@ class FrameTimer {
             DllCall(this.pSetFPS, "double", Float(fps))
         } else if (this.isRunning) {
             interval := Max(1, Floor(1000.0 / fps))
-            SetTimer(ObjBindMethod(this, "__FallbackTick"), interval)
+            SetTimer(this.__Tick(), interval) ; RadMapper modification #9
         }
     }
 
