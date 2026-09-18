@@ -2495,8 +2495,32 @@ StarterPackApply(name) {
     for r in pk.rows {
         b := NewBinding(r[1], r[2], r[3], r[4], r[5], r[6], r[7])
         if (r[6] = "radial" && r[7] != "" && !MenuByName(r[7])) {
-            HUD("The menu " r[7] " is missing — add it on the Menus page first", "warn")
-            return
+            ; DEAD END (v0.6.6.6). "add it on the Menus page first" was the
+            ; end of the road: a toast, nothing applied, and the reader left
+            ; on the page they were already on with no idea what the menu
+            ; had to contain. Offer to make the empty menu here and carry
+            ; on -- the pack then binds a button to it and the Menus page is
+            ; where its commands get filled in. A refusal at least LANDS on
+            ; that page instead of pointing at it.
+            make := IsSet(Atlas) ? Atlas.Confirm("“" name "” opens a radial "
+                . "menu called “" r[7] "”, and there is no menu by that "
+                . "name.`n`nCreate an empty “" r[7] "” now and carry on? "
+                . "You fill in its commands on the Menus page.") : false
+            if !make {
+                HUD("The menu " r[7] " is missing — add it on the Menus page",
+                    "warn")
+                if IsSet(Atlas)
+                    try Atlas.Go(Atlas.PanelIndex("Menus"))
+                return
+            }
+            m := Map()
+            m["name"] := r[7]
+            m["app"] := ""
+            m["slices"] := [MenuSlice("", "none", ""), MenuSlice("", "none", ""),
+                            MenuSlice("", "none", ""), MenuSlice("", "none", "")]
+            if !g_Cfg.Has("menus")
+                g_Cfg["menus"] := []
+            g_Cfg["menus"].Push(m)
         }
         for d in FindDupBinding(b) {
             old := g_Cfg["bindings"][d]
@@ -14533,6 +14557,38 @@ class Lumi {
             }
             return
         }
+        ; TYPEAHEAD (v0.6.6.6). The action list is forty-odd entries and the
+        ; only way down it was the wheel or forty Down presses; the program
+        ; list is every window on the machine. A letter jumps to the next
+        ; entry starting with it, the way every list box in Windows does.
+        ; Polled on the SAME tick as Escape and the arrows, with the same
+        ; selKeyDown edge detector -- without it one press would run the
+        ; whole cycle -- and polled only while a list is actually open, so
+        ; nothing is taken from anyone else's keyboard.
+        ch := ""
+        Loop 26 {
+            k := Chr(64 + A_Index)               ; "A".."Z"
+            if GetKeyState(k, "P") {
+                ch := k
+                break
+            }
+        }
+        if (ch = "") {
+            Loop 10 {
+                k := Chr(47 + A_Index)           ; "0".."9"
+                if GetKeyState(k, "P") {
+                    ch := k
+                    break
+                }
+            }
+        }
+        if (ch != "") {
+            if !Lumi.selKeyDown {
+                Lumi.selKeyDown := true
+                Lumi.__SelectJump(st, ch)
+            }
+            return
+        }
         Lumi.selKeyDown := false
         ; Grace period. Activate() is asynchronous, so a list checked at
         ; 120 ms can legitimately not be the foreground window yet -- and
@@ -14593,6 +14649,23 @@ class Lumi {
         }
         if IsObject(prev)
             LayerStack.ActiveLayer := prev
+    }
+
+    /**
+     * Typeahead: the next item whose label starts with `ch`, wrapping, and
+     * starting AFTER the current one so pressing the same letter again
+     * cycles through the entries that share it. Moved through __SelectStep
+     * so the scroll window and the repaint cannot disagree with the arrows.
+     */
+    static __SelectJump(state, ch) {
+        n := state.items.Length
+        if (n < 1)
+            return
+        Loop n {
+            i := Mod(state.index - 1 + A_Index, n) + 1
+            if (SubStr(state.items[i], 1, 1) = ch)   ; `=` ignores case
+                return Lumi.__SelectStep(state, i - state.index)
+        }
     }
 
     /** Move the highlight by one row, scrolling the window to keep it. */
@@ -15423,6 +15496,22 @@ class Atlas {
             Hotkey("^!Right", (*) => Atlas.SizeNudge(40, 0), "On")
             Hotkey("^!Up",    (*) => Atlas.SizeNudge(0, -40), "On")
             Hotkey("^!Down",  (*) => Atlas.SizeNudge(0, 40), "On")
+            ; THE FOUR THAT SAVE A TRIP TO A MENU (v0.6.6.6). Same context
+            ; as Escape, so all four are completely native everywhere except
+            ; our own window, and every one is `~`-prefixed for the reason
+            ; the focus-ring keys below are: a live Lumi.Field and a Rec
+            ; capture run their own InputHooks, and a suppressing hotkey
+            ; would take the keystroke away from both.
+            ;   Ctrl+D  duplicate the picked row (Mouse / Keyboard only)
+            ;   Ctrl+Z  put back the row Delete just removed
+            ;   Ctrl+S / Ctrl+Enter  press the dialog in front's Save
+            ; The last two stand down when no dialog is open, so Ctrl+S in
+            ; the settings window means nothing rather than something
+            ; surprising.
+            Hotkey("~^d", (*) => Atlas.DuplicateSel(), "On")
+            Hotkey("~^z", (*) => Atlas.UndoDelete(), "On")
+            Hotkey("~^s", (*) => Atlas.DlgPrimary(), "On")
+            Hotkey("~^Enter", (*) => Atlas.DlgPrimary(), "On")
             ; SETTING UP WITHOUT THE MOUSE (v0.6.3). Tab walks the kit's
             ; focus ring, Enter and Space press what it is on, the arrows
             ; step a dropdown, nudge a slider, flip a switch or move a
@@ -15471,6 +15560,32 @@ class Atlas {
 
     static FocusKey(what) {
         return (*) => Atlas.DoFocusKey(what)
+    }
+
+    /**
+     * Ctrl+S / Ctrl+Enter: press the open dialog's PRIMARY button.
+     *
+     * Every dialog builder hands its Save handler to st.primary alongside
+     * the button itself, so there is exactly one thing to call and it is the
+     * same thing the button calls -- no second save path to keep in step.
+     * Lumi.EndEdit() first, because the value being saved is usually still
+     * in a live Field and the commit is what moves it into the state.
+     *
+     * Inert when no dialog is open, and inert during a Rec capture, which
+     * owns the keyboard: the combo being recorded must not also press Save.
+     */
+    static DlgPrimary(*) {
+        if (!IsObject(Atlas.dlg) || !IsObject(Atlas.dstate))
+            return
+        if IsObject(g_RecHook)
+            return
+        if !Atlas.dstate.HasOwnProp("primary")
+            return
+        fn := Atlas.dstate.primary
+        if !IsObject(fn)
+            return
+        Lumi.EndEdit()
+        fn.Call()
     }
 
     /**
@@ -15633,9 +15748,11 @@ class Atlas {
         switch mode {
             case "mouse":
                 m.Add("Edit…", (*) => Atlas.EditRow(i))
+                m.Add("Duplicate", (*) => Atlas.DuplicateRow(i))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
             case "key":
                 m.Add("Edit…", (*) => Atlas.EditRow(i, true))
+                m.Add("Duplicate", (*) => Atlas.DuplicateRow(i))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
             case "menu":
                 m.Add("Edit commands…", (*) => Atlas.MenuEditSel())
@@ -16149,6 +16266,17 @@ class Atlas {
             } else {
                 Atlas.savedSel := IsObject(Atlas.list) ? Atlas.list.sel : 0
             }
+            ; ARRIVING WITH NOTHING PICKED (v0.6.6.6). Mouse and Keyboard
+            ; seed row 1 through PickZone; Menus, Macros and Apps never did,
+            ; so those pages opened with Edit, Delete and "Assign a button"
+            ; born "muted" -- a page of dead buttons and a "Pick a row in the
+            ; list first" toast for anyone who pressed one anyway. The floor
+            ; has to be set BEFORE the panel draws, because that is when the
+            ; buttons ask HasSel() which kind they are. It costs nothing on a
+            ; page with no list or an empty one: HasSel() and the repaint
+            ; below both require rows.
+            if (Atlas.savedSel < 1)
+                Atlas.savedSel := 1
             lyr.Clear()
             Atlas.list := 0
             ; The focus ring is rebuilt with the frame. Same layer, so the
@@ -16229,10 +16357,17 @@ class Atlas {
         }
         ; a 700 ms status tick must not silently drop the row you had picked
         try {
-            if (IsObject(Atlas.list) && Atlas.savedSel > 0
-                && Atlas.savedSel <= Atlas.list.rows.Length) {
-                Atlas.list.sel := Atlas.savedSel
-                Lumi.__ListPaint(Atlas.list)
+            if IsObject(Atlas.list) {
+                n := Atlas.list.rows.Length
+                ; A kept index the list has since outgrown -- rows deleted
+                ; elsewhere, a narrower scope -- lands on the last row rather
+                ; than on nothing at all.
+                if (n > 0 && Atlas.savedSel > n)
+                    Atlas.savedSel := n
+                if (Atlas.savedSel > 0 && Atlas.savedSel <= n) {
+                    Atlas.list.sel := Atlas.savedSel
+                    Lumi.__ListPaint(Atlas.list)
+                }
             }
         } catch as e {
             Problem("ui", "list repaint failed: " e.Message)
@@ -16480,12 +16615,15 @@ class Atlas {
 
     static HelpBox() {
         MsgBox("Home is the whole map.`n`n"
-            . "The card at the top, Reading room essentials, is the seven "
+            . "The card at the top, Reading room essentials, is the five "
             . "things this program is for -- dictation on and off, the two "
-            . "PowerScribe fields, the pointer to the left or right monitor, "
-            . "the PACS wheel and the window presets -- each with whatever "
-            . "fires it today, a Set button that asks three questions, and a "
-            . "Clear button that puts it back to normal.`n`n"
+            . "PowerScribe fields, and the pointer to the left or right "
+            . "monitor -- each with whatever fires it today, a Set button "
+            . "that opens the binding editor with that job already chosen "
+            . "(it says Change once something fires it, and opens the row "
+            . "that does), and a Clear button that puts it back to normal. "
+            . "The PACS wheel and the window presets are set up on the "
+            . "Menus page.`n`n"
             . "It offers four jobs -- change what a mouse button does, "
             . "change what a keyboard key does, set up a radial menu, apply "
             . "a starter pack -- and every one of them is a button. Start "
@@ -16770,11 +16908,39 @@ class Atlas {
         return (*) => Atlas.DoEssClear(i)
     }
 
+    /** Every binding INDEX that fires one essential -- what EssTriggers
+     *  spells out, as row numbers. */
+    static EssRows(act, value) {
+        out := []
+        for i, row in MGet(g_Cfg, "bindings", []) {
+            a := MGet(row, "action", 0)
+            if (!IsObject(a) || MGet(a, "type", "") != act)
+                continue
+            if (act = "radial" && MGet(a, "value", "") != value)
+                continue
+            out.Push(i)
+        }
+        return out
+    }
+
     /** "Set…" -- the binding editor, with the action already chosen. */
     static DoEssSet(i) {
         if (i < 1 || i > Atlas.ESSENTIALS.Length)
             return
         e := Atlas.ESSENTIALS[i]
+        ; ALREADY SET? Then EDIT it. Pressing this on a row that already
+        ; names a button opened a blank editor seeded with XButton1, and
+        ; saving it left TWO ways to dictate -- the second one on a button
+        ; that was doing something else. One existing row is unambiguous, so
+        ; it is the one that opens; two or more are not, so those still get
+        ; a new row (and the reader can see both in the list).
+        rows := Atlas.EssRows(e[2], e[3])
+        if (rows.Length = 1) {
+            idx := rows[1]
+            key := IsKeyInput(MGet(g_Cfg["bindings"][idx], "button", ""))
+            Atlas.OpenDlg(() => Atlas.BindDlg(idx, key))
+            return
+        }
         ; A radial menu is a HOLD: flick a direction and release. Everything
         ; else here is a tap.
         btn := IsMouseInput(Atlas.sel) ? Atlas.sel : "XButton1"
@@ -16826,11 +16992,17 @@ class Atlas {
         ; and the card's own 16 px gutters leave 672 for a row:
         ;   name 210 + 10 + triggers + 10 + Set 74 + 8 + Clear 64 = 672
         ; so triggers gets 704 - 408 = 296 px here and grows with the window.
-        ; HEIGHT: 30 for the heading + 5 rows of 24 + 4 = 154.
+        ; HEIGHT: 30 for the heading + 5 rows of 30 + 4 = 184.
         ; Five functions, five rows: this card is what the program is for,
         ; so it is the first thing on the first page.
+        ; ROW PITCH is 30, not the 24 it was: at 24 the Set and Clear
+        ; buttons came out 20 px high, under the 24 px minimum target this
+        ; kit holds everything else to (see the binding editor's modifier
+        ; switches). 26 px buttons at a 30 px pitch clear it. The card grows
+        ; with the pitch, and at the 640 px minimum window height the four
+        ; job buttons still end 20 px above the rule below them.
         cy := y + 28
-        rowH := 24
+        rowH := 30
         ch := 30 + rowH * Atlas.ESSENTIALS.Length + 4
         Lumi.Card(x, cy, w, ch, "surface")
         Lumi.Label(x + 16, cy + 6, 400, "Reading room essentials", "section")
@@ -16845,8 +17017,12 @@ class Atlas {
                     trig = "" ? "mute" : "body"),
                 trig = "" ? "mute" : "body", "left", rowH)
             bx := x + 16 + nw + tw + 20
-            Lumi.Btn(bx, ry + 1, 74, rowH - 4, "Set…", Atlas.EssSet(i),
-                "accent")
+            ; "Set…" on something already set read as "set up a second way
+            ; to do it", and that is what it did -- a fresh row on top of the
+            ; one already there. It edits the existing row now (DoEssSet),
+            ; so the word has to match.
+            Lumi.Btn(bx, ry + 1, 74, rowH - 4, trig = "" ? "Set…" : "Change…",
+                Atlas.EssSet(i), "accent")
             Lumi.Btn(bx + 82, ry + 1, 64, rowH - 4, "Clear",
                 Atlas.EssClear(i), trig = "" ? "muted" : "ghost")
         }
@@ -17080,6 +17256,7 @@ class Atlas {
         zone := RoundedRectangle(zx, zy, zw, zh, rad, bg, true)
         zone.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.24), bg)
         zone.OnEvent("Click", Atlas.ZoneGo(code))
+        zone.OnEvent("RightMouseUp", Atlas.ZoneMenu(code))
         RoundedRectangle(zx, zy, zw, zh, rad,
             n ? Lumi.C["jade"] : Lumi.C["hair"], false)
         if Atlas.IsLayerHost(code) {         ; holding this arms a layer
@@ -17112,6 +17289,44 @@ class Atlas {
 
     static ZoneGo(code) {
         return (*) => Atlas.PickZone(code)
+    }
+
+    static ZoneMenu(code) {
+        return (*) => Atlas.InputMenu(code, false)
+    }
+
+    /**
+     * Right-click on the mouse map or a key tile (v0.6.6.6).
+     *
+     * The map and the tile grid were the one place in the window where the
+     * right button did nothing: every list row has had a menu since v0.6.6,
+     * and "set this button up" is the job people come to the map to do --
+     * it used to be click the part, then find "Add new" at the far side of
+     * the page. Native Menu(), exactly as RowMenu, and with RowMenu's
+     * StopTick / StartTick around Show(): a 700 ms rebuild landing under an
+     * open menu disposes the very shape it was opened on.
+     */
+    static InputMenu(code, keyMode) {
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        ; PICK IT FIRST. The editor seeds itself from Atlas.sel / keySel, and
+        ; the menu has to act on the part that was right-clicked rather than
+        ; on whatever was selected before -- the same thing a left click
+        ; does (PickZone / PickKeyTile), for the same reason.
+        if keyMode
+            Atlas.PickKeyTile(code)
+        else
+            Atlas.PickZone(code)
+        m := Menu()
+        m.Add("Add an assignment here…", (*) => Atlas.EditRow(0, keyMode))
+        if (!keyMode && IsWheel(code))
+            m.Add("Scroll wheel…",
+                (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)))
+        m.Add(keyMode ? "Conflicts for this key…" : "Conflicts for this button…",
+            (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(code)))
+        Atlas.StopTick()
+        try m.Show()
+        Atlas.StartTick()
     }
 
     static PickZone(code) {
@@ -17437,6 +17652,7 @@ class Atlas {
         tile := RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"], bg, true)
         tile.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.24), bg)
         tile.OnEvent("Click", Atlas.KeyGo(code))
+        tile.OnEvent("RightMouseUp", Atlas.TileMenu(code))
         RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"],
             n ? Lumi.C["jade"] : Lumi.C["hair"], false)
         if Atlas.IsLayerHost(code) {
@@ -17455,6 +17671,10 @@ class Atlas {
 
     static KeyGo(code) {
         return (*) => Atlas.PickKeyTile(code)
+    }
+
+    static TileMenu(code) {
+        return (*) => Atlas.InputMenu(code, true)
     }
 
     static PickKeyTile(code) {
@@ -18252,9 +18472,17 @@ class Atlas {
             Lumi.Toast("Type a name for it first", "warn")
             return
         }
-        if MenuByName(name) {
-            Lumi.Toast("There is already a menu called “" name "”", "warn")
-            return
+        ; DEAD END (v0.6.6.6). "There is already a menu called X" told the
+        ; truth and stopped there, with the menu it was talking about sitting
+        ; unselected in the list above. Pick it: nine times in ten the one
+        ; that exists is the one that was wanted.
+        for i, other in MGet(g_Cfg, "menus", []) {
+            if (MGet(other, "name", "") = name) {
+                Atlas.SelectListRow(i)
+                Lumi.Toast("There is already a menu called “" name "” — it is "
+                    . "picked in the list", "warn")
+                return
+            }
         }
         m := Map()
         m["name"] := name
@@ -18834,8 +19062,14 @@ class Atlas {
         ; so the band needs two rows instead of three.
         bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [172, 160, 156])
         half := (w - 20) // 2
-        ; hotkeys: three stacked columns, derived from the width
-        colw := (w - 72) // 3
+        ; hotkeys: FOUR stacked columns, derived from the width. It was three
+        ; for four hotkeys; there are eight now (v0.6.6.6), and the band
+        ; cannot grow -- at the 640 px minimum window height the three bands
+        ; are already all at their own minimums. Two rows of four it is.
+        ; At the 940 px minimum width that is (704 - 48 - 36) / 4 = 155 px a
+        ; column, which still leaves 103 px of field -- more than any hotkey
+        ; string needs.
+        colw := (w - 84) // 4
 
         ; ── band 1: timing ──────────────────────────────────────────────
         B := bands[1]
@@ -18885,36 +19119,48 @@ class Atlas {
         ; ── band 2: hotkeys ─────────────────────────────────────────────
         B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
-        Lumi.Label(x + 24, B.y + 10, 300, "Hotkeys", "section")
+        Lumi.Label(x + 24, B.y + 8, 96, "Hotkeys", "section")
         p2 := Atlas.Pitch(B.h - 44, 2, 52, 58)
         hy := B.y + 30
         c1 := x + 24
         c2 := c1 + colw + 12
         c3 := c2 + colw + 12
+        c4 := c3 + colw + 12
         Atlas.HkRow(c1, hy,          "Open settings",      "hkGui",   0, 0, "", colw)
         Atlas.HkRow(c1, hy + p2,     "Pause (combo)",      "hkToggle", 0, 0, "", colw)
         Atlas.HkRow(c2, hy,          "Pause (single key)", "hkPause", 0, 0,
             "its native lock toggle is suppressed", colw)
         Atlas.HkRow(c2, hy + p2,     "Panic release",      "hkPanic", 0, 0, "", colw)
-        ; Where the five that used to be here went.
-        Lumi.Para(c3, hy, colw, 44,
-            "Dictation, the two PowerScribe fields and the two pointer "
-            . "teleports are on Home, under “Reading room essentials”.",
-            "mute")
+        ; THE FOUR THAT HAD NO ROW ANYWHERE (v0.6.6.6). The clipboard shelf,
+        ; the scratchpad and click lock shipped on ^!c / ^!n / ^!b with no
+        ; field in this window at all, so the only way to learn or change
+        ; them was to open the config file; the keyboard pointer had one, on
+        ; the Windows page, which Simple mode hides. HkRow, StrCommit and
+        ; RecHotkey already work for any hk* key, so this is four rows.
+        Atlas.HkRow(c3, hy,          "Clipboard shelf",    "hkClipboard", 0, 0, "", colw)
+        Atlas.HkRow(c3, hy + p2,     "Scratchpad",         "hkScratch", 0, 0, "", colw)
+        Atlas.HkRow(c4, hy,          "Keyboard pointer",   "hkWarp",  0, 0, "", colw)
+        Atlas.HkRow(c4, hy + p2,     "Click lock",         "hkClickLock", 0, 0, "", colw)
+        ; Where the five that used to be here went. On the heading line now:
+        ; the four columns underneath are all spoken for.
+        nx := x + 128
+        nw2 := w - 152 - (Atlas.Advanced() ? 24 : 250)
+        Lumi.Label(nx, B.y + 8, nw2,
+            Lumi.Elide("Dictation, the two PowerScribe fields and the two "
+                . "pointer teleports are on Home, under “Reading room "
+                . "essentials”.", nw2, "mute"), "mute", "left", 20)
         ; The tilt guard lives on the Pointer page, which Simple mode hides.
         ; A Razer tilt wheel repeating into a bound action is the kind of
-        ; thing a reader meets on day one, so Simple mode gets it here.
-        ; Sized to the COLUMN: colw is (940 - 188 - 48 - 72) / 3 = 210 at the
-        ; minimum window width, and 100 + 4 + 80 = 184 fits inside it.
+        ; thing a reader meets on day one, so Simple mode gets it here --
+        ; compact, on the heading line, since the columns are full.
         if !Atlas.Advanced() {
-            Lumi.Label(c3, hy + p2, 100, "Tilt guard", "dim", "left", 30)
-            Lumi.Field(c3 + 104, hy + p2, 80, 30,
-                String(Cfg("tiltRepeatMs")),
+            tx := x + w - 24 - 226
+            Lumi.Label(tx, B.y + 4, 66, "Tilt guard", "dim", "left", 26)
+            Lumi.Field(tx + 70, B.y + 4, 64, 26, String(Cfg("tiltRepeatMs")),
                 (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150),
                 "", true)
-            Lumi.Para(c3, hy + p2 + 32, colw, Max(20, B.h - (hy + p2 + 32 - B.y) - 6),
-                "Milliseconds. Razer tilt wheels repeat while held; 150 "
-                . "turns a held tilt into one press. 0 = off.", "mute")
+            Lumi.Label(tx + 140, B.y + 4, 86,
+                "ms · held tilt", "mute", "left", 26)
         }
 
         ; ── band 3: behaviour + where the config lives ──────────────────
@@ -19311,20 +19557,73 @@ class Atlas {
         Atlas.OpenDlg(() => Atlas.BindDlg(idx, keyMode))
     }
 
+    /**
+     * Duplicate a row: the ordinary binding editor, seeded with a COPY.
+     *
+     * A second row for the same button differing in one field -- the program
+     * it is scoped to, the trigger, a modifier -- meant retyping all seven.
+     * The seed path is the one MenuAssign and DoEssSet already use, so
+     * nothing is written until Save: a copy you did not mean is one Cancel
+     * away, and the original is never touched.
+     */
+    static DuplicateRow(listRow) {
+        idx := 0
+        if (listRow > 0 && listRow <= Atlas.rowRefs.Length)
+            idx := Atlas.rowRefs[listRow]
+        if (idx < 1 || idx > g_Cfg["bindings"].Length) {
+            Lumi.Toast("Pick a row in the list first", "warn")
+            return
+        }
+        r := g_Cfg["bindings"][idx]
+        a := MGet(r, "action", 0)
+        seed := NewBinding(MGet(r, "app", "*"), MGet(r, "layer", "*"),
+            MGet(r, "mods", ""), MGet(r, "button", ""),
+            MGet(r, "event", "tap"),
+            IsObject(a) ? MGet(a, "type", "keys") : "keys",
+            IsObject(a) ? MGet(a, "value", "") : "")
+        Atlas.OpenDlg(() => Atlas.BindDlg(0,
+            IsKeyInput(MGet(r, "button", "")), seed))
+    }
+
+    /** Ctrl+D. rowRefs belongs to the Mouse and Keyboard pages ONLY -- it is
+     *  left standing when another page is drawn, so a stale index there
+     *  would duplicate a row nobody is looking at. */
+    static DuplicateSel() {
+        if (IsObject(Atlas.dlg) || Lumi.editing > 0)
+            return                           ; a dialog or a live field owns
+        pn := Atlas.PanelName()
+        if (pn != "Mouse" && pn != "Keyboard")
+            return
+        if !IsObject(Atlas.list) {
+            Lumi.Toast("Pick a row in the list first", "warn")
+            return
+        }
+        Atlas.DuplicateRow(Atlas.list.sel)
+    }
+
+    /**
+     * Delete one row -- and UNDO, instead of a question.
+     *
+     * A yes/no box in front of every single-row delete costs a click on the
+     * ninety-nine deletes that were meant to catch the hundredth, and the
+     * hundredth is cheap to put right: one row, one index, one re-save. The
+     * row goes immediately and Ctrl+Z puts it back where it was.
+     *
+     * BULK deletes keep their confirmation, because none of them is one row
+     * and an index: ReloadFromDisk, ImportConfig, RestoreShipped, MenuDelete
+     * and DoEssClear all throw away something there is no single step back
+     * from.
+     */
     static DeleteSel() {
         ref := Atlas.SelectedRef()
         if (ref = 0) {
             Lumi.Toast("Pick a row in the list first", "warn")
             return
         }
-        ; Confirm first, and name the thing being deleted. The ref is taken
-        ; BEFORE the question: the list this row came from is rebuilt by the
-        ; status tick, and re-reading the selection afterwards could point at
-        ; a different row than the one the reader agreed to.
-        ; ... and the ref is re-checked against the CURRENT config, not
-        ; trusted from the list: rowRefs is rebuilt on every panel draw, and
-        ; a row deleted from the classic window between draws would leave an
-        ; index pointing past the end of the array.
+        ; The ref is re-checked against the CURRENT config, not trusted from
+        ; the list: rowRefs is rebuilt on every panel draw, and a row deleted
+        ; from the classic window between draws would leave an index pointing
+        ; past the end of the array.
         if (ref > g_Cfg["bindings"].Length) {
             Lumi.Toast("That row is no longer there", "warn")
             Atlas.Build()
@@ -19333,19 +19632,45 @@ class Atlas {
         r := g_Cfg["bindings"][ref]
         what := Trim(InputLabel(MGet(r, "button", "")) " "
             . MGet(r, "event", ""))
-        if !Atlas.Confirm("Delete the setting for " what "?`n`n"
-            . "That button or key goes back to doing whatever Windows and "
-            . "the program normally do with it.")
-            return
         g_Cfg["bindings"].RemoveAt(ref)
+        ; Stashed BEFORE the save, with the index it came from: undo puts it
+        ; back where it was rather than on the end, so the order the list is
+        ; read in survives a misclick.
+        Atlas.lastDeleted := {row: r, at: ref, what: what}
         Atlas.SaveOrWarn()
         AfterCfgChange()
-        Lumi.Toast("Deleted — that one is back to normal", "magenta")
+        Lumi.Toast("Deleted " what " — press Ctrl+Z to undo", "magenta", 6000)
         ; Nothing is selected afterwards: the row that was is gone, and
         ; keeping the index would hand Edit and Delete whichever row slid
-        ; up into its place.
+        ; up into its place. Build() floors it at the first row.
         Atlas.selWant := 0
         Atlas.Build()
+    }
+
+    /** The one row DeleteSel last removed, or 0. */
+    static lastDeleted := 0
+
+    /**
+     * Ctrl+Z: put the last deleted row back, at the index it was at, through
+     * the same save path DeleteSel used. One level deep on purpose -- this
+     * is the safety net under a single misclick, not an edit history.
+     */
+    static UndoDelete(*) {
+        if (IsObject(Atlas.dlg) || Lumi.editing > 0)
+            return                           ; a dialog or a live field owns
+        d := Atlas.lastDeleted
+        if !IsObject(d) {
+            Lumi.Toast("Nothing to put back", "warn")
+            return
+        }
+        Atlas.lastDeleted := 0               ; one undo, not a repeating one
+        at := Min(Max(d.at, 1), g_Cfg["bindings"].Length + 1)
+        g_Cfg["bindings"].InsertAt(at, d.row)
+        Atlas.SaveOrWarn()
+        AfterCfgChange()
+        Atlas.selWant := 0
+        Atlas.Build()
+        Lumi.Toast("Put back — " d.what, "jade")
     }
 
     ; ── BINDING EDITOR (its own layer) ──────────────────────────────────────
@@ -19509,8 +19834,10 @@ class Atlas {
             keyMode ? "jade" : "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.SaveDlg(st), "primary")
+        ; st.primary is what Ctrl+S and Ctrl+Enter press (Atlas.DlgPrimary).
+        ; The SAME handler object the button gets, so there is one save path.
+        st.primary := Atlas.SaveDlg(st)
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Save", st.primary, "primary")
 
         Atlas.dstate := st
         Lumi.Focus.Restore()
@@ -20012,8 +20339,8 @@ class Atlas {
             keyMode ? "jade" : "cyan")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.SaveWheel(st), "primary")
+        st.primary := Atlas.SaveWheel(st)        ; Ctrl+S / Ctrl+Enter
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Save", st.primary, "primary")
 
         Atlas.dstate := st
         Lumi.Focus.Restore()
@@ -20357,10 +20684,17 @@ class Atlas {
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
             : count " directions · clockwise", "cyan")
+        ; SAVE AND SEE IT (v0.6.6.6). The loop was Save, find the row again,
+        ; press "Practice safely" -- three steps between changing a wedge and
+        ; seeing it, which is the one thing this editor is judged on.
+        ; MenuTryDone / RadialClose bring the settings window back on their
+        ; own, whichever way the trial ends.
+        Lumi.Btn(w - 420, h - 60, 150, 36, "Save & practice",
+            Atlas.SaveMenuTry(st), "accent")
         Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.SaveMenu(st), "primary")
+        st.primary := Atlas.SaveMenu(st)         ; Ctrl+S / Ctrl+Enter
+        Lumi.Btn(w - 140, h - 60, 116, 36, "Save", st.primary, "primary")
 
         Atlas.dstate := st
         Lumi.Focus.Restore()
@@ -20588,6 +20922,28 @@ class Atlas {
 
     static SaveMenu(st) {
         return (*) => Atlas.DoSaveMenu(st)
+    }
+
+    static SaveMenuTry(st) {
+        return (*) => Atlas.DoSaveMenuTry(st)
+    }
+
+    /**
+     * Save, then open the menu at the cursor. DoSaveMenu closes the dialog
+     * ONLY when it actually wrote -- a name clash, a bad shortcut or a
+     * failed save all leave it standing -- so a dialog still up is the test
+     * for "there is nothing to practise yet".
+     */
+    static DoSaveMenuTry(st) {
+        ref := st.ref
+        Atlas.DoSaveMenu(st)
+        if IsObject(Atlas.dlg)
+            return
+        ; Behind CloseDlg's own -1 rebuild (same queue, so it runs first):
+        ; that rebuild must not land on the window MenuTry has just hidden.
+        ; The row is picked on the list that rebuild leaves behind, because
+        ; MenuTry reads the menu back out of the selection.
+        SetTimer(() => (Atlas.SelectListRow(ref), Atlas.MenuTry()), -1)
     }
 
     static DoSaveMenu(st) {

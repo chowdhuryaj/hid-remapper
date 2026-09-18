@@ -13,8 +13,9 @@ workstation. Treat it as a candidate for testing.
 2. Double-click `RadMapper.ahk`. A tray icon appears and the settings window
    opens on **Home** the first time each version runs.
 3. On Home, pick what you want to do:
-   - **Change what a mouse button does** (a three-question wizard: which
-     button, tap or hold, what it should do; "All options" opens the full editor)
+   - **Change what a mouse button does** (the binding editor: pick the
+     button on the mouse map, then Add new — or right-click the button on
+     the map and choose "Add an assignment here")
    - **Change what a keyboard key does**
    - **Set up a radial menu** (commands around the pointer, picked by direction)
    - **Apply a starter pack** (one click sets up a common arrangement, such as
