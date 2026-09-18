@@ -1678,6 +1678,13 @@ global g_FgHwnd := 0           ; foreground-hwnd micro-cache (same-ms reuse)
 global g_FgTick := -1
 global g_OurHwnds := Map()     ; our own GUI hwnds -> passthrough while active
 global g_HookState := Map()    ; input name -> 1 while its hotkeys are On
+; --- the left button's own hook gate (see LButtonHookActive) -------------
+; SyncHooks recomputes these from the config. With a click lock (which needs
+; no precomputed flag -- ClickLockOwns answers for itself) they are the ONLY
+; reasons the left button is ever hooked, and all of them are false in a stock
+; config, which is what makes a base-layer left click byte-for-byte native.
+global g_LBtnLayerHosts := Map()   ; inputs whose layer carries an LButton row
+global g_LBtnSelfHost := false     ; holding LEFT itself arms a layer
 global g_KbRegistered := []    ; keyboard hotkey strings currently registered
 ; Binding membership index (see RebuildIndex). Starts as a valid EMPTY index
 ; so the hot-path lookups never need an existence guard.
@@ -2216,6 +2223,47 @@ MButtonHoldWarning() {
         . " until RadMapper can tell a tap from a hold -- and IntelliSpace"
         . " uses middle-drag to pan, so panning will feel dead for the hold"
         . " threshold and a quick pan can be lost.`n`nSet it anyway?"
+}
+
+; --- the left button in the base layer (v1.2.4) ------------------------------
+; "Preserve left click from any mapping in the base layer so it never has
+; issues." With no layer engaged the left button is not the engine's to take:
+; it is what selects, drags, marquees, measures and window/levels, and every
+; failure mode this file documents -- a withheld click, a lost Up, an injected
+; resend an elevated window drops -- costs more there than any remap could pay
+; back. So a base-layer LButton row is REFUSED wherever a row can be made
+; (Atlas.DoSave, BindingOkRun) and DROPPED on load (ValidateCfg), which is what
+; lets SyncHooks leave the button unhooked and the OS deliver the click.
+;
+; Two deliberate exceptions:
+;   * A row under a LAYER is fine -- hold the right button and the left button
+;     does something is exactly what layers are for, and the hook is live only
+;     while that layer is engaged.
+;   * The INERT shape (native, self/blank value, tap, everywhere, no mods) is
+;     kept: that row IS "a plain left click", it is what SeedNativeDefaults
+;     ships so the Mouse page can list the button at all, and the engine
+;     neither indexes nor hooks it.
+; An app-scoped base-layer row counts as base layer and is refused with the
+; rest: "any mapping" means any, and a native row scoped to one program is not
+; inert, so it would hook the button inside that program.
+LButtonBaseRow(b) {
+    if (MGet(b, "button", "") != "LButton")
+        return false
+    ; The RETIRED "while" field, and the reason this runs before MigrateCfg
+    ; can fold it into "layer": a v1.0 row with while=XButton1 has an empty
+    ; layer and would read as base here, so it would be deleted on load
+    ; before the migration that makes it a proper layer row. IsObject first
+    ; -- comparing a Map with "" throws, and a hand-edited file gets to
+    ; choose what is in this field.
+    w := MGet(b, "while", "")
+    if (IsObject(w) || w != "")
+        return false
+    return (LayerParts(b).Length = 0 && !InertShape(b))
+}
+
+LButtonBaseMessage() {
+    return "The left button is always a plain click in the base layer --"
+        . " put this row under a layer (Only while holding ...)."
 }
 
 ; --- key names (v0.3) --------------------------------------------------------
@@ -3288,6 +3336,19 @@ ValidateCfg() {
                     row.Delete("holdMs")
                 else
                     row["holdMs"] := Integer(v)
+            }
+            ; The left button is never the engine's in the base layer (see
+            ; LButtonBaseRow). The editors refuse such a row; this is the
+            ; other way in -- a hand-edited file, an import, or a config
+            ; written by an older build. Dropped rather than kept-and-ignored,
+            ; because a row the Mouse page lists and the engine never runs is
+            ; the worst of both. SeedNativeDefaults puts the inert "system
+            ; default" row back afterwards, so the button still shows up.
+            if LButtonBaseRow(row) {
+                Problem("config", "dropped a left-button row with no layer: "
+                    . "the left button is always a plain click in the base "
+                    . "layer -- put it under a layer to get it back")
+                continue
             }
             kept.Push(row)
         }
@@ -4538,6 +4599,60 @@ KbHookActive(hk) {
     return 1
 }
 
+; HotIf gate for the LEFT BUTTON alone (v1.2.4). "Preserve left click from any
+; mapping in the base layer so it never has issues": with no layer engaged a
+; physical left click must be a NATIVE left click, delivered by Windows -- no
+; hook, no state object, no synthetic down/up, no timer. A hotkey whose HotIf
+; is false is not merely ignored, it is not installed for that event at all
+; (AHK: "performs its native function ... passes through"), so returning 0 here
+; is the guarantee, not an approximation of it. LButton therefore gets its own
+; criterion instead of riding HookActive with the other four buttons, and
+; SyncHooks does not register it at all when none of the reasons below can
+; ever be true -- which is the shipped config.
+;
+; The reasons, in the order they are tested:
+;
+;   1. WE ALREADY OWN A PRESS (or a latch). This clause is what keeps the Up
+;      reachable, and it deliberately outranks even the over-our-own-window
+;      test. The layer host can be released between the left button's down and
+;      its up -- that is a perfectly ordinary way to end a chord -- and an Up
+;      that never reaches OnReleaseHK leaks the state object AND, for a
+;      passthru/eager state, leaves a synthetic left button DOWN in the OS.
+;      A state exists only while a press is in flight (or its tap window is
+;      open), so this clause cannot hook a click that the engine did not start.
+;      ClickLockOwns is the same rule for a latch whose state has already been
+;      cleared by the physical release: its next press is the unlatch.
+;   2. HOLDING LEFT ITSELF ARMS A LAYER. "Hold Left Button" is an offered
+;      layer host, and a layer nothing can arm would be worse than no rule at
+;      all -- so that config keeps exactly the hook it had before. It is the
+;      one remaining way to put the left button on the engine in the base
+;      layer, and it takes a deliberate choice in the layer dropdown to get it.
+;   3. A LAYER THAT CARRIES AN LBUTTON ROW IS ENGAGED. "Hold the right button
+;      and the left button does something" is what layers are for. The held
+;      test matches CurCtx exactly (down and unconsumed), so the hook is live
+;      precisely when SpecFor could resolve an LButton row.
+;
+; Unlike HookActive, the fallback is 0 -- NATIVE -- not 1: for this one button
+; "do nothing" is the correct failure, and clause 1 is outside that fallback
+; so a live state can never be dropped by it.
+LButtonHookActive(hk) {
+    try {
+        if (g_BS.Has("LButton") || ClickLockOwns("LButton"))
+            return 1
+    }
+    try {
+        if !HookActive(hk)
+            return 0
+        if g_LBtnSelfHost
+            return 1
+        for name, st in g_BS {
+            if (st.down && !st.consumed && g_LBtnLayerHosts.Has(name))
+                return 1
+        }
+    }
+    return 0
+}
+
 OnPressHK(btn, *) {
     Critical "On"
     TestNotify(btn, 1)
@@ -5595,6 +5710,42 @@ ConflictReport(focus := "") {
             }
         }
     }
+    ; 4b. the left button: the one input the base layer never takes. Stated
+    ;     unconditionally, because "why did my left click not do X" is the
+    ;     question this rule creates, and the report is where it gets asked.
+    ;     In the WHOLE report it is only worth a line when a layer actually
+    ;     uses the button -- otherwise a stock config could never say "no
+    ;     conflicts found" again.
+    lbLayered := []
+    for row in rows {
+        if (MGet(row, "button", "") != "LButton" || IsInertRow(row))
+            continue
+        if (LayerParts(row).Length > 0)
+            lbLayered.Push(row)
+    }
+    if (focus = "LButton" || (focus = "" && lbLayered.Length > 0)) {
+        txt := "Left button: the base layer never remaps it -- with no layer "
+            . "held it is a plain click, delivered by Windows, and RadMapper "
+            . "does not hook it at all. "
+        if (lbLayered.Length = 0)
+            txt .= "No layer changes it either."
+        else {
+            txt .= "Under a layer it does: "
+            i := 0
+            for r in lbLayered {
+                i += 1
+                if (i > 4) {
+                    txt .= "; …"
+                    break
+                }
+                txt .= (i > 1 ? "; " : "") ConflictScope(r) " "
+                    . StrLower(EventLabelOf(MGet(r, "event", ""))) " → "
+                    . DescribeAction(r["action"])
+            }
+            txt .= "."
+        }
+        out.Push({kind: "info", text: txt})
+    }
     ; 5. radial rows pointing at nothing
     for row in rows {
         a := MGet(row, "action", 0)
@@ -6261,6 +6412,24 @@ ClickLockToggle(v) {
             st.consumed := true
         }
         SendNativeDown(held)
+        if !st {
+            ; NO state at all: the press was never ours. That is the normal
+            ; case for the LEFT button since v1.2.4 -- a base-layer left click
+            ; is native and unhooked, so latching one arrives here with
+            ; nothing to withhold the physical Up with, and the latch would
+            ; come undone the instant the hand let go. LButtonHookActive turns
+            ; the hook on for a live latch; this gives that hook the state it
+            ; needs, in exactly the shape the hooked path leaves behind (a
+            ; locked passthru), so OnReleaseHK swallows the Up and the
+            ; watchdog judges it like any other synthetic hold.
+            st := NewBS(src)
+            st.down := true
+            st.mode := "passthru"
+            st.passBtn := held
+            st.locked := true
+            st.pressTick := A_TickCount
+            st.physSeen := InputHeldPhysical(src)
+        }
     }
     g_ClickLock := {held: held, src: src}
     ClickLockWatchStart()
@@ -9251,7 +9420,14 @@ RadialBindCancel() {
         HotIf(RadialCancelActive)
         HookChanged()
         for b in ["LButton", "RButton", "MButton"] {
-            if g_HookState.Has(b)            ; already ours: OnPressHK cancels
+            ; LButton is the exception (v1.2.4): it IS in g_HookState when a
+            ; layer carries a row for it, but its variant is gated OFF in the
+            ; base layer, so "already ours" is not true of the click a menu
+            ; has to be able to cancel. Registering ours as well is safe --
+            ; they are separate HotIf variants, and AHK runs the first whose
+            ; criterion holds: the engine's when a layer is engaged (OnPressHK
+            ; cancels), this one otherwise.
+            if (g_HookState.Has(b) && b != "LButton")   ; ours: OnPressHK cancels
                 continue
             try {
                 Hotkey("*" b, RadialCancelHit.Bind(b), "On")
@@ -10416,30 +10592,55 @@ RunMacro(name, *) {
 ; completely native.
 SyncHooks() {
     global g_BadKeyWarned                    ; declared here, not in the try
+    global g_LBtnLayerHosts, g_LBtnSelfHost
     HookChanged()
     needed := Map()
     needed.CaseSense := "Off"                ; hand-edited "xbutton1" must
+    ; The left button's three reasons, recomputed from the config alongside
+    ; `needed` so LButtonHookActive never has to walk the bindings itself --
+    ; it runs on the press path, where `needed` never goes.
+    lbHosts := Map()
+    lbHosts.CaseSense := "Off"
+    lbSelfHost := false
+    lbLock := false
     if g_Enabled {                           ; still hook XButton1
         for row in g_Cfg["bindings"] {
             if IsInertRow(row)               ; display-only default rows never
                 continue                     ; cost a hook
-            needed[CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))] := 1
-            for part in LayerParts(row)      ; layer-host inputs must be hooked
-                needed[CanonicalInputName(NormalizeInputName(part))] := 1  ; so holding arms
+            bcode := CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))
+            needed[bcode] := 1
+            for part in LayerParts(row) {    ; layer-host inputs must be hooked
+                pcode := CanonicalInputName(NormalizeInputName(part))  ; so holding arms
+                needed[pcode] := 1
+                ; EVERY component of the path, not just complete paths: a
+                ; depth-2 layer with one half held is already a layer being
+                ; engaged, and erring towards hooked here only costs a click
+                ; the engine then hands straight back (SpecFor finds nothing,
+                ; the press is `pure`). Erring the other way would lose the row.
+                if (bcode = "LButton")       ; THIS is the row the left button
+                    lbHosts[pcode] := 1      ; wakes up for; remember its host
+                if (pcode = "LButton")       ; holding LEFT is what arms a layer
+                    lbSelfHost := true
+            }
             ; A click-lock row has to hook what it can LATCH, not just its own
             ; input: an unhooked button's physical release reaches the OS and
             ; undoes the latch the instant you let go (v0.3.1).
             if (MGet(row["action"], "type", "") = "clicklock") {
                 lv := ResolveInputValue(MGet(row["action"], "value", ""))
-                if IsMouseInput(lv)
+                if IsMouseInput(lv) {
                     needed[lv] := 1
-                else {
+                    if (lv = "LButton")
+                        lbLock := true
+                } else {
                     for b in BUTTONS
                         needed[b] := 1
+                    lbLock := true           ; blank = whichever is held: any
                 }
             }
         }                                    ; the layer
     }
+    g_LBtnLayerHosts := lbHosts
+    g_LBtnSelfHost := lbSelfHost
     ; Each Hotkey toggle is wrapped: a throw mid-reconfigure must never leave an
     ; input SUPPRESSED with no live handler (a dead/frozen click, or a keyboard
     ; that eats a character). On failure we roll back to fully native and keep
@@ -10456,6 +10657,8 @@ SyncHooks() {
     HotIf(HookActive)
     try {
     for btn in BUTTONS {
+        if (btn = "LButton")                 ; own criterion, own block below
+            continue
         want := needed.Has(btn)
         have := g_HookState.Has(btn)
         if (want && !have) {
@@ -10507,6 +10710,42 @@ SyncHooks() {
             g_HookState.Delete(wh)
         }
     }
+    } finally {
+        HotIf()
+    }
+    ; --- the left button, under its own criterion ---------------------------
+    ; Same on/off contract as the loop above (a throw must never leave
+    ; "*LButton" suppressing with no handler), but keyed to LButtonHookActive
+    ; instead of HookActive -- and, unlike every other button, NOT registered
+    ; at all unless one of the three reasons could fire. With the shipped
+    ; config nothing here runs, no left-button hotkey exists, and the OS
+    ; delivers every left click on its own. `needed` is deliberately not
+    ; consulted: a base-layer LButton row is refused by the editors and
+    ; dropped by ValidateCfg, so it must not be able to buy a hook here
+    ; either if one ever reaches memory by another route.
+    HotIf(LButtonHookActive)
+    try {
+        want := (lbHosts.Count > 0 || lbSelfHost || lbLock)
+        have := g_HookState.Has("LButton")
+        if (want && !have) {
+            try {
+                Hotkey("*LButton", OnPressHK.Bind("LButton"), "On")
+                Hotkey("*LButton Up", OnReleaseHK.Bind("LButton"), "On")
+                g_HookState["LButton"] := 1
+            } catch as e {
+                try Hotkey("*LButton", "Off")
+                try Hotkey("*LButton Up", "Off")
+                Problem("hook-error", "could not hook LButton: " e.Message)
+            }
+        } else if (!want && have) {
+            try {
+                Hotkey("*LButton", "Off")
+                Hotkey("*LButton Up", "Off")
+            } catch as e {
+                Problem("hook-error", "could not unhook LButton: " e.Message)
+            }
+            g_HookState.Delete("LButton")
+        }
     } finally {
         HotIf()
     }
@@ -12805,6 +13044,10 @@ BindingOkRun(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) 
         return
     b := NewBinding(AppCodeFromDisp(ddApp.Text), lay, ReadModBoxes(boxes), btn,
         event, atype, val, ReadHoldMsField(dlg, event))
+    if LButtonBaseRow(b) {
+        MsgBox(LButtonBaseMessage(), "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
     try {
         ; The list edit alone is indivisible; SaveCfg (a disk write) and the
         ; refreshes are deliberately left interruptible. The HUD waits until
@@ -17642,9 +17885,16 @@ class Atlas {
         Atlas.Zone("XButton2", bx - 28, y + 116, 26, 42, 4)
         Atlas.Zone("XButton1", bx - 28, y + 164, 26, 42, 4)
 
-        Lumi.Label(x + 16, y + bodyH + 6, 268,
+        Lumi.Label(x + 16, y + bodyH + 4, 268,
             "Olive rim = assigned here.   Pink ring + L = holds a layer.",
             "mute", "center")
+        ; The left button's rule, where the left button is. There is no
+        ; per-zone hint mechanism (a Zone draws a caption and a count, and the
+        ; L button is 95 px wide -- a sentence inside it would not fit), so it
+        ; goes on the map's own legend line rather than inventing one.
+        Lumi.Label(x + 16, y + bodyH + 22, 268,
+            "Left is always a plain click in the base layer.", "mute",
+            "center")
     }
 
     /**
@@ -20665,6 +20915,10 @@ class Atlas {
             return
         }
         b := NewBinding(app, lay, mods, btn, event, atype, val, hms)
+        if LButtonBaseRow(b) {
+            Lumi.Toast(LButtonBaseMessage(), "danger", 5000)
+            return
+        }
         ; An EDIT can collide too: change the button or the event of an
         ; existing row onto one that already exists and a row is silently
         ; dropped. Count the duplicates that are not this row and not inert.
