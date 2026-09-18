@@ -1684,7 +1684,13 @@ global g_HookState := Map()    ; input name -> 1 while its hotkeys are On
 ; reasons the left button is ever hooked, and all of them are false in a stock
 ; config, which is what makes a base-layer left click byte-for-byte native.
 global g_LBtnLayerHosts := Map()   ; inputs whose layer carries an LButton row
-global g_LBtnSelfHost := false     ; holding LEFT itself arms a layer
+global g_LBtnSelfHost := false     ; holding LEFT itself arms a layer -- now
+                                   ; DEFENSIVE ONLY: LayerChoices does not
+                                   ; offer it, the editors refuse it and
+                                   ; ValidateCfg drops it, so nothing can set
+                                   ; this true. Left in place so a config that
+                                   ; reaches memory by some other route still
+                                   ; gets a hook rather than a dead layer.
 global g_KbRegistered := []    ; keyboard hotkey strings currently registered
 ; Binding membership index (see RebuildIndex). Starts as a valid EMPTY index
 ; so the hot-path lookups never need an existence guard.
@@ -2264,6 +2270,32 @@ LButtonBaseRow(b) {
 LButtonBaseMessage() {
     return "The left button is always a plain click in the base layer --"
         . " put this row under a layer (Only while holding ...)."
+}
+
+; --- the left button as a LAYER HOST -----------------------------------------
+; The base-layer rule above had one hole left in it: "Hold Left Button" was
+; still offered in the layer dropdown, and choosing it is a base-layer mapping
+; of the left button by another name -- the hook goes on, the click is withheld
+; while the engine decides tap-or-hold, and every failure the note above lists
+; comes back. The user ruled that out. So an LButton anywhere in a layer PATH
+; ("LButton", "LButton/RButton", "RButton/LButton") is refused wherever a row
+; is made and dropped on load, the same three gates the base-layer rule uses.
+; LayerChoices no longer offers it, so this is the hand-edited-file path.
+LayerHostsLButton(row) {
+    for p in LayerParts(row) {
+        if (p = "LButton")
+            return true
+    }
+    ; The RETIRED "while" field, for the same reason LButtonBaseRow reads it:
+    ; ValidateCfg runs BEFORE MigrateCfg, so a v1.0 row with while=LButton has
+    ; no layer yet and would slip through on its way to becoming one.
+    w := MGet(row, "while", "")
+    return (!IsObject(w) && w = "LButton")
+}
+
+LButtonLayerMessage() {
+    return "The left button cannot host a layer -- it is always a plain"
+        . " click. Hold a thumb button or the right button instead."
 }
 
 ; --- key names (v0.3) --------------------------------------------------------
@@ -3348,6 +3380,17 @@ ValidateCfg() {
                 Problem("config", "dropped a left-button row with no layer: "
                     . "the left button is always a plain click in the base "
                     . "layer -- put it under a layer to get it back")
+                continue
+            }
+            ; ...and the other half of the same rule: a layer HOSTED on the
+            ; left button is a base-layer mapping of it by another name (it
+            ; hooks the button and withholds the click to tell tap from hold).
+            ; The dropdown no longer offers it; this is the hand-edited file,
+            ; the import, and the config written by a build that did.
+            if LayerHostsLButton(row) {
+                Problem("config", "dropped a row whose layer is held on the "
+                    . "left button: the left button cannot host a layer -- "
+                    . "hold a thumb button or the right button instead")
                 continue
             }
             kept.Push(row)
@@ -4622,11 +4665,13 @@ KbHookActive(hk) {
 ;      open), so this clause cannot hook a click that the engine did not start.
 ;      ClickLockOwns is the same rule for a latch whose state has already been
 ;      cleared by the physical release: its next press is the unlatch.
-;   2. HOLDING LEFT ITSELF ARMS A LAYER. "Hold Left Button" is an offered
-;      layer host, and a layer nothing can arm would be worse than no rule at
-;      all -- so that config keeps exactly the hook it had before. It is the
-;      one remaining way to put the left button on the engine in the base
-;      layer, and it takes a deliberate choice in the layer dropdown to get it.
+;   2. HOLDING LEFT ITSELF ARMS A LAYER. DEFENSIVE ONLY now: "Hold Left
+;      Button" was the one remaining way to put the left button on the engine
+;      in the base layer, so it is no longer offered (LayerChoices), refused
+;      by both editors and dropped by ValidateCfg. g_LBtnSelfHost can no
+;      longer become true; the clause stays because a layer nothing can arm
+;      would be worse than no rule at all if such a config ever did reach
+;      memory.
 ;   3. A LAYER THAT CARRIES AN LBUTTON ROW IS ENGAGED. "Hold the right button
 ;      and the left button does something" is what layers are for. The held
 ;      test matches CurCtx exactly (down and unconsumed), so the hook is live
@@ -10316,7 +10361,92 @@ AppCrits(appName, prefer := "") {
     return {pref: pref, all: all}
 }
 
+; The keystroke itself, and ONLY the keystroke, uninterruptible. A hook thread
+; that runs between the "+" and the "{Tab}" of a "+{Tab}" emits its own
+; "{Blind}{LButton Down}" inside our modifier: that is the shift-click, and
+; the Shift left logically down behind it. The WinWaitActive and the Sleeps
+; around the send stay interruptible on purpose (see the design note above
+; RM_PSFireReal) -- a delivery thread that parks the input pipeline for a
+; second is its own clinical failure.
+; SafeSend swallows its own send errors, so this cannot throw; the finally is
+; here because a Critical left ON would cost far more than the two lines.
+PSSendAtomic(keys) {
+    Critical "On"
+    try {
+        SafeSend(keys)
+    } finally {
+        Critical "Off"
+    }
+}
+
+; A delivery must never run THROUGH a click. Field navigation sends "+{Tab}",
+; and a physical left button that changes state inside that send goes out as
+; "{Blind}{LButton Down}" carrying the Shift the send still has down: the
+; click lands shift-modified, in PowerScribe rather than where the pointer is,
+; and its Up arrives after focus has gone back. What is left behind is a Shift
+; that is logically down with the key physically up (every later click is a
+; shift-click) and an orphan LButton down that the engine's own bookkeeping
+; knows nothing about -- the state the reader could only clear with Unstick.
+; So a delivery WAITS while a mouse button is physically held AND its press
+; could still put a native down or up on the wire (see the loop below), much
+; as FollowTick refuses to warp the pointer mid-click, and the keys go back to
+; the FRONT of the queue so order is kept.
+;
+; BOUNDED, because a button that stays down is not a reason to stop dictating:
+; after PS_DEFER_MS of continuous deferral the keys go out anyway and the
+; window starts again. The cost of the wait is at most one 100 ms retry on a
+; normal tap; the cost of not waiting is a dead left button.
+PSDeferForButtons(entry) {
+    global g_PSQueue
+    static since := 0
+    static PS_DEFER_MS := 1500
+    gen := g_PSGen               ; panic empties the queue and bumps this: a
+    held := false                ; deferred keystroke must not outlive it
+    for b in BUTTONS {
+        if !GetKeyState(b, "P")
+            continue
+        ; NOT every physically-down button is a hazard -- only one whose press
+        ; can still put a native down or up on the wire while we send. A press
+        ; the engine has already SETTLED cannot: "held" and "fired" have
+        ; delivered their action, "armedmod" is a layer host sitting silent,
+        ; and "wait" is a tap window on a button that is already up. Counting
+        ; those would be self-defeating, because the commonest field-nav
+        ; binding is a HOLD: the very button that asked for the "+{Tab}" is
+        ; still down when the delivery runs, and it would defer its own
+        ; keystroke for the full 1.5 s, every time.
+        ; The hazards are the states that still owe the OS an event: "pending"
+        ; (undecided -- its release mints a native click or starts a drag),
+        ; "passthru" and "eager1" (a synthetic down is out and our hook still
+        ; owes the Up), and NO STATE AT ALL -- the unhooked, fully native
+        ; button, which is the base-layer left click this whole fix is about.
+        st := BS(b)
+        if (st && (st.mode = "held" || st.mode = "fired"
+            || st.mode = "armedmod" || st.mode = "wait"))
+            continue
+        held := true
+        break
+    }
+    if !held {
+        since := 0
+        return false
+    }
+    now := A_TickCount
+    if (since = 0)
+        since := now
+    else if (now - since >= PS_DEFER_MS || now < since) {
+        since := 0                           ; deliver anyway; fresh window
+        return false
+    }
+    if (g_PSGen != gen)                      ; panic fired while we looked at
+        return true                          ; the buttons: drop these keys
+    g_PSQueue.InsertAt(1, entry)             ; front, not back: FIFO survives
+    SetTimer(PSDrain, -100)
+    return true
+}
+
 AppDeliverNow(appName, keys) {
+    if PSDeferForButtons({app: appName, keys: keys})
+        return "defer"                       ; re-queued; PSDrain stops draining
     gen := g_PSGen
     prefer := (appName = Cfg("pacsApp")) ? Cfg("pacsWindow") : ""
     cr := AppCrits(appName, prefer)
@@ -10334,7 +10464,7 @@ AppDeliverNow(appName, keys) {
     fast := (prefer != "" && cr.pref.Length > 0) ? cr.pref : crits
     for crit in fast {
         if WinActive(crit) {
-            SafeSend(keys)
+            PSSendAtomic(keys)
             return
         }
     }
@@ -10386,7 +10516,7 @@ AppDeliverNow(appName, keys) {
         return
     }
     Sleep(50)
-    SafeSend(keys)
+    PSSendAtomic(keys)
     if prev {
         Sleep(Cfg("psReturnDelay"))
         try WinActivate("ahk_id " prev)
@@ -10422,6 +10552,7 @@ PSDrain() {
     if g_PSBusy
         return
     g_PSBusy := true
+    deferred := false
     try {
         while (g_PSQueue.Length > 0) {
             keys := ""
@@ -10429,21 +10560,36 @@ PSDrain() {
             catch                    ; panic swapped/cleared the queue between
                 break                ; the while-check and this line
             if IsObject(keys)                ; an app-targeted delivery
-                AppDeliverNow(keys.app, keys.keys)
+                r := AppDeliverNow(keys.app, keys.keys)
             else
-                PSDeliverNow(keys)
+                r := PSDeliverNow(keys)
+            ; A delivery that deferred put its keys back at the FRONT of the
+            ; queue and re-armed this timer. Stop draining, or the loop picks
+            ; the same entry straight back up and spins on it until the button
+            ; comes up. The finally below still clears g_PSBusy, so the -100 ms
+            ; re-arm gets in.
+            if (r = "defer") {
+                deferred := true
+                break
+            }
         }
     } finally {
         g_PSBusy := false
     }
-    if (g_PSQueue.Length > 0)        ; a push can interleave between the last
-        SetTimer(PSDrain, -1)        ; while-check and the unlock above
+    if (!deferred && g_PSQueue.Length > 0)   ; a push can interleave between the
+        SetTimer(PSDrain, -1)                ; last while-check and the unlock
+                                             ; above. NOT after a deferral: -1
+                                             ; would replace the deferral's own
+                                             ; 100 ms retry and spin the timer
+                                             ; for as long as the button is down
 }
 
 PSDeliverNow(keys) {
+    if PSDeferForButtons(keys)   ; never send through a click -- see the note
+        return "defer"           ; on PSDeferForButtons. Re-queued at the front
     gen := g_PSGen               ; panic mid-flight bumps this: abort unsent
     if PSActive() {
-        SafeSend(keys)
+        PSSendAtomic(keys)
         return
     }
     psWin := PSMatch()
@@ -10482,7 +10628,7 @@ PSDeliverNow(keys) {
         return
     }
     Sleep(50)
-    SafeSend(keys)
+    PSSendAtomic(keys)
     if prev {
         Sleep(Cfg("psReturnDelay"))
         try WinActivate("ahk_id " prev)
@@ -11007,6 +11153,33 @@ WatchdogHolderAlive(type) {
     return false
 }
 
+; The blanket guard for the two sweeps below, which judge the OS's own
+; keyboard/button state rather than the engine's bookkeeping. They may run
+; only when nothing of ours could legitimately be holding something down:
+;   * any live press (st.down) -- a moddrag holds "{mod Down}{LButton Down}"
+;     for the whole hold, a native passthrough holds its button, a keysrepeat
+;     is mid-burst with modifiers of its own, and every one of those reads as
+;     "logically down, physically up" for the input we synthesised;
+;   * a click-lock latch (deliberately panic-only -- never swept);
+;   * a drag scroll / drag zoom grab, which owns the pointer;
+;   * the keyboard pointer (Warp), which holds and clears modifiers itself and
+;     can have the left button grabbed for a drag.
+; When any of those is true the sweeps stand down entirely and their tick
+; counters reset, so a state that appears mid-count never inherits a count.
+WatchdogSweepSafe() {
+    for name, st in g_BS {
+        if st.down
+            return false
+    }
+    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr))
+        return false
+    try {
+        if (Warp.active || Warp.grabbing)
+            return false
+    }
+    return true
+}
+
 ; Emit what the watchdog collected -- OUTSIDE its Critical section. Problem()
 ; and HUD() DRAW (a GDI+ toast is a layered window and tens of milliseconds of
 ; work), and drawing under Critical parks every hotkey, PSDrain, the radial
@@ -11074,11 +11247,36 @@ Watchdog() {
             why := "held 30 s with nothing out"
         } else if (!st.physSeen || (g_HookChangedAt - st.pressTick) >= 0) {
             ; an injected source, or a hook change since the press: the
-            ; physical reading is not evidence either way
-            if (age < 30000)
-                continue
-            why := st.physSeen ? "held 30 s, hooks changed since the press"
-                : "held 30 s, injected source"
+            ; physical reading is not evidence either way.
+            ;
+            ; For a HOOK CHANGE that stays absolute -- the physical table
+            ; was WIPED, so "up" means nothing about anything, and the 30 s
+            ; runaway cap is all there is (v0.6.6.4).
+            ; An INJECTED press (v0.6.6.2) is a different thing: the table was
+            ; never written for that press, but it is otherwise intact and
+            ; still being updated, so a reading taken a full tick later, with
+            ; no hook change in between, is at least consistent evidence. And
+            ; 30 s of a synthetic button stuck down is most of a dictation.
+            ; So such a state drops to a 2 s cap -- but ONLY when it is not a
+            ; layer host and was not used as one: releasing a held layer host
+            ; on a physical reading it could never satisfy is precisely the
+            ; bug v0.6.6.4 fixed, and no injected hold gets swept on that
+            ; evidence alone. The 30 s cap stays as the outer bound.
+            fast := false
+            if (!st.physSeen && (g_HookChangedAt - st.pressTick) < 0
+                && age >= 750 && !st.usedAsMod && !g_Idx.layerBind.Has(name)
+                && !InputHeldPhysical(st.btn)) {
+                st.upTicks := (st.HasProp("upTicks") ? st.upTicks : 0) + 1
+                fast := (st.upTicks >= 2 && age >= 2000)
+            } else
+                st.upTicks := 0
+            if !fast {
+                if (age < 30000)
+                    continue
+                why := st.physSeen ? "held 30 s, hooks changed since the press"
+                    : "held 30 s, injected source"
+            } else
+                why := "injected source, physically up for two ticks"
         } else if InputHeldPhysical(st.btn) {
             st.upTicks := 0
             continue
@@ -11124,6 +11322,72 @@ Watchdog() {
         ScrollPtrStop()
         say.Push({detail: "stopped orphaned drag scroll",
             hud: "RadMapper stopped drag scroll"})
+    }
+    ; 4) and 5) THE OS's OWN STATE, not ours. Parts 1-3 reconcile g_BS, and
+    ;    that is exactly what the PowerScribe field-navigation bug slipped
+    ;    past: a click whose Down went out inside a "+{Tab}" leaves a Shift
+    ;    logically down and an orphan LButton down in the OS while g_BS's
+    ;    books balance perfectly, so nothing here ever saw it and only
+    ;    Unstick cleared it. These two sweeps read the physical/logical pair
+    ;    straight from Windows -- which means they must be timid: two
+    ;    consecutive ticks (~1.5 s) of the same reading, and only while
+    ;    nothing of ours could be holding anything down (WatchdogSweepSafe).
+    static modTicks := Map()
+    static lbTicks := 0
+    if !WatchdogSweepSafe() {
+        modTicks.Clear()                     ; a count may never survive a
+        lbTicks := 0                         ; period when the guard was up
+    } else {
+        ; 4) a modifier Windows still reports as down with its key physically
+        ;    up. Nothing of ours holds one (guard above) and no hand is on it,
+        ;    so it is a Down whose Up was lost -- and until it is cleared every
+        ;    click in the study is a shift-click or a ctrl-click.
+        for k in ["LShift", "RShift", "LCtrl", "RCtrl",
+                  "LAlt", "RAlt", "LWin", "RWin"] {
+            down := false
+            try down := (GetKeyState(k) && !GetKeyState(k, "P"))
+            if !down {
+                modTicks[k] := 0
+                continue
+            }
+            modTicks[k] := (modTicks.Has(k) ? modTicks[k] : 0) + 1
+            if (modTicks[k] < 2)             ; one tick is a reading taken
+                continue                     ; mid-keystroke, not a stuck key
+            ; NEGATIVE, not zero: if the Up does not take (an elevated window
+            ; in front eats injected input) the key still reads stuck on the
+            ; next tick, and a recovery that re-announces itself every 750 ms
+            ; is noise on top of a problem. Retry roughly every 7.5 s instead.
+            modTicks[k] := -8
+            SafeSend("{Blind}{" k " Up}")
+            say.Push({detail: "released a stuck " k " (logically down, key"
+                . " physically up for two ticks)",
+                hud: "RadMapper released a stuck " k})
+        }
+        ; 5) an orphan left button: down in the OS, no hand on it, and no
+        ;    state of ours to account for it. Deliberately LButton only --
+        ;    a middle or right button that reads logically down with no
+        ;    physical anchor is the everyday shape of a DRIVER-INJECTED
+        ;    middle-drag (pan) or right-drag, which AutoHotkey never counts as
+        ;    physically held, and killing one of those mid-pan is the v0.6.6.2
+        ;    bug all over again. The left button earns the exception because
+        ;    the failure it fixes is a left click that does nothing at all.
+        lbStuck := false
+        try {
+            lbStuck := (GetKeyState("LButton")
+                && !InputHeldPhysical("LButton") && !g_BS.Has("LButton"))
+        }
+        if !lbStuck
+            lbTicks := 0
+        else {
+            lbTicks += 1
+            if (lbTicks >= 2) {
+                lbTicks := -8                ; same retry cadence as the
+                SendNativeUp("LButton")      ; modifiers above, same reason
+                say.Push({detail: "released an orphan LButton (down in the OS"
+                    . " with no press of ours and no hand on it)",
+                    hud: "RadMapper released a stuck left button"})
+            }
+        }
     }
     WatchdogReport(say)
 }
@@ -12440,10 +12704,20 @@ AppChoices() {
 ; button pair (depth-2 nesting). Matching treats a path as an unordered set of
 ; held buttons, so one presentation order per pair suffices.
 ; LAYER_BASE_LABEL is a top-level global (defined near BUTTONS, above Init()).
+; The LEFT BUTTON is not offered and cannot be: hosting a layer on it means
+; hooking it and withholding the physical click until the engine can tell a
+; tap from a hold -- the base-layer mapping of the left button that
+; LButtonBaseRow exists to refuse, arrived at through the layer dropdown. Every
+; other button, every bound key, and every pair that does not involve the left
+; button is still offered. (This is also what makes g_LBtnSelfHost dead; see
+; the note there.)
 LayerChoices() {
     out := [LAYER_BASE_LABEL]
-    for b in BUTTONS
+    for b in BUTTONS {
+        if (b = "LButton")
+            continue
         out.Push("Hold " InputLabel(b))
+    }
     used := KeyInputsInUse()
     for k in LAYER_KEY_HOSTS {               ; always offered, in-use or not
         seen := false
@@ -12457,9 +12731,10 @@ LayerChoices() {
     for k in used                            ; v0.3: a KEY can host a layer too
         out.Push("Hold " k)                  ; (CapsLock is the obvious one) --
     for i, a in BUTTONS {                    ; the engine never cared which
-
+        if (a = "LButton")                   ; a PAIR that includes the left
+            continue                         ; button hosts a layer on it too
         for j, b in BUTTONS {
-            if (j > i)
+            if (j > i && b != "LButton")
                 out.Push("Hold " InputLabel(a) " + " InputLabel(b))
         }
     }
@@ -13046,6 +13321,11 @@ BindingOkRun(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) 
         event, atype, val, ReadHoldMsField(dlg, event))
     if LButtonBaseRow(b) {
         MsgBox(LButtonBaseMessage(), "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
+    if LayerHostsLButton(b) {                ; "Hold Left Button" is no longer
+        MsgBox(LButtonLayerMessage(), "RadMapper",   ; offered; this catches a
+            "Iconx Owner" . dlg.Hwnd)                ; row that got here anyway
         return
     }
     try {
@@ -20917,6 +21197,10 @@ class Atlas {
         b := NewBinding(app, lay, mods, btn, event, atype, val, hms)
         if LButtonBaseRow(b) {
             Lumi.Toast(LButtonBaseMessage(), "danger", 5000)
+            return
+        }
+        if LayerHostsLButton(b) {            ; the dropdown no longer offers it
+            Lumi.Toast(LButtonLayerMessage(), "danger", 5000)
             return
         }
         ; An EDIT can collide too: change the button or the event of an
