@@ -40,8 +40,9 @@ wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
-pages and every action", adds Layers, Macros, Apps, Windows and Pointer and the
-full action list. Nothing is lost either way.
+pages and every action", adds Layers, Macros, Apps, Windows and Pointer, the
+wheel decks ("Scroll wheel…" on the Mouse and Keyboard pages), the layer
+controls and the full action list. Nothing is lost either way.
 
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.

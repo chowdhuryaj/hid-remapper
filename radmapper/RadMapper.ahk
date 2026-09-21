@@ -53,8 +53,10 @@
 ;      the wheel is still turning -- thumb lands mid-stack -- leaves every
 ;      notch of that motion native; the deck takes over once the wheel has
 ;      been still for the settle time. Settings > Timing.
-;    * Simple mode's action list is eleven entries; fresh configs no longer
-;      ship the [ and ] rows.
+;    * Simple mode's action list is eleven entries, and wheel decks (the
+;      "Scroll wheel…" button, the deck settle setting) are Advanced, as
+;      the Layers page already was. Fresh configs no longer ship the [ and
+;      ] rows.
 ;
 ;  v0.6.6.6 -- A HELD LAYER OUTRANKS A PROGRAM'S PLAIN ROW.
 ;    * MatchScore: each held layer component is worth 16, a program match
@@ -16808,7 +16810,11 @@ class Atlas {
         ; the last two hung off the right edge of the window entirely. Widths
         ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
-        b := Atlas.BtnRow(lx, lw, [0.2, 0.14, 0.16, 0.28, 0.22])
+        ; Wheel decks ("hold a button, turn the wheel") are Advanced (v0.6.7):
+        ; a deck is a layer, and Simple mode has no layers.
+        adv := Atlas.Advanced()
+        b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
+                                      : [0.28, 0.2, 0.22, 0.3])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
             (*) => Atlas.EditRow(0), "primary")
         ; A button that needs a selected row says so by looking inert
@@ -16818,9 +16824,11 @@ class Atlas {
             hasSel ? "accent" : "muted")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete", (*) => Atlas.DeleteSel(),
             hasSel ? "danger" : "muted")
-        Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
-            (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)), "accent")
-        Lumi.Btn(b[5].x, by, b[5].w, 34, "Conflicts…",
+        if adv
+            Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
+                (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(false)), "accent")
+        c := adv ? b[5] : b[4]
+        Lumi.Btn(c.x, by, c.w, 34, "Conflicts…",
             (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(Atlas.sel)), "ghost")
         if (rows.Length = 0)
             Lumi.Label(lx, y + 150, lw,
@@ -17199,7 +17207,9 @@ class Atlas {
             ["When you", "It does", "Also hold"])
 
         by := y + h - 78
-        b := Atlas.BtnRow(lx, lw, [0.2, 0.14, 0.16, 0.28, 0.22])
+        adv := Atlas.Advanced()              ; wheel decks are Advanced (v0.6.7)
+        b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
+                                      : [0.28, 0.2, 0.22, 0.3])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
             (*) => Atlas.EditRow(0, true), "primary")
         hasSel := Atlas.HasSel(rows.Length)
@@ -17207,9 +17217,11 @@ class Atlas {
             (*) => Atlas.EditSel(true), hasSel ? "accent" : "muted")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
             (*) => Atlas.DeleteSel(), hasSel ? "danger" : "muted")
-        Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
-            (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(true)), "accent")
-        Lumi.Btn(b[5].x, by, b[5].w, 34, "Conflicts…",
+        if adv
+            Lumi.Btn(b[4].x, by, b[4].w, 34, "Scroll wheel…",
+                (*) => Atlas.OpenDlg(() => Atlas.WheelDlg(true)), "accent")
+        c := adv ? b[5] : b[4]
+        Lumi.Btn(c.x, by, c.w, 34, "Conflicts…",
             (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(Atlas.keySel)), "ghost")
         if (rows.Length = 0 && Atlas.keySel != "")
             Lumi.Label(lx, y + 150, lw,
@@ -18676,17 +18688,19 @@ class Atlas {
         Lumi.Card(x, B.y, half, B.h)
         cx := x + 24
         Lumi.Label(cx, B.y + 12, 300, "Timing", "section")
-        pitch := Atlas.Pitch(B.h - 82, 4)
+        adv := Atlas.Advanced()              ; deck settle belongs to decks,
+        pitch := Atlas.Pitch(B.h - 82, adv ? 4 : 3)   ; which are Advanced
         nl := Min(200, half - 160)
         ry := B.y + 32
         Atlas.NumRow(cx, ry,             "Hold threshold (ms)", "holdThreshold", 50, 2000, 200, nl)
         Atlas.NumRow(cx, ry + pitch,     "Drag threshold (px)", "dragThreshold",  1,  200,   8, nl)
         Atlas.NumRow(cx, ry + pitch * 2, "Auto-repeat (ms)",    "repeatRate",    10, 1000,  50, nl)
-        Atlas.NumRow(cx, ry + pitch * 3, "Wheel deck settle (ms)", "deckSettleMs", 0, 1000, 250, nl)
-        Lumi.Label(cx, ry + pitch * 4 + 6, half - 48,
+        if adv
+            Atlas.NumRow(cx, ry + pitch * 3, "Wheel deck settle (ms)", "deckSettleMs", 0, 1000, 250, nl)
+        Lumi.Label(cx, ry + pitch * (adv ? 4 : 3) + 6, half - 48,
             "Hold threshold: how long a button stays down before it counts "
-            . "as a hold. Deck settle: after pressing a deck button the "
-            . "wheel must be still this long before it changes meaning.",
+            . "as a hold." (adv ? " Deck settle: after pressing a deck button "
+            . "the wheel must be still this long before it changes meaning." : ""),
             "mute", "left", 40)
 
         ; ── band 1: PowerScribe ─────────────────────────────────────────

@@ -24,6 +24,8 @@ in spirit (left/right/middle instant everywhere).
    Window presets (new configs, and once via `seedPacsWheel067`). Wheel deck
    settle: `deckSettleMs` (250), `g_WheelLast`, `st.deckLocked`, Settings row.
 4. Simple action list trimmed to 11; version 0.6.7; header changelog; README.
+5. Wheel decks ("Scroll wheel…" buttons, deck settle row) are Advanced-only;
+   the Layers page already was (Atlas.HIDDEN).
 
 ## Decisions
 - Unused layer host with no tap row stays silent on release (pre-0.6.7 rule).
@@ -43,5 +45,5 @@ in spirit (left/right/middle instant everywhere).
   the wheel pauses 250 ms.
 
 ## Next
-- Run on the workstation; then decide whether the Layers page and wheel decks
-  should leave Simple mode entirely.
+- Run on the workstation. Sonnet review findings (engine, radial/watchdog,
+  config/editors) are being applied on this branch; see the PR for the list.
