@@ -1260,6 +1260,9 @@
 
 #Requires AutoHotkey v2.0
 #SingleInstance Force
+#ClipboardTimeout 250       ; a clipboard read waits at most this long for the
+                            ; owning app (default 1 s); the shelf harvest is
+                            ; off the hook thread but must still be brief
 #UseHook
 SendMode "Event"            ; Event + zero delays: injected input flows through
 SetKeyDelay -1, -1          ; our own hooks (and is ignored by them) without
@@ -4400,6 +4403,20 @@ OnPressHK(btn, *) {
     ; so the row is bypassed here and the key handed over (and suppressed).
     if (Warp.active && IsKeyInput(btn)) {
         Warp.FromHook(btn)
+        return
+    }
+    ; A real mouse press while the keyboard pointer is up: the pointer stands
+    ; down (Close drops a held drag and frees the keyboard) and the press
+    ; fires nothing. Running the row instead could open a radial menu or the
+    ; chooser UNDER an InputHook that swallows its cancel key -- the mirror
+    ; of the refusal in Warp.Open. Wheels are not clicks.
+    if (Warp.active && IsMouseInput(btn) && !IsWheel(btn)) {
+        Warp.Close(true)
+        HUD("Keyboard pointer closed", "mute")
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
         return
     }
     ; v0.6.2a: a live menu is MODAL, but its overlay is NoActivate and
@@ -13664,12 +13681,16 @@ class Lumi {
                 Lumi.liveField := 0
             }
         }
-        ; The same for an option list whose window is already gone.
+        ; The same for an option list whose window is already gone -- or
+        ; whose OWNER is: a list that outlives the layer it was opened from
+        ; still takes clicks and still fires onChange, into state nothing
+        ; owns any more.
         if IsObject(Lumi.openSel) {
             alive := false
             try {
                 pop := Lumi.openSel.pop
-                if (IsObject(pop) && WinExist("ahk_id " pop.hwnd))
+                if (IsObject(pop) && WinExist("ahk_id " pop.hwnd)
+                    && Lumi.HwndOf(Lumi.openSel.owner))
                     alive := true
             }
             if !alive
@@ -14160,11 +14181,12 @@ class Lumi {
         ; returned the MAIN window (the dialog restores ActiveLayer to its
         ; parent after building), the DIALOG was in front, __FieldMine said
         ; "not mine" and the loop exited before the first keystroke landed.
+        ; No fallback to LayerStack.ActiveLayer: an owner with no hwnd is a
+        ; DISPOSED layer, and borrowing whatever window is active binds a
+        ; phantom edit to an unrelated window -- holding Lumi.editing above
+        ; zero (which blocks every other field and defers every rebuild) and
+        ; committing into a field that is no longer on screen.
         hwnd := Lumi.HwndOf(state.owner)
-        if !hwnd {                            ; fall back rather than refuse
-            lyr := LayerStack.ActiveLayer     ; to edit at all
-            hwnd := lyr ? lyr.hwnd : 0
-        }
         if !hwnd
             return
         state.editing := true
@@ -14265,7 +14287,11 @@ class Lumi {
             ctx.buf := SubStr(ctx.buf, 1, -1)
             Lumi.__FieldRepaint(ctx)
         } else if (vk = 86 && GetKeyState("Ctrl", "P")) {
-            ctx.buf .= A_Clipboard
+            ; Typing cannot put a control character in a field (__FieldChar
+            ; refuses Ord < 32); a paste must not either, and a whole
+            ; document pasted by accident must not become a config value.
+            paste := StrReplace(StrReplace(A_Clipboard, "`r", " "), "`n", " ")
+            ctx.buf .= SubStr(paste, 1, 2000)
             Lumi.__FieldRepaint(ctx)
         }
     }
@@ -14508,14 +14534,19 @@ class Lumi {
         ; A registered hotkey would have to be created and torn down for
         ; every popup; this list lives for a moment. selKeyDown is the edge
         ; detector -- without it one press would walk the whole list.
-        if (GetKeyState("Up", "P") || GetKeyState("Down", "P")) {
+        ; These are POLLED, not hooked, so they must be read only while the
+        ; list really is the foreground window: without this an Enter typed
+        ; into the dictation window committed a pick here (and onChange
+        ; writes the config). Escape above stays ungated on purpose.
+        if (Lumi.LayerFront(st.pop)
+            && (GetKeyState("Up", "P") || GetKeyState("Down", "P"))) {
             if !Lumi.selKeyDown {
                 Lumi.selKeyDown := true
                 Lumi.__SelectStep(st, GetKeyState("Down", "P") ? 1 : -1)
             }
             return
         }
-        if GetKeyState("Enter", "P") {
+        if (Lumi.LayerFront(st.pop) && GetKeyState("Enter", "P")) {
             if !Lumi.selKeyDown {
                 Lumi.selKeyDown := true
                 Lumi.__SelectDo(st, st.parent, st.index)
@@ -16471,10 +16502,10 @@ class Atlas {
 
     static HelpBox() {
         MsgBox("Home is the whole map.`n`n"
-            . "The card at the top, Reading room essentials, is the seven "
+            . "The card at the top, Reading room essentials, is the five "
             . "things this program is for -- dictation on and off, the two "
-            . "PowerScribe fields, the pointer to the left or right monitor, "
-            . "the PACS wheel and the window presets -- each with whatever "
+            . "PowerScribe fields, and the pointer to the left or right "
+            . "monitor -- each with whatever "
             . "fires it today, a Set button that asks three questions, and a "
             . "Clear button that puts it back to normal.`n`n"
             . "It offers four jobs -- change what a mouse button does, "
@@ -16719,7 +16750,7 @@ class Atlas {
     /**
      * THE READING ROOM ESSENTIALS (v0.6.5).
      *
-     * Seven functions this program exists for, one row each:
+     * Five functions this program exists for, one row each:
      *   label, action type, action value (radial menus only), hotkey setting.
      * A function is "set" when ANY binding fires it, or when its Settings
      * hotkey is filled in -- which is why the row reads both and says so in
@@ -16919,10 +16950,12 @@ class Atlas {
 
         rows := []
         Atlas.rowRefs := []
+        curApp := Atlas.ScopeApp()           ; hoisted: LayerChoices walks
+        curLayer := Atlas.ScopeLayer()       ; every binding on each call
         for i, row in g_Cfg["bindings"] {
             if (MGet(row, "button", "") != Atlas.sel
-                || MGet(row, "app", "*") != Atlas.ScopeApp()
-                || MGet(row, "layer", "*") != Atlas.ScopeLayer())
+                || MGet(row, "app", "*") != curApp
+                || MGet(row, "layer", "*") != curLayer)
                 continue
             act := IsInertRow(row) ? "Native (system default)"
                 : DescribeAction(row["action"])
@@ -17316,11 +17349,13 @@ class Atlas {
 
         rows := []
         Atlas.rowRefs := []
+        curApp := Atlas.KbScopeApp()         ; hoisted: LayerChoices walks
+        curLayer := Atlas.KbScopeLayer()     ; every binding on each call
         for i, row in g_Cfg["bindings"] {
             btn := MGet(row, "button", "")
             if (!IsKeyInput(btn) || btn != Atlas.keySel
-                || MGet(row, "app", "*") != Atlas.KbScopeApp()
-                || MGet(row, "layer", "*") != Atlas.KbScopeLayer())
+                || MGet(row, "app", "*") != curApp
+                || MGet(row, "layer", "*") != curLayer)
                 continue
             ; Inert rows are SHOWN, as they are on the Mouse panel. Hiding
             ; them made an explicit native-passthrough key row invisible --
@@ -20865,6 +20900,19 @@ ClipChanged(type) {
     ; braces -- but the hook must never be the thing that raises the error.
     if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
         return
+    ; NEVER read the clipboard from inside the hook. This runs on the message
+    ; that announces the change, and A_Clipboard blocks until the owning
+    ; application renders the text -- a hung viewer or a remote-session
+    ; clipboard proxy would stall our hook, and a stalled clipboard hook
+    ; stalls Ctrl+C for every application on the station. Harvest off-thread.
+    SetTimer(ClipHarvest, -1)
+}
+
+/** The rest of ClipChanged, run off the hook's own thread. */
+ClipHarvest() {
+    global g_Clip, g_ClipMine
+    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
+        return
     if (A_TickCount - g_ClipMine < 1200)     ; our own paste, not the user's
         return
     try {
@@ -21166,6 +21214,9 @@ class Shelf {
     static RowDrag(i) {
         if Shelf.busy
             return
+        if (i < 1 || i > Shelf.items.Length)
+            return
+        text := Shelf.items[i]               ; the row AS GRABBED
         Shelf.busy := true
         moved := false
         ex := 0
@@ -21183,10 +21234,22 @@ class Shelf {
         } finally {
             Shelf.busy := false
         }
+        ; Escape (or the X button) during the drag closes the shelf, and the
+        ; wait loop above yields, so that really happens mid-gesture. A
+        ; cancelled drag must not still paste into the study.
+        if !IsObject(Shelf.lyr)
+            return
         if (i < 1 || i > Shelf.items.Length)
             return
+        ; Shelf.items IS g_Clip for the clipboard shelf, and ClipChanged
+        ; re-orders it from a copy made in another window while we waited --
+        ; row i may no longer be the row that was grabbed.
+        if (Shelf.items[i] !== text) {
+            HUD("The list changed — nothing was pasted", "warn")
+            return
+        }
         if moved
-            Shelf.Drop(Shelf.items[i], ex, ey)
+            Shelf.Drop(text, ex, ey)
         else
             Shelf.Use(i)
     }
@@ -21309,12 +21372,22 @@ class Shelf {
                 return
             }
             Sleep(40)
+            ; ClipWait is true the moment the clipboard holds ANY text, so
+            ; with nothing selected it returns on whatever was there before
+            ; -- and that went straight into the config file on disk. Empty
+            ; the clipboard first: then only a copy that actually happened
+            ; can satisfy the wait. The user's clipboard is put back.
+            before := A_Clipboard
+            A_Clipboard := ""
             SafeSend("^c")
             if !ClipWait(1, 0) {
+                A_Clipboard := before
                 HUD("Nothing was selected", "warn")
                 return
             }
-            Shelf.AddSnippet(A_Clipboard)
+            got := A_Clipboard
+            A_Clipboard := before
+            Shelf.AddSnippet(got)
             HUD("Selection saved to scratchpad", "jade")
         }
     }
