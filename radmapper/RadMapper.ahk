@@ -4242,7 +4242,7 @@ NewBS(btn) {
         gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
         holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
         passBtn: "", repStart: 0, polling: false,
-        dragEligible: false, locked: false, physSeen: true, deckLocked: false}
+        locked: false, physSeen: true, deckLocked: false}
     g_BS[btn] := st
     return st
 }
@@ -4632,14 +4632,10 @@ OnPressHK(btn, *) {
         return
     }
     st.mode := "pending"
-    ; LButton hosting a layer must still let a real left-DRAG pass through
-    ; natively -- the sacred left-drag invariant, which the user's own rule
-    ; preserves even when a combo also fires. A stationary modifier-hold stays
-    ; silent; MovePoll starts the native down only once travel proves drag
-    ; intent. Deliberately LButton-only: RButton stays a pure silent modifier
-    ; (a movement-gated right-drag would risk phantom window/level in PACS).
-    if (spec.layerHost && spec.tapNative && btn = "LButton")
-        st.dragEligible := true
+    ; (Until v0.6.7 the left button could host a layer and a drag watch let a
+    ; real left-drag through natively. Left, right and middle no longer host
+    ; one -- LayerHostAllowed -- so a pending press here is a thumb button or
+    ; a key, and there is nothing to watch for.)
     ArmTimers(st)
 }
 
@@ -4666,8 +4662,6 @@ StartPollIfNeeded(st) {
         needs := true
     if (!needs && IsObject(st.holdBinding)
         && st.holdBinding["action"]["type"] = "dragmove")
-        needs := true
-    if (!needs && st.dragEligible)           ; while-holder drag watch
         needs := true
     if (needs && !st.polling) {
         st.polling := true
@@ -4724,6 +4718,14 @@ HoldTimer(st, gen, *) {
         st.mode := "armedmod"
         return
     }
+    ; A STATEFUL hold on a host whose layer was ALREADY used by a nested
+    ; press (thumb held, other thumb tapped inside the threshold) must not
+    ; then open a menu or start a drag on top of the chord that just fired:
+    ; armedmod, where the release keeps a used host silent (v0.6.7).
+    if (IsObject(b) && spec.layerHost && st.usedAsMod) {
+        st.mode := "armedmod"
+        return
+    }
     if IsObject(b) {
         st.mode := "held"
         st.holdBinding := b
@@ -4770,21 +4772,6 @@ MovePoll(btn, pollId, *) {
     dy := cy - st.sy
     dist := Sqrt(dx * dx + dy * dy)
 
-    ; while-holder drag: a stationary hold stays a silent modifier, but real
-    ; travel past the drag threshold means the user is dragging -- pass the
-    ; button through natively (down now, up on release) so a left drag is
-    ; never swallowed. Skipped once the holder was consumed as a modifier.
-    if ((st.mode = "pending" || st.mode = "armedmod")
-        && st.dragEligible && !st.dragOn && !st.usedAsMod
-        && dist >= Cfg("dragThreshold")) {
-        st.gen += 1                          ; cancel the pending hold timer
-        st.mode := "passthru"
-        st.passBtn := st.btn
-        st.dragOn := true
-        SendNativeDown(st.btn)
-        return
-    }
-
     if (st.mode = "held" && IsObject(st.holdBinding) && !st.dragOn
         && st.holdBinding["action"]["type"] = "dragmove"
         && dist >= Cfg("dragThreshold")) {
@@ -4792,6 +4779,8 @@ MovePoll(btn, pollId, *) {
         v := MGet(st.holdBinding["action"], "value", "")
         st.passBtn := (v != "") ? v : btn
         SendNativeDown(st.passBtn)
+        st.polling := false                  ; the drag is out: nothing left
+        SetTimer(, 0)                        ; for this poll to decide
     }
 }
 
@@ -5418,6 +5407,10 @@ ActionDown(binding, st, instant) {
     switch t {
         case "native", "stock":
             btn := v != "" ? v : (IsObject(st) ? st.btn : "LButton")
+            if IsWheel(btn) {                ; a notch has no down/up: one
+                SendWheelRaw(btn, 1)         ; notch when the hold engages
+                return
+            }
             if IsObject(st)
                 st.passBtn := btn
             SendNativeDown(btn)
@@ -5467,7 +5460,8 @@ ActionUp(binding, st) {
                 btn := st.passBtn
             else
                 btn := v != "" ? v : (IsObject(st) ? st.btn : "LButton")
-            SendNativeUp(btn)
+            if !IsWheel(btn)                 ; the notch went out on the down
+                SendNativeUp(btn)
         case "moddrag":
             ; TWO sends, not one: Send parses the whole string before it emits
             ; anything, so a value that has become unusable since the hold
