@@ -17062,26 +17062,53 @@ class Atlas {
     static LayerTabs(x, y, w) {
         items := LayerChoices()
         adv := Atlas.Advanced()
-        ; a hidden tab cannot stay selected
-        cur := items.Has(Atlas.layerIdx) ? LayerCodeFromLabel(items[Atlas.layerIdx]) : "*"
+        ; a hidden tab cannot stay selected, nor one whose host is gone
+        if !items.Has(Atlas.layerIdx)
+            Atlas.layerIdx := 1
+        cur := LayerCodeFromLabel(items[Atlas.layerIdx])
         if (!adv && cur != "*" && !IsMouseInput(cur))
             Atlas.layerIdx := 1
-        tx := x
+        ; measure first: the strip must never drop the ACTIVE tab, so when
+        ; it runs out of room the last tab that fits gives way to it
+        tabs := []
         for i, lab in items {
             code := LayerCodeFromLabel(lab)
             host := (code = "*") ? "" : code
             if (!adv && host != "" && !IsMouseInput(host))
                 continue
-            txt := (host = "") ? "Base" : "Hold " InputLabel(host)
-            bw := Max(76, 26 + StrLen(txt) * 8)
-            if (tx + bw > x + w)
-                break
-            active := (i = Atlas.layerIdx)
-            Lumi.Btn(tx, y, bw, 30, txt, Atlas.TabGo(i),
-                active ? "accent" : "ghost")
-            tx += bw + 8
+            txt := (host = "") ? "Base"
+                : "Hold " (IsMouseInput(host) ? "Button " Atlas.ZoneCap(host) : host)
+            tabs.Push({i: i, txt: txt, bw: Max(72, 22 + StrLen(txt) * 7)})
         }
-        if (tx + 260 <= x + w)
+        fit := []
+        tx := x
+        for t in tabs {
+            if (tx + t.bw > x + w)
+                break
+            fit.Push(t)
+            tx += t.bw + 8
+        }
+        if (fit.Length < tabs.Length) {
+            shown := false
+            for t in fit {
+                if (t.i = Atlas.layerIdx)
+                    shown := true
+            }
+            if (!shown && fit.Length > 0) {
+                for t in tabs {
+                    if (t.i = Atlas.layerIdx)
+                        fit[fit.Length] := t
+                }
+            }
+        }
+        tx := x
+        for t in fit {
+            active := (t.i = Atlas.layerIdx)
+            Lumi.Btn(tx, y, t.bw, 30, t.txt, Atlas.TabGo(t.i),
+                active ? "accent" : "ghost")
+            tx += t.bw + 8
+        }
+        if (tx + 300 <= x + w)
             Lumi.Label(tx + 6, y + 4, x + w - tx - 6,
                 "A tab is what everything does WHILE that button is held.",
                 "mute", "left", 22)
@@ -17107,12 +17134,13 @@ class Atlas {
         Atlas.list := 0
         by := ly + lh - 40
         if (input = "") {
-            Lumi.Label(lx, ly, lw, "No keys bound", "title")
-            Lumi.Para(lx, ly + 30, lw, 70,
-                "“Add new” hooks a key. A key nothing references is never "
-                . "touched, so the keyboard keeps its native latency.", "mute")
+            Lumi.Label(lx, ly, lw, keyMode ? "No keys bound" : "Nothing selected", "title")
+            Lumi.Para(lx, ly + 30, lw, 70, keyMode
+                ? ("“Add new” hooks a key. A key nothing references is never "
+                . "touched, so the keyboard keeps its native latency.")
+                : "Click a part of the mouse.", "mute")
             Lumi.Btn(lx, by, 150, 34, "Add new",
-                (*) => Atlas.EditRow(0, true), "primary")
+                (*) => Atlas.EditRow(0, keyMode), "primary")
             return
         }
         head := keyMode ? ((KeyNameValid(input) ? "" : "⚠ ") input)
@@ -17130,6 +17158,7 @@ class Atlas {
             return
         }
         events := (!keyMode && IsWheel(input)) ? ["turn"] : ["tap", "hold"]
+        slotRefs := []
         sy := ly + 54
         for ev in events {
             ref := Atlas.SlotRef(input, app, lay, ev)
@@ -17139,25 +17168,32 @@ class Atlas {
             Lumi.Label(lx + 14, sy + 7, 160, EventLabelOf(ev), "dim", "left", 18)
             what := !IsObject(row) ? "Nothing set — works the normal way"
                 : (live ? DescribeAction(row["action"]) : "Native (system default)")
-            if (ev = "hold" && !live && IsPrimaryButton(input) && app = "*")
+            blocked := (ev = "hold" && !live && IsPrimaryButton(input) && app = "*")
+            if blocked
                 what := "Nothing set — a hold here only works inside one program"
             Lumi.Label(lx + 14, sy + 27, lw - 220, what,
                 live ? "body" : "mute", "left", 24)
             Lumi.Btn(lx + lw - 198, sy + 13, 92, 34, live ? "Change" : "Set",
-                Atlas.SlotGo(input, ev, keyMode, ref), live ? "accent" : "primary")
+                blocked ? 0 : Atlas.SlotGo(input, ev, keyMode, ref),
+                blocked ? "muted" : (live ? "accent" : "primary"))
             Lumi.Btn(lx + lw - 98, sy + 13, 86, 34, "Clear",
                 live ? Atlas.ClearGo(ref) : 0, live ? "ghost" : "muted")
+            if ref
+                slotRefs.Push(ref)
             sy += 66
         }
-        ; rows that also need a modifier held: the one thing a slot cannot say
+        ; every other row in this scope: one that needs a modifier held, and
+        ; anything hand-edited that no slot can show -- listed, never hidden,
+        ; so it can still be edited and deleted from here
         rows := []
         for i, row in g_Cfg["bindings"] {
             if (MGet(row, "button", "") != input || MGet(row, "app", "*") != app
-                || MGet(row, "layer", "*") != lay || MGet(row, "mods", "") = ""
-                || IsInertRow(row))
+                || MGet(row, "layer", "*") != lay || Atlas.HasKey(slotRefs, i))
                 continue
-            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")),
-                DescribeAction(row["action"]), MGet(row, "mods", "")]})
+            act := IsInertRow(row) ? "Native (system default)"
+                : DescribeAction(row["action"])
+            rows.Push({cells: [EventLabelOf(MGet(row, "event", "")), act,
+                MGet(row, "mods", "")]})
             Atlas.rowRefs.Push(i)
         }
         Lumi.Label(lx, sy + 2, lw, "With a modifier held", "section")
@@ -17166,6 +17202,10 @@ class Atlas {
         Atlas.list := Lumi.List(lx, listY, lw, listH, rows,
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
             Atlas.Picker(mode), 30, ["When you", "It does", "Also hold"])
+        if (rows.Length = 0)
+            Lumi.Label(lx + 14, listY + 30, lw - 28,
+                "None — “Add new” makes one (Ctrl, Alt, Shift or Win plus "
+                . "this " (keyMode ? "key" : "button") ").", "mute", "left", 24)
         adv := Atlas.Advanced()
         b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
                                       : [0.28, 0.2, 0.22, 0.3])
@@ -17289,9 +17329,9 @@ class Atlas {
         Atlas.Zone("RButton", rbx, btnTop, (right - ins) - rbx, btnH, 14, "right")
 
         ; --- wheel column, inside the channel -----------------------------
-        whW := 30
+        whW := 26
         whX := cx - whW // 2
-        tiltW := 13
+        tiltW := 15
         Atlas.Zone("WheelUp", whX, btnTop + 6, whW, 26, 6)
         Atlas.Zone("WheelLeft", chX + 1, btnTop + 40, tiltW, 34, 4)
         Atlas.Zone("MButton", whX, btnTop + 40, whW, 34, 5)
@@ -17299,8 +17339,8 @@ class Atlas {
         Atlas.Zone("WheelDown", whX, btnTop + 82, whW, 26, 6)
 
         ; --- thumb cluster on the shelf: forward (5) above back (4) --------
-        Atlas.Zone("XButton2", bx - 30, y + 104, 34, 50, 6)
-        Atlas.Zone("XButton1", bx - 30, y + 160, 34, 50, 6)
+        Atlas.Zone("XButton2", bx - 32, y + 104, 28, 50, 6)
+        Atlas.Zone("XButton1", bx - 32, y + 160, 28, 50, 6)
 
         Lumi.Label(x + 16, y + bodyH + 6, 268,
             "Olive rim = set here.   Pink ring = holds a layer.",
@@ -17357,9 +17397,9 @@ class Atlas {
                         "right", 14)
             default:
                 Lumi.Label(zx, zy, zw, cap, kind, "center", zh)
-                if (n > 0)                   ; a number, not a badge
+                if (n > 0 && zw >= 24)       ; a number, not a badge -- and
                     Lumi.Label(zx + zw - 16, zy + 2, 12, String(n), "mono",
-                        "center", 14)
+                        "center", 14)        ; not on a zone too narrow for it
         }
     }
 
@@ -19601,9 +19641,11 @@ class Atlas {
             ? MGet(row, "layer", "*") : Atlas.ScopeLayer()))
         st.layer := {index: layIdx}
         Lumi.Label(24, 112, 120, "Layer", "dim", "left", 30)
-        Lumi.Label(150, 112, 480, (layers.Has(layIdx) ? layers[layIdx]
-            : LAYER_BASE_LABEL) "    (the tab on the page decides this)",
-            "body", "left", 30)
+        Lumi.Label(150, 112, 486, layers.Has(layIdx)
+            ? (layers[layIdx] "   (the tab on the page decides this)")
+            : (LayerLabelFromCode(row ? MGet(row, "layer", "*") : "*")
+               " — no longer a layer; saving moves this to Base"),
+            layers.Has(layIdx) ? "body" : "accent", "left", 30)
 
         Lumi.Label(24, 154, 120, keyMode ? "Key" : "Button", "dim", "left", 30)
         if keyMode {
