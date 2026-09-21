@@ -25,9 +25,18 @@ workstation. Treat it as a candidate for testing.
 To watch every button light up as you press it, use **Test my mouse and
 keyboard…** on the Diagnostics page.
 
-**Shipped defaults are active:** the backtick key toggles dictation, and the two
-thumb buttons jump the pointer between monitors. Review or remove these on the
-Mouse and Keyboard pages. Nothing else is remapped until you add it.
+**Shipped defaults are active:** the backtick key toggles dictation, the two
+thumb buttons jump the pointer between monitors on a tap, and inside PACS a
+**hold** of button 4 opens the PACS wheel and a hold of button 5 the window
+presets. Review or remove these on the Mouse and Keyboard pages. Nothing else
+is remapped until you add it.
+
+**What a button can do (0.6.7):** a button has a **tap** and a **hold**, and
+nothing else. Left, right and middle click are always instant; a hold on them
+works only inside one program you name. Only the thumb buttons (or a key that
+does not type) can hold a layer open for other buttons, and only in Advanced
+view. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
+wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
@@ -45,14 +54,18 @@ Ruler (R), ROI (Shift+R), Magnify (Y), Delete, CLAHE (Shift+C), and
 tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA, 6 Infarct, 7 Liver,
 8 Lung, 9 Lung wide). Rename any of these on the Menus page to match your site.
 
-1. **Menus → select PACS → Assign a button.** The Hold trigger is prefilled;
-   pick the button, then save.
-2. **Hold** that button, **move** toward a command, **release**. Release in
+**In PACS it is already on the thumb buttons:** hold **button 4** for the
+PACS wheel, hold **button 5** for the window presets. A tap of either still
+hops the pointer between monitors.
+
+1. **Hold** the button, **move** toward a command, **release**. Release in
    the centre hub, or press Escape, and nothing fires.
-3. For a preset: hold, move to **Windowing**, pause a moment and the preset
-   ring appears under the cursor, move to the number, release.
-4. If the menu is bound to a **tap** instead, it stays open: rest on a command
-   to fire it, or **tap the button again to close it**.
+2. For a preset: hold button 5, move to the number, release. (From the PACS
+   wheel: hold 4, move to **Windowing**, pause, move to the number, release.)
+3. A menu only ever opens while a button is **held**; there is no tap-opened
+   menu, so letting go is always the way out.
+4. To put a menu on another button: **Menus → select the menu → Assign a
+   button**. The Hold trigger is the only one a menu accepts.
 5. **Practice safely** on the Menus page shows the wheel without sending anything.
 
 **Sending keys to PACS from anywhere:** the action **PACS: send keys** works

@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.6.6  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.6.7  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,42 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.6.7 -- FEWER WAYS FOR A BUTTON TO SURPRISE YOU.
+;    Colleagues trying 0.6.6.5 found tap-holds and held-button chords
+;    getting in the way of ordinary mouse work. This release removes the
+;    machinery behind that and points what is left at the radial menu.
+;    * TAP AND HOLD ARE THE ONLY TRIGGERS. Double-tap, triple-tap and
+;      tap-then-hold are gone from the lists, the editors and the engine
+;      (no eager first press, no tap window, no wait mode); a row that
+;      carried one is dropped on load and named in Diagnostics. A withheld
+;      press now resolves to exactly one of tap or hold (FireTap).
+;    * ONE TIMING NUMBER. The tap window and the calibrator are gone; the
+;      hold threshold is a single field on Settings with a sentence.
+;    * LAYERS ON THE THUMB BUTTONS ONLY (or a key that does not type), one
+;      at a time. The pairs, the CapsLock reservation and right / middle as
+;      hosts are gone: a host is silent while held, and those buttons are
+;      window/level and pan. "Only while holding" and the Layer selectors
+;      are Advanced-mode controls.
+;    * LEFT, RIGHT AND MIDDLE ARE INSTANT EVERYWHERE. A hold on them is
+;      honoured only when written for one program; an everywhere hold row
+;      is refused by the editors and dropped on load. The per-program
+;      "instant clicks" switch, its config field and the Apps-page button
+;      are retired -- it is the rule now, not an exception.
+;    * RADIAL MENUS OPEN ON HOLD ONLY. The tap-opened, rest-to-fire menu
+;      (its 6 s timeout, second-tap cancel and radialRestMs) is gone; a tap
+;      row that opened a menu becomes a hold row on load. Releasing on a
+;      door fires nothing and says how the door works.
+;    * THE WHEEL AND THE PRESETS SHIP ON THE THUMB BUTTONS IN PACS: hold 4
+;      for the PACS wheel, hold 5 for the numbered window presets -- one
+;      gesture, no door. Seeded once into an existing config that has no
+;      radial row and nothing held on either thumb button in PACS.
+;    * WHEEL DECK SETTLE (deckSettleMs, 250). A deck button pressed while
+;      the wheel is still turning -- thumb lands mid-stack -- leaves every
+;      notch of that motion native; the deck takes over once the wheel has
+;      been still for the settle time. Settings > Timing.
+;    * Simple mode's action list is eleven entries; fresh configs no longer
+;      ship the [ and ] rows.
 ;
 ;  v0.6.6.6 -- A HELD LAYER OUTRANKS A PROGRAM'S PLAIN ROW.
 ;    * MatchScore: each held layer component is worth 16, a program match
@@ -1255,7 +1291,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.6.6"
+global RM_VERSION := "0.6.7"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1495,7 +1531,7 @@ global ACT_HINTS := Map(
 ; chords. Deleted from the config on load (MigrateCfg) so the file on disk
 ; stops carrying dead knobs.
 global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
-    "tapWindow",
+    "tapWindow", "radialRestMs",
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1602,10 +1638,14 @@ global DEFAULTS := Map(
     ; hand drifted towards".
     "radialDwellMs", 250,
     "radialDead", 26,
-    "radialRestMs", 420,       ; latched mode: rest this long in a slice to
-    "radialRadius", 132,       ;   fire it (a tap-opened menu has no release)
+    "radialRadius", 132,
     "radialSubMs", 340,        ; rest this long on a slice that opens another
                                ;   menu and that menu takes over, still held
+    ; v0.6.7 -- WHEEL DECK SETTLE. A deck is "hold a button, turn the wheel".
+    ; Pressed while the wheel is still turning (mid-way through a CT stack,
+    ; say), the notches still arriving belong to the scroll, not the deck:
+    ; they stay native until the wheel has been still this long. 0 = off.
+    "deckSettleMs", 250,
     ; v0.6.4. Both are about the PICTURE, never about what a direction does.
     "radialAnim", 1,           ; 1 = grow what the pointer is near, fade in
     "radialWedges", 1,         ; 1 = draw each slice as the arc it answers to
@@ -2650,6 +2690,18 @@ SeedDefaultBindings(cfg) {
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; Nothing on the keyboard beyond the backtick (v0.6.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
+    SeedPacsWheelRows(b)
+}
+
+; The radial menus, one gesture away in the viewer (v0.6.7): in PACS, HOLD
+; button 4 for the PACS wheel and HOLD button 5 for the numbered window
+; presets -- no door to go through for a preset. The taps still hop the
+; pointer between monitors; a hold on a thumb button waits for the
+; threshold, a tap fires on release. Scoped to PACS so nothing changes in
+; PowerScribe or anywhere else.
+SeedPacsWheelRows(b) {
+    b.Push(NewBinding("PACS", "*", "", "XButton1", "hold", "radial", "PACS"))
+    b.Push(NewBinding("PACS", "*", "", "XButton2", "hold", "radial", "Window presets"))
 }
 
 ; Every input ships LISTED in the Mappings view, mapped to its system default
@@ -2782,6 +2834,23 @@ MigrateCfg() {
             g_Cfg["menus"].Push(SeedPacsMenu())
         if !MenuByName("Window presets")
             g_Cfg["menus"].Push(SeedPresetMenu())
+    }
+    ; v0.6.7: the PACS wheel and the Window presets ring on the thumb
+    ; buttons in PACS, seeded ONCE into a config that has no radial row and
+    ; nothing held on either thumb button in PACS. Flag-guarded, so deleting
+    ; the rows keeps them deleted.
+    if (IsObject(s) && !s.Has("seedPacsWheel067")) {
+        s["seedPacsWheel067"] := 1
+        free := true
+        for row in g_Cfg["bindings"] {
+            if (MGet(MGet(row, "action", Map()), "type", "") = "radial")
+                free := false
+            if ((MGet(row, "button", "") = "XButton1" || MGet(row, "button", "") = "XButton2")
+                && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = "PACS")
+                free := false
+        }
+        if free
+            SeedPacsWheelRows(g_Cfg["bindings"])
     }
     ; v0.3: chord and gesture ROWS are dropped outright -- there is no engine
     ; left to run them, and a silently-kept row would reappear in no UI.
@@ -3175,6 +3244,20 @@ ValidateCfg() {
             Problem("retired", InputLabel(MGet(row, "button", "")) " "
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
+        }
+        ; v0.6.7: a radial menu opens on hold only. A tap row that opened one
+        ; becomes a hold row; a wheel row that did cannot, and is dropped.
+        if (MGet(MGet(row, "action", Map()), "type", "") = "radial"
+            && MGet(row, "event", "") != "hold") {
+            if (MGet(row, "event", "") = "tap") {
+                row["event"] := "hold"
+                Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
+                    . "radial menu is now a HOLD: menus open while the button is held")
+            } else {
+                Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                    . MGet(row, "event", "") " → radial menu row dropped: menus open on hold only")
+                continue
+            }
         }
         ; v0.6.7: a layer is held open by a thumb button or a non-typing key,
         ; one at a time; and left / right / middle hold only inside a program.
@@ -4132,7 +4215,7 @@ NewBS(btn) {
         gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
         holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
         passBtn: "", repStart: 0, polling: false,
-        dragEligible: false, locked: false, physSeen: true}
+        dragEligible: false, locked: false, physSeen: true, deckLocked: false}
     g_BS[btn] := st
     return st
 }
@@ -4472,6 +4555,14 @@ OnPressHK(btn, *) {
     ; for such a button the honest answer is "no idea": they must not sweep
     ; it on that reading (v0.6.6.2).
     st.physSeen := InputHeldPhysical(btn)
+    ; Pressed while the wheel was still turning? Then this host's wheel
+    ; rows (a deck) stay out of the way until the wheel has been still for
+    ; deckSettleMs -- OnWheelHK clears the lock (v0.6.7).
+    if spec.layerHost {
+        gap := now - g_WheelLast
+        if (gap >= 0 && gap < DeckSettleMs())
+            st.deckLocked := true
+    }
 
     if spec.pure {
         ; a pure row can be LAYER-SCOPED (a native escape-hatch inside a
@@ -4737,8 +4828,8 @@ OnReleaseHK(btn, *) {
             if IsObject(b) {
                 ActionFire(b, st)
                 LastEvent(st.btn " hold", b)
-            } else
-                FireTap(st)
+            } else if IsObject(st.spec.tap)  ; no tap row: an unused host
+                FireTap(st)                  ; stays silent, as before
         }
         ClearBS(btn)
         return
@@ -4772,6 +4863,13 @@ FireTap(st) {
 ; Tick of the last ACCEPTED notch, per wheel input. Not part of the config:
 ; it is live state, like g_BS.
 global g_WheelAt := Map()
+; Tick of the last notch of ANY wheel input, accepted or not, native or not:
+; "is the wheel still turning?" for the deck settle rule (v0.6.7).
+global g_WheelLast := 0
+
+DeckSettleMs() {
+    return ClampInt(Cfg("deckSettleMs"), 0, 1000, 250)
+}
 
 /**
  * Should this notch be acted on? (v0.6.5)
@@ -4806,8 +4904,12 @@ WheelLimitMs(wh) {
 }
 
 OnWheelHK(wh, *) {
+    global g_WheelLast
     Critical "On"
     TestNotify(wh, 2)
+    now := A_TickCount
+    sinceLast := now - g_WheelLast           ; before THIS notch is counted
+    g_WheelLast := now
     ; positional ours-check as in OnPressHK: scrolling over our own (possibly
     ; inactive) windows must stay native, never resolve through app profiles
     ; A TILT (WheelLeft / WheelRight) is exempt from the own-window test:
@@ -4853,12 +4955,27 @@ OnWheelHK(wh, *) {
             ; the action four or five times. Dropped outright, not re-sent:
             ; this notch belongs to an action, and passing it through would
             ; scroll the study instead.
-            if !WheelAccept(wh, A_TickCount, g_WheelAt, WheelLimitMs(wh)) {
+            holder := LayerHolderSt(b)       ; deepest held holder (0 at Base)
+            ; WHEEL DECK SETTLE (v0.6.7). The holder was pressed while the
+            ; wheel was still turning -- scrolling a stack, thumb lands on
+            ; the deck button before the wheel has stopped. Every notch of
+            ; that same motion stays NATIVE; the deck only takes over once
+            ; the wheel has been still for deckSettleMs. So a key that is
+            ; also a deck never turns the tail of a scroll into a command.
+            if (IsObject(holder) && holder.deckLocked) {
+                if (sinceLast >= 0 && sinceLast < DeckSettleMs()) {
+                    SendWheelRaw(wh, 1)
+                    LastEvent(wh " native — still turning when "
+                        . InputLabel(holder.btn) " was pressed")
+                    return
+                }
+                holder.deckLocked := false   ; the wheel stopped: deck is live
+            }
+            if !WheelAccept(wh, now, g_WheelAt, WheelLimitMs(wh)) {
                 LastEvent(wh " ignored — within the "
                     . (tilt ? "tilt" : "wheel") " guard (" WheelLimitMs(wh) " ms)")
                 return
             }
-            holder := LayerHolderSt(b)       ; deepest held holder (0 at Base)
             ActionFire(b, holder)            ; ActionFire marks every lay holder used
         }
         lay := MGet(b, "layer", "*")
@@ -5235,17 +5352,11 @@ ActionFire(binding, st) {
         case "warp":
             Warp.Toggle()
         case "radial":
-            ; A SECOND TAP while a menu is up is the cancel gesture: the only
-            ; other ways out of a tap-opened menu were Escape and a timeout,
-            ; and a hand on the mouse has neither.
-            if IsObject(g_Radial) {
-                RadialClose(false)
-                HUD("Menu closed", "mute")
-                return
-            }
-            ; No holder: LATCHED. A menu opened by a tap has no release to
-            ; commit on, so it draws at once and fires by resting in a slice.
-            RadialOpen(v, 0)
+            ; A menu opens on HOLD only (v0.6.7): there is no tap-opened,
+            ; rest-to-fire menu any more. Reached from a tap row, a macro
+            ; step or a wheel notch, say why instead of doing nothing.
+            HUD("Radial menus open while a button is HELD — set the trigger "
+                . "to “Hold it down”", "warn")
         case "clipboard":
             Shelf.Toggle("clip")
         case "scratchpad":
@@ -8755,11 +8866,11 @@ RadialUnbindCancel() {
 /**
  * Open a menu.
  *
- * holder = the input state holding it open (gesture mode: release commits),
- * or 0 for LATCHED mode, where the menu is drawn at once and a slice fires
- * by RESTING in it. Latched mode exists because a menu can be put on a tap,
- * and committing a tap-opened menu with a click would put that click through
- * the click-through overlay and into the image underneath.
+ * holder = the input state holding it open: release commits, release in the
+ * hub or Escape cancels. A menu is only ever opened by a HOLD (v0.6.7): the
+ * tap-opened "latched" menu that fired by resting in a slice is gone, so a
+ * hand on the mouse always has a way out. Practice (trial) draws at once and
+ * fires nothing.
  */
 RadialOpen(name, holder := 0, trial := false) {
     global g_Radial
@@ -8786,7 +8897,7 @@ RadialOpen(name, holder := 0, trial := false) {
                  slices: slices,
                  ax: ax, ay: ay,
                  holder: IsObject(holder) ? holder : 0,
-                 latched: !IsObject(holder),
+                 latched: trial ? true : false,
                  sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
                  targetPid: RadialPidOf(FgHwnd()),
                  lyr: 0, drawn: false, depth: 1,
@@ -8836,9 +8947,8 @@ RadialTick(*) {
         RadialClose(false)
         return
     }
-    ; Practice is a thing you look at, so it gets a longer leash than a
-    ; latched menu sitting over a live study.
-    if (R.latched && (now - R.openedAt > (R.trial ? 20000 : 6000))) {
+    ; Practice is a thing you look at: 20 s, then it goes away by itself.
+    if (R.trial && (now - R.openedAt > 20000)) {
         RadialClose(false)
         return
     }
@@ -8945,13 +9055,6 @@ RadialTick(*) {
         RadialBack()
         return
     }
-    ; Latched mode commits by resting in a slice. Nothing else can commit it
-    ; without pushing a click through the overlay.
-    ; ...and never in practice: a practice wheel that fires a slice the
-    ; moment the hand pauses is not practice, it is a misfire.
-    if (!R.trial && R.latched && R.sel > 0 && R.slices[R.sel].sub = ""
-        && (now - R.restAt >= Max(Cfg("radialRestMs"), 120)))
-        RadialClose(true)
 }
 
 /**
@@ -9065,6 +9168,12 @@ RadialClose(commit) {
     sl := R.slices[R.sel]                    ;   Escape: fires nothing
     if !sl.live
         return
+    ; Released ON a door: nothing to hold the next ring open with, so
+    ; nothing fires. Say how the door works instead (v0.6.7).
+    if (sl.sub != "") {
+        HUD("Keep holding: pause on “" sl.label "” and its ring opens", "mute")
+        return
+    }
     ; Deferred out of the timer thread: an action can activate a window, send
     ; a blocking key sequence or open a shelf, and none of that belongs
     ; inside the tick that is still tearing the menu down.
@@ -12182,6 +12291,11 @@ BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
             return
     }
     atype := ACT_CODES[ddAct.Value]
+    if (atype = "radial" && event != "hold") {
+        MsgBox("A radial menu opens while the button is HELD: set the event to"
+            . " 'hold'.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
     ok := true
     val := ValidateActionValue(dlg, atype, edVal.Value, &ok)
     if !ok
@@ -12436,6 +12550,11 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
         return
     }
     atype := ACT_CODES[ddAct.Value]
+    if (atype = "radial" && event != "hold") {
+        MsgBox("A radial menu opens while the key is HELD: set the event to"
+            . " 'hold'.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
     ok := true
     val := ValidateActionValue(dlg, atype, edVal.Value, &ok)
     if !ok
@@ -15050,12 +15169,14 @@ class Atlas {
     ; (pan) are two of the most-used PACS gestures and the wizard offers
     ; them as tiles, so Simple mode has to be able to show the action they
     ; actually save.
-    static SIMPLE_ACTS := ["keys", "text", "native", "dblclick", "clicklock",
-        "moddrag",
+    ; v0.6.7: shorter again. Simple mode shows the eleven things a reading
+    ; room binds; text, native, double-click, click lock, drag zoom, window
+    ; placement, the keyboard pointer and "open settings" are Advanced.
+    ; ActView still keeps a row's own action, so nothing bound is hidden.
+    static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
-        "zoomptr", "radial", "winplace", "warp", "guiopen",
-        "none"]
+        "radial", "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -18555,16 +18676,18 @@ class Atlas {
         Lumi.Card(x, B.y, half, B.h)
         cx := x + 24
         Lumi.Label(cx, B.y + 12, 300, "Timing", "section")
-        pitch := Atlas.Pitch(B.h - 82, 3)
+        pitch := Atlas.Pitch(B.h - 82, 4)
         nl := Min(200, half - 160)
         ry := B.y + 32
         Atlas.NumRow(cx, ry,             "Hold threshold (ms)", "holdThreshold", 50, 2000, 200, nl)
         Atlas.NumRow(cx, ry + pitch,     "Drag threshold (px)", "dragThreshold",  1,  200,   8, nl)
         Atlas.NumRow(cx, ry + pitch * 2, "Auto-repeat (ms)",    "repeatRate",    10, 1000,  50, nl)
-        Lumi.Label(cx, ry + pitch * 3 + 6, half - 48,
-            "Hold threshold: how long a button must stay down before it "
-            . "counts as a hold. Shorter feels quicker; longer is safer for "
-            . "a heavy thumb.", "mute", "left", 40)
+        Atlas.NumRow(cx, ry + pitch * 3, "Wheel deck settle (ms)", "deckSettleMs", 0, 1000, 250, nl)
+        Lumi.Label(cx, ry + pitch * 4 + 6, half - 48,
+            "Hold threshold: how long a button stays down before it counts "
+            . "as a hold. Deck settle: after pressing a deck button the "
+            . "wheel must be still this long before it changes meaning.",
+            "mute", "left", 40)
 
         ; ── band 1: PowerScribe ─────────────────────────────────────────
         rx := x + half + 20
@@ -19551,6 +19674,11 @@ class Atlas {
             if (MsgBox(MButtonHoldWarning(), "RadMapper",
                 "YesNo Icon! Owner" . hwnd) != "Yes")
                 return
+        }
+        if (atype = "radial" && event != "hold") {
+            Lumi.Toast("A radial menu opens while the button is held — "
+                . "choose “Hold it down”", "warn", 3200)
+            return
         }
         ; One validator, shared with the classic dialogs, so "LAlt" means the
         ; same thing and fails the same way wherever it is typed.
