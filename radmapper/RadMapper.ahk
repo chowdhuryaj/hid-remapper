@@ -1327,7 +1327,10 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 global LAYER_BASE_LABEL := "Base (no button held)"
 ; Keys that host a layer whether or not they have a row of their own.
 ; CapsLock types nothing, so holding it is free (v0.6.6.5).
-global LAYER_KEY_HOSTS := ["CapsLock"]
+; Which inputs may HOST a layer (v0.6.7): the two thumb buttons, and a key
+; that does not type. Left, right and middle never host one -- a host is
+; silent while held, and those three are click, window/level and pan.
+global LAYER_HOSTS := ["XButton1", "XButton2"]
 
 ; Friendly display names for inputs (config/JSON always stores the codes).
 global INPUT_LABELS := Map(
@@ -1695,7 +1698,7 @@ global g_KbRegistered := []    ; keyboard hotkey strings currently registered
 ; Binding membership index (see RebuildIndex). Starts as a valid EMPTY index
 ; so the hot-path lookups never need an existence guard.
 global g_Idx := {bind: Map(), layerBind: Map(), anyMods: false,
-    anyApp: false, anyNoHold: false, anyNoFollow: false, refd: Map()}
+    anyApp: false, anyNoFollow: false, refd: Map()}
 global g_AppCache := {hwnd: 0, tick: 0, name: ""}   ; ActiveAppName cache
 global g_MacroBusy := false
 ; Panic bumps this; RunMacro snapshots it and stops between steps if it moved.
@@ -2207,9 +2210,7 @@ IsBareTypingKey(code) {
 ; legitimate place to put a layer, and this is a cost to accept knowingly,
 ; exactly like the bare typing keys above.
 MButtonHoldRisk(btn, event, layer := "*") {
-    if (btn = "MButton" && event = "hold")
-        return true
-    return LayerIncludes(layer, "MButton")
+    return (btn = "MButton" && event = "hold")
 }
 
 MButtonHoldWarning() {
@@ -2583,9 +2584,6 @@ DefaultCfg() {
     a3 := Map()
     a3["name"] := "Syngo.via"
     a3["match"] := ["syngo.Common.Container.exe"]
-    ; syngo.via drives its own press-and-hold gestures on the primary
-    ; buttons; the tap/hold wait is incompatible with them. See AppNoHold.
-    a3["noHold"] := ["LButton", "RButton", "MButton"]
     apps.Push(a3)
 
     c["apps"] := apps
@@ -2650,32 +2648,8 @@ SeedDefaultBindings(cfg) {
     ; thumb buttons -- monitor teleport, left and right
     b.Push(NewBinding("*", "*", "", "XButton1", "tap", "tele_prev", ""))
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
-    ; [ and ] -- field navigation on tap, a drag mode on hold.
-    ;
-    ; KNOWN COST, accepted deliberately, and it is TWO different costs:
-    ;
-    ;   * The TAP rows do not delay the character, they REPLACE it. A tap of
-    ;     [ fires ps_next and nothing is typed -- there is no path through
-    ;     the engine on which a bracket still reaches the application. So
-    ;     with these rows in place the two bracket characters cannot be
-    ;     typed at all (dictating "[" still works; pressing the key does
-    ;     not). That is the point of the rows, and it is also the whole of
-    ;     their cost.
-    ;   * The HOLD rows are what adds LATENCY. Binding any typing key on
-    ;     "hold" makes the engine withhold the press until it can tell a tap
-    ;     from a hold, so every [ or ] waits holdThreshold (200 ms by
-    ;     default; the calibrator can lower it) before resolving -- which is
-    ;     felt, and is what the binding dialog warns about before it will
-    ;     save such a row.
-    ;
-    ; Both were asked for, and neither is free. If the brackets misbehave
-    ; while dictating, delete the two HOLD rows first: that removes the
-    ; latency and leaves field navigation working. Deleting all four gives
-    ; the keys back to the keyboard.
-    b.Push(NewBinding("*", "*", "", "[", "tap",  "ps_next", ""))
-    b.Push(NewBinding("*", "*", "", "[", "hold", "scrollptr", ""))
-    b.Push(NewBinding("*", "*", "", "]", "tap",  "ps_prev", ""))
-    b.Push(NewBinding("*", "*", "", "]", "hold", "zoomptr", ""))
+    ; Nothing on the keyboard beyond the backtick (v0.6.7): the [ and ] rows
+    ; that used to ship here took two typing keys away and delayed them.
 }
 
 ; Every input ships LISTED in the Mappings view, mapped to its system default
@@ -2730,10 +2704,10 @@ MigrateCfg() {
                 s.Delete(k)
         }
     }
-    ; v0.4.8: syngo.via runs its own press-and-hold gestures on MB1-3, and
-    ; the tap/hold wait breaks them (see AppNoHold). Seed the profile once so
-    ; an existing config gets the fix without hand-editing. Guarded by a flag
-    ; rather than by the profile's absence, so deleting it keeps it deleted.
+    ; v0.4.8: the syngo.via profile, seeded once into an existing config.
+    ; Guarded by a flag rather than by the profile's absence, so deleting it
+    ; keeps it deleted. (It used to carry "instant clicks" for MB1-3; since
+    ; v0.6.7 that is the rule in every program and the field is gone.)
     if (IsObject(s) && !s.Has("seedSyngo")) {
         s["seedSyngo"] := 1
         if !AppMatches("syngo.Common.Container.exe") {
@@ -2742,7 +2716,6 @@ MigrateCfg() {
             ; exe ONLY: the ahk_class carries a per-run token, exactly as
             ; PowerScribe's does.
             a["match"] := ["syngo.Common.Container.exe"]
-            a["noHold"] := ["LButton", "RButton", "MButton"]
             g_Cfg["apps"].Push(a)
         }
     }
@@ -3203,6 +3176,20 @@ ValidateCfg() {
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
         }
+        ; v0.6.7: a layer is held open by a thumb button or a non-typing key,
+        ; one at a time; and left / right / middle hold only inside a program.
+        if !LayerPathAllowed(MGet(row, "layer", "*")) {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " row dropped: "
+                . "'" MGet(row, "layer", "*") "' can no longer hold a layer "
+                . "(only button 4, button 5 or a non-typing key can)")
+            continue
+        }
+        if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "event", "") = "hold"
+            && MGet(row, "app", "*") = "*") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " hold row dropped: "
+                . "holding that button only works inside one program now")
+            continue
+        }
         kept.Push(row)
     }
     g_Cfg["bindings"] := kept
@@ -3211,13 +3198,14 @@ ValidateCfg() {
         if !(app is Map && app.Has("name") && MGet(app, "match", 0) is Array
             && app["match"].Length > 0)
             continue
+        ; v0.6.7: per-program "instant clicks" is the rule everywhere now,
+        ; so the field it lived in is retired from every profile.
+        if app.Has("noHold")
+            app.Delete("noHold")
         ; A hand edit that gives one of these the wrong SHAPE must cost that
         ; one field, not the whole profile and not a crash in the hook thread:
-        ; AppNoHold reads noHold[..].Length, ParkNow reads park["x"], and
-        ; either throws on the wrong type from inside a press. Drop the field
-        ; and the app simply behaves as if it had never been set.
-        if (app.Has("noHold") && !(app["noHold"] is Array))
-            app.Delete("noHold")
+        ; ParkNow reads park["x"] and throws on the wrong type from inside a
+        ; press. Drop the field and the app behaves as if it was never set.
         ; noFollow is a FLAG (0/1), read for truthiness -- any object is
         ; truthy, so a Map here silently turns follow-focus off for the app.
         if (app.Has("noFollow") && IsObject(app["noFollow"]))
@@ -3718,54 +3706,9 @@ ActiveAppName() {
 }
 
 /**
- * Is this input "no-hold" in the application that is currently in front?
- *
- * Some applications run their own press-and-hold gestures on the primary
- * mouse buttons, and RadMapper's tap/hold arbitration is fundamentally
- * incompatible with that: to tell a tap from a hold it has to WITHHOLD the
- * press until the hold threshold elapses, so an app that begins a drag on
- * button-DOWN sees a 200 ms dead zone at the start of every gesture.
- * syngo.via is the reported case -- give MB1-3 any hold binding and it
- * becomes unusable there.
- *
- * This cannot be fixed with a binding, and that is the whole point of it
- * being a per-app property instead. The cost is the ARBITRATION, not the
- * action: even a row resolving to "pass through" still has to wait before it
- * knows that is the answer. So a profile can list inputs whose hold, tap-hold
- * and layer-host behaviour is DROPPED while it is in front, which returns
- * them to the engine's eager path -- first press out natively and instantly.
- *
- * Taps, double-taps and triple-taps still work on those inputs: the eager
- * path already delivers the first press natively, and only the extras need a
- * timer.
- *
- * Matched by profile NAME, which is matched by exe upstream. syngo.via's
- * ahk_class carries a per-run token (WindowsForms10.Window.8.app.0.1061d75_
- * r7_ad1) exactly as PowerScribe's does, so the class is never the right
- * thing to match on here.
- */
-AppNoHold(btn) {
-    if !g_Idx.anyNoHold
-        return false
-    name := ActiveAppName()
-    if (name = "")
-        return false
-    for app in g_Cfg["apps"] {
-        if (MGet(app, "name", "") != name)
-            continue
-        for inp in MGet(app, "noHold", []) {
-            if (inp = btn)
-                return true
-        }
-        return false                         ; the profile, and it says no
-    }
-    return false
-}
-
-/**
  * Is this app profile opted out of follow-focus?
  *
- * Same escape hatch as noHold, for the same kind of application: one that
+ * An escape hatch for one kind of application: one that
  * spreads itself over several displays and moves its own foreground around.
  * Taking the name as an argument rather than re-reading the foreground keeps
  * it usable from FollowTick, which has already resolved it.
@@ -3849,12 +3792,10 @@ IsInertRow(row) {
 RebuildIndex() {
     global g_Idx
     idx := {bind: Map(), layerBind: Map(), anyMods: false, anyApp: false,
-        anyNoHold: false, anyNoFollow: false, refd: Map()}
-    ; Cheap gate for AppNoHold / AppNoFollow: with no profile asking for
-    ; either, neither hot path even resolves the foreground app name.
+        anyNoFollow: false, refd: Map()}
+    ; Cheap gate for AppNoFollow: with no profile asking for it, the hot
+    ; path never resolves the foreground app name.
     for app in MGet(g_Cfg, "apps", []) {
-        if (MGet(app, "noHold", []).Length > 0)
-            idx.anyNoHold := true
         if MGet(app, "noFollow", 0)
             idx.anyNoFollow := true
     }
@@ -4091,13 +4032,11 @@ SpecFor(btn, ctx) {
     hold    := FindBindingFor(btn, "hold", ctx)
     layerHost := LayerHostExists(btn, ctx)
 
-    ; This app cannot tolerate the tap/hold wait on this input -- drop every
-    ; binding that would cause one. See AppNoHold. A hold written FOR THIS
-    ; PROGRAM is the exception (v0.6.6.2): the person who set instant
-    ; clicks on the profile and then bound a hold on this button there
-    ; has chosen the wait for that button, and dropping it silently made
-    ; "middle button: hold = native drag" do nothing at all.
-    if AppNoHold(btn) {
+    ; Left, right and middle are instant everywhere: the only hold the engine
+    ; honours on them is one written for the program in front, and they never
+    ; host a layer. ValidateCfg and the editors already keep such rows out of
+    ; the config; this is the guard for a hand-edited file (v0.6.7).
+    if IsPrimaryButton(btn) {
         if (IsObject(hold) && MGet(hold, "app", "*") = "*")
             hold := 0
         layerHost := false
@@ -5035,39 +4974,6 @@ ConflictReport(focus := "") {
             byBtn[b] := []
         byBtn[b].Push(row)
     }
-    ; programs with instant clicks: every hold / tap-hold / layer row on
-    ; L, R or M is ignored there unless written for that program
-    noHold := Map()
-    for app in MGet(g_Cfg, "apps", []) {
-        nh := MGet(app, "noHold", [])
-        if (nh.Length > 0)
-            noHold[MGet(app, "name", "")] := nh
-    }
-    for appName, nh in noHold {
-        lst := ""
-        for inp in nh
-            lst .= (lst = "" ? "" : ", ") InputLabel(inp)
-        out.Push({kind: "info", text: AppDisp(appName) " has instant clicks on "
-            . lst ": holds, tap-holds and layers on those buttons are off "
-            . "there unless the row was written for " AppDisp(appName) "."})
-        for row in rows {
-            b := MGet(row, "button", "")
-            if (focus != "" && b != focus)
-                continue
-            ev := MGet(row, "event", "")
-            app := MGet(row, "app", "*")
-            hit := false
-            for inp in nh {
-                if (inp = b && ev = "hold" && app = "*")
-                    hit := true
-                if LayerIncludes(MGet(row, "layer", "*"), inp)
-                    hit := true
-            }
-            if hit
-                out.Push({kind: "warn", text: "Ignored in " AppDisp(appName)
-                    . ": " ConflictRowText(row) " (" ConflictScope(row) ")"})
-        }
-    }
     for b, list in byBtn {
         lbl := InputLabel(b)
         ; 1. a program row that beats an everywhere row for the same gesture
@@ -5183,15 +5089,8 @@ ConflictReport(focus := "") {
                 . DescribeAction(r["action"])
         }
         out.Push({kind: "info", text: txt ". While held it is silent; its own "
-            . "tap, double-tap or hold fires on release only if nothing in the "
-            . "layer was used."})
-        for appName, nh in noHold {
-            for inp in nh {
-                if (inp = host)
-                    out.Push({kind: "warn", text: "In " AppDisp(appName)
-                        . " the " InputLabel(host) " layer is OFF (instant clicks)."})
-            }
-        }
+            . "tap or hold fires on release only if nothing in the layer "
+            . "was used."})
     }
     ; 5. radial rows pointing at nothing
     for row in rows {
@@ -11709,38 +11608,46 @@ AppChoices() {
 ; LAYER_BASE_LABEL is a top-level global (defined near BUTTONS, above Init()).
 LayerChoices() {
     out := [LAYER_BASE_LABEL]
-    for b in BUTTONS
+    for b in LAYER_HOSTS
         out.Push("Hold " InputLabel(b))
-    used := KeyInputsInUse()
-    for k in LAYER_KEY_HOSTS {               ; always offered, in-use or not
-        seen := false
-        for u in used {
-            if (u = k)
-                seen := true
-        }
-        if !seen
+    for k in KeyInputsInUse() {              ; a bound KEY can host a layer
+        if LayerHostAllowed(k)               ; (CapsLock is the obvious one)
             out.Push("Hold " k)
-    }
-    for k in used                            ; v0.3: a KEY can host a layer too
-        out.Push("Hold " k)                  ; (CapsLock is the obvious one) --
-    for i, a in BUTTONS {                    ; the engine never cared which
-
-        for j, b in BUTTONS {
-            if (j > i)
-                out.Push("Hold " InputLabel(a) " + " InputLabel(b))
-        }
     }
     return out
 }
 
-; True when this key's HOLD belongs to its layer and cannot be a row's
-; trigger: CapsLock (v0.6.6.5). Tap, double, triple and tap-hold stay open.
-HoldReservedForLayer(key) {
-    for k in LAYER_KEY_HOSTS {
-        if (k = key)
+; May this input hold a layer open? The thumb buttons, and any key that does
+; not type. Everything else is refused by the editors and dropped on load
+; (ValidateCfg), so the engine never meets a host it cannot stay silent on.
+LayerHostAllowed(inp) {
+    for b in LAYER_HOSTS {
+        if (b = inp)
             return true
     }
-    return false
+    return IsKeyInput(inp) && !IsBareTypingKey(inp)
+}
+
+; A row's layer path is usable when every component may host a layer and
+; there is only one of them: nesting went with the pairs (v0.6.7).
+LayerPathAllowed(layer) {
+    parts := 0
+    for p in StrSplit(layer, "/") {
+        if (p = "" || p = "*" || p = "Base")
+            continue
+        parts += 1
+        if (!LayerHostAllowed(p) || parts > 1)
+            return false
+    }
+    return true
+}
+
+; Left, right and middle: the three buttons every application already owns.
+; A hold on one of them is only honoured when written FOR one program
+; (v0.6.7); an everywhere hold row is refused by the editors and dropped on
+; load, so a plain click is never withheld outside the program that asked.
+IsPrimaryButton(btn) {
+    return (btn = "LButton" || btn = "RButton" || btn = "MButton")
 }
 
 ; Every key already used as an input somewhere in the config, in config
@@ -12259,6 +12166,16 @@ BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
         MsgBox("A binding cannot require its own input as a held layer button.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
+    if !LayerPathAllowed(lay) {
+        MsgBox("Only button 4, button 5 or a key that does not type can hold a"
+            . " layer, one at a time.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
+    if (event = "hold" && IsPrimaryButton(btn) && AppCodeFromDisp(ddApp.Text) = "*") {
+        MsgBox("Holding the left, right or middle button only works inside one"
+            . " program. Pick the program first.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
+    }
     if MButtonHoldRisk(btn, event, lay) {
         if (MsgBox(MButtonHoldWarning(), "RadMapper",
             "YesNo Icon! Owner" . dlg.Hwnd) != "Yes")
@@ -12494,13 +12411,6 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
     }
     mods := ReadModBoxes(boxes)
     event := ddEvent.Text
-    if (event = "hold" && HoldReservedForLayer(key)) {
-        MsgBox("Holding " key " is reserved for its layer. Put the rows it"
-            . " should enable under 'Layer: Hold " key "'. Tap, double-tap"
-            . " and tap-then-hold on " key " are still free.",
-            "RadMapper", "Iconx Owner" . dlg.Hwnd)
-        return
-    }
     ; The keyboard-specific guard. Suppressing a typing key to tell tap from
     ; hold necessarily DELAYS the character, and a failure loses it outright --
     ; in a PowerScribe field that lands in a report. Modified combos are exempt
@@ -12520,10 +12430,10 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
             "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
-    if MButtonHoldRisk(key, event, lay) {    ; a KEY row hosted on MButton
-        if (MsgBox(MButtonHoldWarning(), "RadMapper",
-            "YesNo Icon! Owner" . dlg.Hwnd) != "Yes")
-            return
+    if !LayerPathAllowed(lay) {
+        MsgBox("Only button 4, button 5 or a key that does not type can hold a"
+            . " layer, one at a time.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        return
     }
     atype := ACT_CODES[ddAct.Value]
     ok := true
@@ -16329,9 +16239,10 @@ class Atlas {
             . "email and the answer usually falls out of it.`n`n"
             . "Mouse / Keyboard`n"
             . "Choose a button or key, then add an assignment. In program "
-            . "limits where it works. Only while holding adds an optional "
-            . "second button. Rec records a shortcut; Keys lets you choose "
-            . "one without AutoHotkey syntax.`n`n"
+            . "limits where it works. Rec records a shortcut; Keys lets you "
+            . "choose one without AutoHotkey syntax. Left, right and middle "
+            . "are always instant clicks; a hold on them only works inside "
+            . "one program.`n`n"
             . "Radial menus`n"
             . "Edit commands, Assign a button, then Practice safely. Choose "
             . "Send keys for PACS shortcuts and record the keys shown in "
@@ -16735,10 +16646,13 @@ class Atlas {
         apps := AppChoices()
         Lumi.Select(x + w - 430, y, 180, 30, apps, Atlas.appIdx,
             (i, t) => Atlas.SetApp(i))
-        Lumi.Label(x + w - 236, y + 4, 46, "Layer", "mute", "left", 24)
-        layers := LayerChoices()
-        Lumi.Select(x + w - 186, y, 186, 30, layers, Atlas.layerIdx,
-            (i, t) => Atlas.SetLayer(i))
+        if Atlas.Advanced() {
+            Lumi.Label(x + w - 236, y + 4, 46, "Layer", "mute", "left", 24)
+            layers := LayerChoices()
+            Lumi.Select(x + w - 186, y, 186, 30, layers, Atlas.layerIdx,
+                (i, t) => Atlas.SetLayer(i))
+        } else
+            Atlas.layerIdx := 1              ; Simple mode: the base layer
 
         Atlas.MouseMap(x, y + 64)
 
@@ -17110,10 +17024,13 @@ class Atlas {
         apps := AppChoices()
         Lumi.Select(x + w - 430, y, 180, 30, apps, Atlas.kbAppIdx,
             (i, t) => Atlas.SetKbApp(i))
-        Lumi.Label(x + w - 236, y + 4, 46, "Layer", "mute", "left", 24)
-        layers := LayerChoices()
-        Lumi.Select(x + w - 186, y, 186, 30, layers, Atlas.kbLayerIdx,
-            (i, t) => Atlas.SetKbLayer(i))
+        if Atlas.Advanced() {
+            Lumi.Label(x + w - 236, y + 4, 46, "Layer", "mute", "left", 24)
+            layers := LayerChoices()
+            Lumi.Select(x + w - 186, y, 186, 30, layers, Atlas.kbLayerIdx,
+                (i, t) => Atlas.SetKbLayer(i))
+        } else
+            Atlas.kbLayerIdx := 1
 
         ; KeyInputsInUse is the same list the Layer selector is built from,
         ; so the tiles here and the "Hold <key>" choices can never disagree.
@@ -17779,12 +17696,7 @@ class Atlas {
             for entry in MGet(app, "match", [])
                 m .= (m = "" ? "" : "; ") entry
             pk := ParkOf(app["name"])
-            nh := ""
-            for inp in MGet(app, "noHold", [])
-                nh .= (nh = "" ? "" : "+") InputLabel(inp)
-            q := (nh = "") ? "" : ("instant clicks: " nh)
-            if MGet(app, "noFollow", 0)
-                q .= (q = "" ? "" : " · ") "no pointer jump"
+            q := MGet(app, "noFollow", 0) ? "no pointer jump" : ""
             rows.Push({cells: [app["name"], m,
                 IsObject(pk) ? (pk.x ", " pk.y) : "—",
                 q = "" ? "—" : q]})
@@ -17805,17 +17717,15 @@ class Atlas {
             ["Program", "Recognised by", "Pointer spot", "Special"])
 
         by := y + h - 52
-        b := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
+        b := Atlas.BtnRow(x, w, [0.25, 0.25, 0.25, 0.25])
         hasSel := Atlas.HasSel(rows.Length)
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Set pointer spot",
             (*) => Atlas.CaptureSpot(), hasSel ? "primary" : "muted")
         Lumi.Btn(b[2].x, by, b[2].w, 34, "Forget spot",
             (*) => Atlas.ClearSpot(), hasSel ? "ghost" : "muted")
-        Lumi.Btn(b[3].x, by, b[3].w, 34, "Instant clicks",
-            (*) => Atlas.ToggleNoHold(), hasSel ? "accent" : "muted")
-        Lumi.Btn(b[4].x, by, b[4].w, 34, "No pointer jump",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "No pointer jump",
             (*) => Atlas.ToggleNoFollow(), hasSel ? "accent" : "muted")
-        Lumi.Btn(b[5].x, by, b[5].w, 34, "More settings…",
+        Lumi.Btn(b[4].x, by, b[4].w, 34, "More settings…",
             (*) => Atlas.Classic("apps"), "ghost")
     }
 
@@ -17839,31 +17749,6 @@ class Atlas {
         Lumi.Toast(on
             ? ("The pointer will not jump into " MGet(app, "name", ""))
             : ("The pointer can jump into " MGet(app, "name", "") " again"),
-            on ? "jade" : "magenta")
-    }
-
-    /**
-     * Turn the primary buttons' hold arbitration off (or back on) for the
-     * selected profile -- the syngo.via fix, reachable without hand-editing
-     * the config.
-     */
-    static ToggleNoHold() {
-        ref := Atlas.SelectedRef()
-        if (ref = 0 || ref > g_Cfg["apps"].Length) {
-            Lumi.Toast("Pick a program in the list first", "warn")
-            return
-        }
-        app := g_Cfg["apps"][ref]
-        on := MGet(app, "noHold", []).Length = 0
-        app["noHold"] := on ? ["LButton", "RButton", "MButton"] : []
-        Atlas.SaveOrWarn()
-        AfterCfgChange()
-        Atlas.Build()
-        Lumi.Toast(on
-            ? ("Left, right and wheel clicks are instant in "
-               MGet(app, "name", "") " — holding them does nothing extra")
-            : ("Holding left, right and wheel click works again in "
-               MGet(app, "name", "")),
             on ? "jade" : "magenta")
     }
 
@@ -19249,10 +19134,16 @@ class Atlas {
         st.app := Lumi.Select(150, 70, 240, 30, apps,
             Atlas.IndexOfText(apps, AppDisp(row ? MGet(row, "app", "*")
                 : Atlas.ScopeApp())))
-        Lumi.Label(24, 112, 120, "Only while holding", "dim", "left", 30)
-        st.layer := Lumi.Select(150, 112, 300, 30, layers,
-            Atlas.IndexOfText(layers, LayerLabelFromCode(row
-                ? MGet(row, "layer", "*") : Atlas.ScopeLayer())))
+        ; "Only while holding" is an Advanced-mode control (v0.6.7): Simple
+        ; mode keeps a row's existing layer but never offers one. DoSave
+        ; reads st.layer.index either way.
+        layIdx := Atlas.IndexOfText(layers, LayerLabelFromCode(row
+            ? MGet(row, "layer", "*") : Atlas.ScopeLayer()))
+        if Atlas.Advanced() {
+            Lumi.Label(24, 112, 120, "Only while holding", "dim", "left", 30)
+            st.layer := Lumi.Select(150, 112, 300, 30, layers, layIdx)
+        } else
+            st.layer := {index: layIdx}
 
         Lumi.Label(24, 154, 120, keyMode ? "Key" : "Button", "dim", "left", 30)
         if keyMode {
@@ -19628,11 +19519,14 @@ class Atlas {
                 "warn", 2600)
             return
         }
-        if (st.keyMode && event = "hold" && HoldReservedForLayer(btn)) {
-            Lumi.Toast("Holding " btn " is reserved for its layer — pick "
-                . "'Only while holding " btn "' on the rows it should enable. "
-                . "Tap, double-tap and tap-then-hold are still free.",
-                "warn", 4200)
+        if !LayerPathAllowed(lay) {
+            Lumi.Toast("Only button 4, button 5 or a key that does not type "
+                . "can hold a layer, one at a time", "warn", 3200)
+            return
+        }
+        if (event = "hold" && IsPrimaryButton(btn) && app = "*") {
+            Lumi.Toast("Holding the left, right or middle button only works "
+                . "inside one program — pick the program first", "warn", 3600)
             return
         }
         ; The keyboard-only cost, spelled out. Suppressing a key that TYPES so
