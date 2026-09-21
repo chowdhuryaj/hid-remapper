@@ -2692,7 +2692,7 @@ SeedDefaultBindings(cfg) {
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; Nothing on the keyboard beyond the backtick (v0.6.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
-    SeedPacsWheelRows(b)
+    SeedPacsWheelRows(b, cfg["apps"])
 }
 
 ; The radial menus, one gesture away in the viewer (v0.6.7): in PACS, HOLD
@@ -2701,9 +2701,26 @@ SeedDefaultBindings(cfg) {
 ; pointer between monitors; a hold on a thumb button waits for the
 ; threshold, a tap fires on release. Scoped to PACS so nothing changes in
 ; PowerScribe or anywhere else.
-SeedPacsWheelRows(b) {
-    b.Push(NewBinding("PACS", "*", "", "XButton1", "hold", "radial", "PACS"))
-    b.Push(NewBinding("PACS", "*", "", "XButton2", "hold", "radial", "Window presets"))
+SeedPacsWheelRows(b, apps := 0) {
+    app := PacsAppName(apps)
+    b.Push(NewBinding(app, "*", "", "XButton1", "hold", "radial", "PACS"))
+    b.Push(NewBinding(app, "*", "", "XButton2", "hold", "radial", "Window presets"))
+}
+
+; The name of the profile that matches the IntelliSpace exe -- "PACS" as
+; shipped, whatever it was renamed to since. Rows are scoped by profile NAME,
+; so seeding the literal "PACS" into a config whose profile is called
+; something else would write rows that never apply.
+PacsAppName(apps := 0) {
+    if !IsObject(apps)                       ; DefaultCfg builds its own
+        apps := MGet(g_Cfg, "apps", [])      ; list before g_Cfg exists
+    for app in apps {
+        for entry in MGet(app, "match", []) {
+            if InStr(entry, "IntelliSpacePACSRadiology.exe")
+                return MGet(app, "name", "PACS")
+        }
+    }
+    return "PACS"
 }
 
 ; Every input ships LISTED in the Mappings view, mapped to its system default
@@ -2844,11 +2861,12 @@ MigrateCfg() {
     if (IsObject(s) && !s.Has("seedPacsWheel067")) {
         s["seedPacsWheel067"] := 1
         free := true
+        pacs := PacsAppName()
         for row in g_Cfg["bindings"] {
             if (MGet(MGet(row, "action", Map()), "type", "") = "radial")
                 free := false
             if ((MGet(row, "button", "") = "XButton1" || MGet(row, "button", "") = "XButton2")
-                && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = "PACS")
+                && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = pacs)
                 free := false
         }
         if free
@@ -3210,6 +3228,8 @@ NormalizeCfg(imported := false) {
         c["layers"] := ["Base"]
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
+    ValidateCfg()                            ; ...and the v0.6.7 host rules
+                                             ; applied to what migration wrote
     MigrateLayoutSlots(!imported)            ; v0.6.2: layouts learn their screen
     SeedNativeDefaults(c)                  ; unified button-path layer.
 }
@@ -3253,6 +3273,11 @@ ValidateCfg() {
             && MGet(row, "event", "") != "hold") {
             if (MGet(row, "event", "") = "tap") {
                 row["event"] := "hold"
+                if RowKeyTaken(kept, row) {
+                    Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
+                        . "radial menu dropped: that button already has a hold row here")
+                    continue
+                }
                 Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
                     . "radial menu is now a HOLD: menus open while the button is held")
             } else {
@@ -4923,6 +4948,13 @@ OnWheelHK(wh, *) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
     }
+    ; A radial menu is up: the hand is mid-gesture on its holder, and that
+    ; holder is also a layer host. A notch now must not drive a deck, the
+    ; switcher or a dial invisibly behind the wheel (v0.6.7).
+    if (IsObject(g_Radial) && !g_Radial.trial) {
+        SendWheelRaw(wh, 1)
+        return
+    }
     ; no turn binding exists for this wheel in ANY context -> nothing to
     ; resolve (v0.3: a wheel is only ever hooked when a row references it,
     ; so this is a belt-and-braces guard, not a hot path)
@@ -5413,10 +5445,8 @@ ActionDown(binding, st, instant) {
             ; Pressing the button again while a menu is still up (a preset
             ; ring left open, say) closes it rather than stacking another.
             if IsObject(g_Radial) {
-                RadialClose(false)
-                if IsObject(st)
-                    st.radialCancelled := true
-                return
+                RadialClose(false)           ; ActionUp's RadialClose(true) is
+                return                       ; then a no-op: nothing is open
             }
             RadialOpen(v, IsObject(st) ? st : 0)
         default:
@@ -8945,9 +8975,18 @@ RadialTick(*) {
     ; the image. ActionUp is the real commit; this is the floor under it.
     ; Measured from openedAt, not t0: t0 restarts on every ring change, so
     ; a gesture that kept walking in and out of submenus never aged.
+    ; A hand that is STILL holding is not stuck: after 15 s the menu closes
+    ; only when its holder is gone or reads physically up (a physical
+    ; reading is trusted only for a press that read as physical); a genuine
+    ; long hold gets a 60 s ceiling instead of a vanishing menu.
     if (!R.latched && (now - R.openedAt > 15000)) {
-        RadialClose(false)
-        return
+        h := R.holder
+        gone := !IsObject(h) || !h.down
+            || (h.physSeen && !InputHeldPhysical(h.btn))
+        if (gone || now - R.openedAt > 60000) {
+            RadialClose(false)
+            return
+        }
     }
     ; Practice is a thing you look at: 20 s, then it goes away by itself.
     if (R.trial && (now - R.openedAt > 20000)) {
@@ -10297,6 +10336,7 @@ ForceReleaseActive() {
     ; happened to be resting in -- a W/L preset or "mark as read" into the
     ; open study. RadialClose(false) is a no-op when no menu is open.
     RadialClose(false)
+    AppSwitchClose(false)                    ; same rule: teardown never commits
     ClickLockRelease()                       ; a latch must never outlive the
     ScrollPtrStop()                          ; hooks that can release it
     for name, st in g_BS.Clone() {
@@ -10306,7 +10346,8 @@ ForceReleaseActive() {
             else if (st.mode = "held")
                 ActionUp(st.holdBinding, st)
         }
-        ClearBS(name)
+        st.down := false                     ; watchers holding a reference to
+        ClearBS(name)                        ; this state see a release
     }
 }
 
@@ -12117,6 +12158,19 @@ ValidateActionValue(owner, atype, raw, &ok) {
         return m
     }
     return raw
+}
+
+; Does `rows` already hold a row for the same button, trigger and scope?
+RowKeyTaken(rows, row) {
+    for r in rows {
+        if (MGet(r, "button", "") = MGet(row, "button", "")
+            && MGet(r, "event", "") = MGet(row, "event", "")
+            && MGet(r, "app", "*") = MGet(row, "app", "*")
+            && MGet(r, "layer", "*") = MGet(row, "layer", "*")
+            && MGet(r, "mods", "") = MGet(row, "mods", ""))
+            return true
+    }
+    return false
 }
 
 IsRetiredEvent(ev) {
@@ -19827,8 +19881,8 @@ class Atlas {
             Lumi.Btn(466, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
-            for b in BUTTONS                 ; buttons only: a wheel cannot
-                inputs.Push(InputLabel(b))   ; hold a layer for its own notch
+            for b in LAYER_HOSTS             ; the thumb buttons: the only
+                inputs.Push(InputLabel(b))   ; mouse buttons that host a layer
             st.input := Lumi.Select(150, 126, 300, 30, inputs,
                 Atlas.IndexOfText(inputs,
                     InputLabel(IsWheel(host) ? "XButton1" : host)))
@@ -19953,6 +20007,11 @@ class Atlas {
         if (st.keyMode && !KeyNameValid(host)) {
             Lumi.Toast("RadMapper cannot watch '" host "' — use a"
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
+            return
+        }
+        if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.6.7)
+            Lumi.Toast("Only button 4, button 5 or a key that does not type "
+                . "can hold a deck", "warn", 3200)
             return
         }
 
