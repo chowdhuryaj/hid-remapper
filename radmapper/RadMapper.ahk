@@ -1315,7 +1315,10 @@ global OLD_CFG_NAME := "RadMouseConfig.json"
 
 global BUTTONS := ["LButton", "RButton", "MButton", "XButton1", "XButton2"]
 global WHEELS  := ["WheelUp", "WheelDown", "WheelLeft", "WheelRight"]
-global EVENT_ITEMS := ["tap", "double", "triple", "hold", "taphold", "turn"]
+global EVENT_ITEMS := ["tap", "hold", "turn"]
+; Triggers retired in v0.6.7 (double-tap, triple-tap, tap-then-hold): a row
+; carrying one is dropped on load, with a Diagnostics line saying so.
+global RETIRED_EVENTS := ["double", "triple", "taphold"]
 
 ; Base-layer selector label (E1 mouse map). MUST be a top-level global defined
 ; ABOVE the Init() call: BuildMain() -> LayerChoices() reads it during Init, and
@@ -1342,10 +1345,7 @@ global INPUT_LABELS := Map(
 ; only ever see the codes; every list, dropdown and sentence shows these.
 global EVENT_LABELS := Map(
     "tap", "Tap it",
-    "double", "Tap it twice",
-    "triple", "Tap it three times",
     "hold", "Hold it down",
-    "taphold", "Tap, then hold",
     "turn", "Turn the wheel")
 
 ; --- MOUSE BUTTONS AS OUTPUTS (v0.6.3) ---------------------------------------
@@ -1492,6 +1492,7 @@ global ACT_HINTS := Map(
 ; chords. Deleted from the config on load (MigrateCfg) so the file on disk
 ; stops carrying dead knobs.
 global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
+    "tapWindow",
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1500,7 +1501,6 @@ global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     "accelMode"]
 
 global DEFAULTS := Map(
-    "tapWindow", 100,          ; ms between taps of a multi-tap
     "holdThreshold", 200,      ; ms press duration that becomes a hold
     "dragThreshold", 8,        ; px of travel that commits dragmove to a drag
     "repeatRate", 50,          ; ms between auto-repeat keystrokes
@@ -2207,7 +2207,7 @@ IsBareTypingKey(code) {
 ; legitimate place to put a layer, and this is a cost to accept knowingly,
 ; exactly like the bare typing keys above.
 MButtonHoldRisk(btn, event, layer := "*") {
-    if (btn = "MButton" && (event = "hold" || event = "taphold"))
+    if (btn = "MButton" && event = "hold")
         return true
     return LayerIncludes(layer, "MButton")
 }
@@ -3192,9 +3192,18 @@ ValidateCfgShape(c) {
 ValidateCfg() {
     kept := []
     for row in g_Cfg["bindings"] {
-        if (row is Map && row.Has("button") && row.Has("event")
+        if !(row is Map && row.Has("button") && row.Has("event")
             && MGet(row, "action") is Map && MGet(row, "action").Has("type"))
-            kept.Push(row)
+            continue
+        ; v0.6.7: a double-tap, triple-tap or tap-then-hold row has no engine
+        ; left to run it. Dropped here, named in Diagnostics, never silently
+        ; kept where no dropdown could show it.
+        if IsRetiredEvent(MGet(row, "event", "")) {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " row dropped: that trigger no longer exists")
+            continue
+        }
+        kept.Push(row)
     }
     g_Cfg["bindings"] := kept
     kept := []
@@ -4075,30 +4084,11 @@ LayerHostExists(btn, ctx) {
     return false
 }
 
-; True when a tap-dance row would resolve to nothing but native clicks of btn
-; ITSELF -- the only resolution CommitTaps can subtract an eager first click
-; from (st.nativeTaps). An unbound row counts: it falls back to the tap row,
-; which eager already requires to be native. A row pointing at a DIFFERENT
-; input does not: that one must fire in full, so the eager click would be
-; delivered on top of it.
-DanceIsNativeClicks(btn, b) {
-    if !IsObject(b)
-        return true
-    a := b["action"]
-    if !IsNativeAct(a["type"])
-        return false
-    v := MGet(a, "value", "")
-    return (v = "" || v = btn)
-}
-
 ; Everything the state machine needs to know about btn in ctx, precomputed at
 ; press time so per-event work stays tiny.
 SpecFor(btn, ctx) {
     tap     := FindBindingFor(btn, "tap", ctx)
-    double  := FindBindingFor(btn, "double", ctx)
-    triple  := FindBindingFor(btn, "triple", ctx)
     hold    := FindBindingFor(btn, "hold", ctx)
-    taphold := FindBindingFor(btn, "taphold", ctx)
     layerHost := LayerHostExists(btn, ctx)
 
     ; This app cannot tolerate the tap/hold wait on this input -- drop every
@@ -4110,19 +4100,15 @@ SpecFor(btn, ctx) {
     if AppNoHold(btn) {
         if (IsObject(hold) && MGet(hold, "app", "*") = "*")
             hold := 0
-        if (IsObject(taphold) && MGet(taphold, "app", "*") = "*")
-            taphold := 0
         layerHost := false
     }
 
-    hasAny := IsObject(tap) || IsObject(double) || IsObject(triple)
-        || IsObject(hold) || IsObject(taphold) || layerHost
+    hasAny := IsObject(tap) || IsObject(hold) || layerHost
 
     pure := !hasAny
     instantTap := false
     remap := ""
-    if (!pure && IsObject(tap) && !IsObject(double) && !IsObject(triple)
-        && !IsObject(hold) && !IsObject(taphold) && !layerHost) {
+    if (!pure && IsObject(tap) && !IsObject(hold) && !layerHost) {
         a := tap["action"]
         v := MGet(a, "value", "")
         if (IsNativeAct(a["type"]) && (v = "" || v = btn))
@@ -4165,62 +4151,27 @@ SpecFor(btn, ctx) {
     ; (a brush of the button launched the program). One-shots now wait for
     ; HoldTimer like every other hold, which is the only way a hold can be
     ; abandoned by letting go early.
-    instantHold := IsObject(hold) && tapNative && !IsObject(double)
-        && !IsObject(triple) && !IsObject(taphold) && !layerHost
+    instantHold := IsObject(hold) && tapNative && !layerHost
         && StatefulHoldType(hold["action"]["type"])
 
-    ; Eager first-press passthrough: when the only extras are multi-tap (no
-    ; hold, tap-hold or layer-host role) and the tap is native or unbound,
-    ; the FIRST press can go out natively at press time -- instant
-    ; click/drag/hold -- because every remaining feature is decided by
-    ; SUBSEQUENT presses, which the dance machinery still suppresses.
-    ;
-    ; That is only true while the dance can RESOLVE to native clicks of this
-    ; same button, which is the one resolution CommitTaps can net the eager
-    ; click out of (st.nativeTaps). Every other resolution leaks it: the
-    ; press went out as a real native down and its release completed a real
-    ; click, so by the time the dance resolves the application has already
-    ; had a click it should never have seen, and nothing downstream can take
-    ; it back. A taphold row NEVER qualifies -- tap-hold is one gesture whose
-    ; first tap is a PREFIX, not an output, so the tap must not be emitted at
-    ; all when the hold follows. A double/triple row bound to anything but a
-    ; native click of this button leaks the same way, once per gesture.
-    ;
-    ; When eager is refused the button takes the normal pending path, which
-    ; holds the first press back until the dance resolves; heldBack below
-    ; restores the drag affordance that costs.
-    eager := tapNative && !IsObject(hold) && !layerHost && !IsObject(taphold)
-        && (IsObject(double) || IsObject(triple))
-        && DanceIsNativeClicks(btn, double)
-        && DanceIsNativeClicks(btn, triple)
-
-    ; This press carries no meaning of its own -- no hold action, no layer to
-    ; arm, just a tap dance whose first press eager would have delivered.
-    heldBack := !eager && tapNative && !IsObject(hold) && !layerHost
-        && (IsObject(double) || IsObject(triple) || IsObject(taphold))
-
-    waitTaps := 1
-    if IsObject(double)
-        waitTaps := 2
-    if IsObject(triple)
-        waitTaps := 3
-    if (IsObject(taphold) && waitTaps < 2)
-        waitTaps := 2
-
-    return {tap: tap, double: double, triple: triple, hold: hold,
-        taphold: taphold, layerHost: layerHost, pure: pure,
-        instantTap: instantTap, instantHold: instantHold, eager: eager,
-        waitTaps: waitTaps, tapNative: tapNative, remap: remap,
-        heldBack: heldBack}
+    return {tap: tap, hold: hold, layerHost: layerHost, pure: pure,
+        instantTap: instantTap, instantHold: instantHold,
+        tapNative: tapNative, remap: remap}
 }
+
 
 
 ; ── §5  ENGINE (press / release / wheel state machine) ──────────────────────
 ;
 ; Per-input state object fields:
-;   down, consumed, mode, pressTick, tapCount, gen, pollId, sx, sy,
+;   down, consumed, mode, pressTick, gen, pollId, sx, sy,
 ;   spec, ctx, holdBinding, dragOn, usedAsMod, dial, passBtn, repStart
-; Modes: passthru | pending | wait | held | armedmod | fired
+; Modes: passthru | pending | held | armedmod | fired
+;   passthru  a native down is out; the up goes out on release
+;   pending   the press is withheld until HoldTimer or the release decides
+;   held      a hold action is engaged (ActionDown), ended by ActionUp
+;   armedmod  a layer host past the threshold: silent while its layer is used
+;   fired     a one-shot tap already went out at press
 ; st.gen increments on every transition; one-shot timers carry the gen they
 ; were armed with and abort if it moved on (stale-timer guard).
 
@@ -4239,9 +4190,9 @@ NewBS(btn) {
     global g_PollSeq
     g_PollSeq += 1
     st := {btn: btn, down: false, consumed: false, mode: "", pressTick: 0,
-        tapCount: 0, gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
+        gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
         holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
-        passBtn: "", repStart: 0, polling: false, nativeTaps: 0,
+        passBtn: "", repStart: 0, polling: false,
         dragEligible: false, locked: false, physSeen: true}
     g_BS[btn] := st
     return st
@@ -4470,7 +4421,7 @@ OnPressHK(btn, *) {
         prev := BS(btn)
         if prev {
             if (prev.down && !prev.consumed) {
-                if (prev.mode = "passthru" || prev.mode = "eager1")
+                if (prev.mode = "passthru")
                     SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
                 else if (prev.mode = "held")
                     ActionUp(prev.holdBinding, prev)
@@ -4500,7 +4451,7 @@ OnPressHK(btn, *) {
             ; same orphan as the not-ours branch above: this press consumes
             ; the input, so the old state's release never arrives
             if (old.down && !old.consumed) {
-                if (old.mode = "passthru" || old.mode = "eager1")
+                if (old.mode = "passthru")
                     SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
                 else if (old.mode = "held")
                     ActionUp(old.holdBinding, old)
@@ -4545,37 +4496,17 @@ OnPressHK(btn, *) {
                 prev.repStart := now
                 ActionFire(prev.spec.tap, prev)
             }
-        } else if (prev.mode = "passthru" || prev.mode = "eager1")
+        } else if (prev.mode = "passthru")
             SendNativeDown(prev.passBtn != "" ? prev.passBtn : btn)
         return
     }
 
-    ; multi-tap continuation: same input re-pressed inside its tap window
-    if (prev && prev.mode = "wait" && !prev.down) {
-        prev.gen += 1
-        prev.down := true
-        prev.pressTick := now
-        prev.mode := "pending"
-        RM_GetPos(&sx, &sy)
-        prev.sx := sx
-        prev.sy := sy
-        ; A DANCE press is not a drag. The second press of a tap-hold is the
-        ; HOLD, and drag scroll, drag zoom and moddrag all move the pointer
-        ; on purpose -- leaving the first press's watch armed would convert
-        ; that travel into a native drag and cancel the very gesture it was
-        ; aimed at. Eager buttons never armed it on a second press either, so
-        ; this keeps them identical too.
-        if (IsObject(prev.spec) && prev.spec.heldBack)
-            prev.dragEligible := false
-        ArmTimers(prev)
-        return
-    }
     if prev {
         ; A still-down prev here means the Up event was LOST (hook drop,
         ; modal, focus theft) and the user re-pressed: release whatever the
         ; old state holds before starting fresh, or a synthetic down leaks.
         if (prev.down && !prev.consumed) {
-            if (prev.mode = "passthru" || prev.mode = "eager1")
+            if (prev.mode = "passthru")
                 SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
             else if (prev.mode = "held")
                 ActionUp(prev.holdBinding, prev)
@@ -4643,14 +4574,6 @@ OnPressHK(btn, *) {
         StartPollIfNeeded(st)
         return
     }
-    if spec.eager {
-        st.mode := "eager1"                  ; first press: fully native, now
-        st.passBtn := btn
-        if IsObject(spec.tap)                ; the native first press delivers
-            MarkLayerUsed(spec.tap)          ; the (possibly layer-scoped) tap
-        SendNativeDown(btn)                  ; row's output -- holders silent
-        return
-    }
     st.mode := "pending"
     ; LButton hosting a layer must still let a real left-DRAG pass through
     ; natively -- the sacred left-drag invariant, which the user's own rule
@@ -4660,34 +4583,18 @@ OnPressHK(btn, *) {
     ; (a movement-gated right-drag would risk phantom window/level in PACS).
     if (spec.layerHost && spec.tapNative && btn = "LButton")
         st.dragEligible := true
-
-    ; A held-back button needs the same watch for the same reason: eager was
-    ; refused for it (see SpecFor), so its first press waits for the dance to
-    ; resolve, and a real DRAG would otherwise be swallowed until HoldTimer
-    ; fired 200 ms later and started the native down at the MOVED position.
-    ; Travel past the drag threshold proves the press was never a dance
-    ; prefix -- the same "short AND still" test eager1 used to apply at
-    ; release, moved to where it can still act on the result. Mouse buttons
-    ; only: a key cannot drag. Two plain ifs, not if/else -- both merely raise
-    ; the same flag, and either reason alone is enough.
-    if (spec.heldBack && IsMouseInput(btn))
-        st.dragEligible := true
     ArmTimers(st)
 }
 
-; Timing reads, CLAMPED to the same ranges the Settings page and the
-; calibrator enforce (50-2000 ms and 30-1000 ms). A hand-edited config -- or a
-; JSON number that arrived as 0 -- used to reach SetTimer as `-0`, which in
-; AHK means "run this timer repeatedly, as fast as it can", so the hold timer
-; fired continuously and the button engaged its hold before the hand had
-; moved. Every timing read of these two settings goes through here; the GUI
-; keeps its own ClampInt on the way IN, this is the guard on the way OUT.
+; The hold threshold, CLAMPED to the same range the Settings page enforces
+; (50-2000 ms). A hand-edited config -- or a JSON number that arrived as 0 --
+; used to reach SetTimer as `-0`, which in AHK means "run this timer
+; repeatedly, as fast as it can", so the hold timer fired continuously and the
+; button engaged its hold before the hand had moved. Every timing read of the
+; setting goes through here; the GUI keeps its own ClampInt on the way IN,
+; this is the guard on the way OUT.
 HoldMs() {
     return ClampInt(Cfg("holdThreshold"), 50, 2000, 200)
-}
-
-TapMs() {
-    return ClampInt(Cfg("tapWindow"), 30, 1000, 100)
 }
 
 ArmTimers(st) {
@@ -4745,9 +4652,7 @@ HoldTimer(st, gen, *) {
         return
     spec := st.spec
     btn := st.btn
-    b := (st.tapCount > 0)
-        ? (IsObject(spec.taphold) ? spec.taphold : spec.hold)
-        : spec.hold
+    b := spec.hold
     ; A layer-host DEFERS a ONE-SHOT hold to release: holding it ARMS its
     ; layer, and the hold fires only if the layer went unused (OnReleaseHK
     ; armedmod -- the QMK mod-tap rule). STATEFUL hold types still engage at
@@ -4766,7 +4671,7 @@ HoldTimer(st, gen, *) {
         st.mode := "held"
         st.holdBinding := b
         ActionDown(b, st, false)
-        LastEvent(btn (st.tapCount > 0 ? " tap-hold" : " hold"), b)
+        LastEvent(btn " hold", b)
         StartPollIfNeeded(st)
         return
     }
@@ -4833,14 +4738,6 @@ MovePoll(btn, pollId, *) {
     }
 }
 
-TapTimer(st, gen, *) {
-    Critical "On"
-    if (!IsObject(st) || BS(st.btn) != st || st.gen != gen || st.mode != "wait")
-        return
-    CommitTaps(st, st.tapCount)
-    ClearBS(st.btn)
-}
-
 OnReleaseHK(btn, *) {
     Critical "On"
     TestNotify(btn, 0)
@@ -4881,28 +4778,6 @@ OnReleaseHK(btn, *) {
         ClearBS(btn)
         return
     }
-    if (mode = "eager1") {
-        SendNativeUp(btn)
-        if st.usedAsMod {                    ; spent as a modifier: no dance
-            ClearBS(btn)
-            return
-        }
-        ; arm the tap dance only if this was a genuine tap (short + still);
-        ; a drag or long hold was already served natively and ends here
-        RM_GetPos(&ex, &ey)
-        dx := ex - st.sx
-        dy := ey - st.sy
-        dt := Cfg("dragThreshold")
-        if (A_TickCount - st.pressTick < HoldMs()
-            && (dx * dx + dy * dy) < dt * dt) {
-            st.nativeTaps := 1
-            st.tapCount := 1
-            st.mode := "wait"
-            SetTimer(TapTimer.Bind(st, st.gen), -TapMs())
-        } else
-            ClearBS(btn)
-        return
-    }
     if (mode = "held") {
         ActionUp(st.holdBinding, st)
         ClearBS(btn)
@@ -4910,88 +4785,47 @@ OnReleaseHK(btn, *) {
     }
     if (mode = "armedmod") {
         ; A layer-host held past the threshold and now released. If its layer
-        ; went UNUSED, its own action fires as a one-shot: the hold (or tap-hold
-        ; after a tap-dance) if it has one, else its tap (the seeded native tap
-        ; makes an unused holder still click -- S31/S43). If the layer was used
-        ; (usedAsMod), the holder stays silent. Tap-dance resolves in the parent
-        ; context (st.spec was resolved at press, before the layer armed).
-        ; b here is ONE-SHOT by construction: HoldTimer only defers a hold to
-        ; armedmod when !StatefulHoldType (stateful holds engaged at threshold
-        ; in held mode instead), so ActionFire's instant form is always the
-        ; right delivery and can never toggle stateful state on (v1.0.1).
+        ; went UNUSED, its own action fires as a one-shot: the hold if it has
+        ; one, else its tap (the seeded native tap makes an unused holder
+        ; still click -- S31/S43). If the layer was used (usedAsMod), the
+        ; holder stays silent. b here is ONE-SHOT by construction: HoldTimer
+        ; only defers a hold to armedmod when !StatefulHoldType (stateful
+        ; holds engaged at threshold in held mode instead), so ActionFire's
+        ; instant form is always the right delivery and can never toggle
+        ; stateful state on (v1.0.1).
         if !st.usedAsMod {
-            b := (st.tapCount > 0 && IsObject(st.spec.taphold))
-                ? st.spec.taphold : st.spec.hold
+            b := st.spec.hold
             if IsObject(b) {
                 ActionFire(b, st)
-                LastEvent(st.btn (st.tapCount > 0 ? " tap-hold" : " hold"), b)
-            } else if IsObject(st.spec.tap) {
-                CommitTaps(st, 1)
-            }
+                LastEvent(st.btn " hold", b)
+            } else
+                FireTap(st)
         }
         ClearBS(btn)
         return
     }
     if (mode = "pending") {
-        if st.usedAsMod {                    ; nested input consumed this hold
-            ClearBS(btn)
-            return
-        }
-        st.tapCount += 1
-        if (st.tapCount >= st.spec.waitTaps) {
-            CommitTaps(st, st.tapCount)
-            ClearBS(btn)
-        } else {
-            st.mode := "wait"
-            SetTimer(TapTimer.Bind(st, st.gen), -TapMs())
-        }
+        ; Released before the hold threshold: a tap. (A holder consumed as
+        ; a modifier by a nested input stays silent.)
+        if !st.usedAsMod
+            FireTap(st)
+        ClearBS(btn)
         return
     }
     ClearBS(btn)                             ; "fired" and anything else
 }
 
-CommitTaps(st, n) {
-    ; A holder whose layer was USED has spent its press enabling that
-    ; action: whatever dance its own taps add up to stays silent. Both
-    ; release paths already test this; testing it here as well closes
-    ; every route to a holder's double-tap firing on top of a chord
-    ; (v0.6.6.2: right button held, thumb buttons worked, and the right
-    ; button's double-tap radial menu appeared).
-    if st.usedAsMod
-        return
-    spec := st.spec
-    b := 0
-    times := 1
-    if (n = 1)
-        b := spec.tap
-    else if (n = 2) {
-        b := IsObject(spec.double) ? spec.double : spec.tap
-        if !IsObject(spec.double)
-            times := n                       ; fallback: repeat the tap per tap
-    } else {
-        b := IsObject(spec.triple) ? spec.triple
-            : (IsObject(spec.double) ? spec.double : spec.tap)
-        if (!IsObject(spec.triple) && !IsObject(spec.double))
-            times := n
-    }
+; The tap of a press that was WITHHELD (pending or armedmod): its tap row if
+; it has one, else one native click of the button itself -- the press never
+; went out, so this is the first the application hears of it.
+FireTap(st) {
+    b := st.spec.tap
     if IsObject(b) {
-        MarkLayerUsed(b)                 ; even when fires ends up 0 (eager
-        fires := times                   ; already delivered the output), a
-        ; layer-scoped row was used -- its holders go silent (v1.0.1).
-        ; eager sequences already delivered their first click natively; when
-        ; the resolution is native clicks OF THIS SAME BUTTON, only send the
-        ; difference (a native remap to another button must still fire fully)
-        nv := MGet(b["action"], "value", "")
-        if (st.nativeTaps > 0 && IsNativeAct(b["action"]["type"])
-            && (nv = "" || nv = st.btn))
-            fires := Max(times - st.nativeTaps, 0)
-        loop fires
-            ActionFire(b, st)
-        if (fires > 0)
-            LastEvent(st.btn " " (n = 1 ? "tap" : n = 2 ? "double-tap" : "triple-tap"), b)
-    } else if (n - st.nativeTaps > 0) {
-        SendNativeClick(st.btn, n - st.nativeTaps)   ; engaged for other features only
-    }
+        MarkLayerUsed(b)                     ; a layer-scoped row was used:
+        ActionFire(b, st)                    ; its holders go silent (v1.0.1)
+        LastEvent(st.btn " tap", b)
+    } else
+        SendNativeClick(st.btn, 1)
 }
 
 ; --- wheel -------------------------------------------------------------------
@@ -5224,7 +5058,7 @@ ConflictReport(focus := "") {
             app := MGet(row, "app", "*")
             hit := false
             for inp in nh {
-                if (inp = b && (ev = "hold" || ev = "taphold") && app = "*")
+                if (inp = b && ev = "hold" && app = "*")
                     hit := true
                 if LayerIncludes(MGet(row, "layer", "*"), inp)
                     hit := true
@@ -5299,13 +5133,12 @@ ConflictReport(focus := "") {
             }
             i += 1
         }
-        ; 3. a tap that waits: a double / triple / tap-hold or a hold on the
-        ;    same button in the same scope
+        ; 3. a tap that waits: a hold on the same button in the same scope
         scopes := Map()
         for r in list {
             k := MGet(r, "app", "*") "|" MGet(r, "layer", "*") "|" MGet(r, "mods", "")
             if !scopes.Has(k)
-                scopes[k] := {tap: 0, double: 0, triple: 0, hold: 0, taphold: 0, any: r}
+                scopes[k] := {tap: 0, hold: 0, any: r}
             ev := MGet(r, "event", "")
             if scopes[k].HasProp(ev)
                 scopes[k].%ev% := r
@@ -5313,17 +5146,6 @@ ConflictReport(focus := "") {
         for k, sc in scopes {
             where := ConflictScope(sc.any)
             tapNative := !IsObject(sc.tap) || IsNativeAct(sc.tap["action"]["type"])
-            if (IsObject(sc.double) || IsObject(sc.triple) || IsObject(sc.taphold)) {
-                dn := DanceIsNativeClicks(b, sc.double) && DanceIsNativeClicks(b, sc.triple)
-                if (tapNative && dn && !IsObject(sc.taphold))
-                    out.Push({kind: "info", text: lbl " " where ": the first "
-                        . "click goes out at once; a second click within "
-                        . TapMs() " ms becomes the double-tap."})
-                else
-                    out.Push({kind: "warn", text: lbl " " where ": a tap waits "
-                        . TapMs() " ms before it fires, because a double-tap, "
-                        . "triple-tap or tap-hold is bound on the same button."})
-            }
             if (IsObject(sc.hold) && !tapNative)
                 out.Push({kind: "info", text: lbl " " where ": the tap fires on "
                     . "release (a hold is bound); holding past " HoldMs()
@@ -6008,8 +5830,7 @@ ClickLockToggle(v) {
     }
     held := src
     st := BS(src)
-    if (st && st.down && !st.consumed
-        && (st.mode = "passthru" || st.mode = "eager1")) {
+    if (st && st.down && !st.consumed && st.mode = "passthru") {
         ; The engine already has a synthetic down out for this button -- latch
         ; THAT (following a remap through passBtn) and withhold its up.
         held := (st.passBtn != "" ? st.passBtn : src)
@@ -8210,8 +8031,6 @@ StationSettled() {
     if (!busy && Warp.active)
         busy := true
     if (!busy && (IsObject(g_Radial) || IsObject(g_AppSw)))
-        busy := true
-    if (!busy && IsSet(Calib) && Calib.IsOpen())
         busy := true
     mons := []
     nMon := -1
@@ -10472,7 +10291,7 @@ ForceReleaseActive() {
     ScrollPtrStop()                          ; hooks that can release it
     for name, st in g_BS.Clone() {
         if (st.down && !st.consumed) {
-            if (st.mode = "passthru" || st.mode = "eager1")
+            if (st.mode = "passthru")
                 SendNativeUp(st.passBtn != "" ? st.passBtn : name)
             else if (st.mode = "held")
                 ActionUp(st.holdBinding, st)
@@ -10542,8 +10361,7 @@ Watchdog() {
         ; table is wiped by every hook (re)install and by SendInput, and
         ; judging a held layer host on it released the layer mid-gesture
         ; (v0.6.6.4). Such a state gets the runaway cap only.
-        synthetic := (st.mode = "passthru" || st.mode = "eager1"
-            || st.mode = "held")
+        synthetic := (st.mode = "passthru" || st.mode = "held")
         why := ""
         if !synthetic {
             if (age < 30000)
@@ -10571,7 +10389,7 @@ Watchdog() {
             ClearBS(name)                    ; any more; just drop it
             continue
         }
-        if (st.mode = "passthru" || st.mode = "eager1")
+        if (st.mode = "passthru")
             SendNativeUp(st.passBtn != "" ? st.passBtn : name)
         else if (st.mode = "held")
             ActionUp(st.holdBinding, st)
@@ -11194,9 +11012,9 @@ BuildMain() {
     ui.mapCtls.Push(b)
 
     t := g.AddText("x300 y372 w530 h90 cGray", "Every trigger for the selected"
-        . " input in the selected app + layer is listed above. Tap, double-tap,"
-        . " triple-tap, hold and tap-hold are separate rows: add one per"
-        . " trigger. An input with no row here keeps its system default and is"
+        . " input in the selected app + layer is listed above. Tap and hold"
+        . " are separate rows: add one per trigger. An input with no row here"
+        . " keeps its system default and is"
         . " never hooked.")
     ui.mapCtls.Push(t)
     ui.mapBuilt := true
@@ -11315,8 +11133,6 @@ BuildMain() {
 
     ; ---------- Settings ----------
     PanelNext(ui, g)
-    g.AddText("x20 y96", "Tap window (ms):")
-    ui.edTap := g.AddEdit("x260 y92 w70", Cfg("tapWindow"))
     g.AddText("x20 y128", "Hold threshold (ms):")
     ui.edHold := g.AddEdit("x260 y124 w70", Cfg("holdThreshold"))
     g.AddText("x20 y160", "Drag threshold (px):")
@@ -12285,6 +12101,14 @@ ValidateActionValue(owner, atype, raw, &ok) {
     return raw
 }
 
+IsRetiredEvent(ev) {
+    for r in RETIRED_EVENTS {
+        if (r = ev)
+            return true
+    }
+    return false
+}
+
 ; Wheel/tilt inputs only make sense with the "turn" event; keep the event
 ; dropdown consistent as the user browses inputs.
 AutoTurnEvent(ddBtn, ddEvent) {
@@ -12580,7 +12404,7 @@ KeyNamePicker(owner, ed) {
     KPSection(kp, "Media / browser", media, 8, 54, pick)
 
     kp.AddText("x12 y+14 w520 cGray", "A key that TYPES (letters, digits,"
-        . " punctuation) still works, but binding one on hold or double-tap"
+        . " punctuation) still works, but binding one on hold"
         . " delays the character -- see the warning on OK.")
     kp.AddButton("x12 y+8 w96 h28 Default", "Done").OnEvent("Click", (*) => KPClose(kp, owner))
     kp.OnEvent("Close", (*) => KPClose(kp, owner))
@@ -13068,7 +12892,6 @@ PointerApply() {
 
 SettingsApply() {
     ui := g_UI
-    CfgSet("tapWindow", ClampInt(ui.edTap.Value, 30, 1000, 100))
     CfgSet("holdThreshold", ClampInt(ui.edHold.Value, 50, 2000, 200))
     CfgSet("dragThreshold", ClampInt(ui.edDrag.Value, 1, 200, 8))
     CfgSet("repeatRate", ClampInt(ui.edRep.Value, 10, 1000, 50))
@@ -18847,15 +18670,16 @@ class Atlas {
         Lumi.Card(x, B.y, half, B.h)
         cx := x + 24
         Lumi.Label(cx, B.y + 12, 300, "Timing", "section")
-        pitch := Atlas.Pitch(B.h - 82, 4)
+        pitch := Atlas.Pitch(B.h - 82, 3)
         nl := Min(200, half - 160)
         ry := B.y + 32
-        Atlas.NumRow(cx, ry,             "Tap window (ms)",     "tapWindow",     30, 1000, 100, nl)
-        Atlas.NumRow(cx, ry + pitch,     "Hold threshold (ms)", "holdThreshold", 50, 2000, 200, nl)
-        Atlas.NumRow(cx, ry + pitch * 2, "Drag threshold (px)", "dragThreshold",  1,  200,   8, nl)
-        Atlas.NumRow(cx, ry + pitch * 3, "Auto-repeat (ms)",    "repeatRate",    10, 1000,  50, nl)
-        Lumi.Btn(cx, ry + pitch * 4 + 6, Min(190, half - 48), 30,
-            "Calibrate my timing…", (*) => Calib.Show(), "accent")
+        Atlas.NumRow(cx, ry,             "Hold threshold (ms)", "holdThreshold", 50, 2000, 200, nl)
+        Atlas.NumRow(cx, ry + pitch,     "Drag threshold (px)", "dragThreshold",  1,  200,   8, nl)
+        Atlas.NumRow(cx, ry + pitch * 2, "Auto-repeat (ms)",    "repeatRate",    10, 1000,  50, nl)
+        Lumi.Label(cx, ry + pitch * 3 + 6, half - 48,
+            "Hold threshold: how long a button must stay down before it "
+            . "counts as a hold. Shorter feels quicker; longer is safer for "
+            . "a heavy thumb.", "mute", "left", 40)
 
         ; ── band 1: PowerScribe ─────────────────────────────────────────
         rx := x + half + 20
@@ -19541,7 +19365,7 @@ class Atlas {
      * event and only the wheel's, in both directions.
      */
     static EventChoices(keyMode) {
-        return ["tap", "double", "triple", "hold", "taphold", "turn"]
+        return ["tap", "hold", "turn"]
     }
 
     /** A new row starts on the only trigger its input can actually fire. */
@@ -20813,416 +20637,6 @@ class Atlas {
 
 
 ; ══════════════════════════════════════════════════════════════════════════════
-;  §14b  TAP-HOLD TIMING CALIBRATOR
-; ══════════════════════════════════════════════════════════════════════════════
-;
-;  tapWindow and holdThreshold are the two numbers the whole tap-dance engine
-;  turns on, and until now they were guesses typed into a box: 100 ms and
-;  200 ms, the same for everybody. They are not a preference, they are a
-;  measurement of one particular hand -- and a hold threshold set below your
-;  own slowest tap steals taps, while one set above your quickest deliberate
-;  hold makes holds feel broken.
-;
-;  This measures both, from you, in three short phases:
-;
-;    1. TAPS   -- how long your ordinary tap actually stays down
-;    2. HOLDS  -- how long you hold when you MEAN to hold
-;    3. DOUBLES-- how much gap you leave between the halves of a double-tap
-;
-;  and then puts the hold threshold in the empty space between (1) and (2),
-;  and the tap window just past the widest gap in (3).
-;
-;  CAPTURE: an InputHook opened with "V" -- visible, so nothing is swallowed
-;  and the keys still reach whatever is underneath. It is NOT a hotkey, so it
-;  cannot collide with the engine's own "*key" registrations (the trap the
-;  Test tab documents: "~*X" and "*X" are the same hotkey to AHK). The engine
-;  is paused for the duration anyway, so a key that is bound does not fire its
-;  action into the calibrator while it is being measured; the previous enabled
-;  state is restored on close.
-;
-;  Keyboard only, on purpose. Tap-dance timing is a property of the hand, not
-;  of the key, so the numbers transfer to the mouse buttons unchanged -- and
-;  measuring mouse buttons would mean clicking the calibrator's own widgets.
-
-class Calib {
-    static W := 620
-    static H := 470
-
-    static lyr := 0
-    static ih := 0
-    static phase := 0              ; 1 taps · 2 holds · 3 doubles · 4 results
-    static taps := []
-    static holds := []
-    static gaps := []
-    static downAt := 0             ; 0 = key is up (also the auto-repeat guard)
-    static vkDown := 0
-    static lastUp := 0
-    static wasEnabled := true
-    static recTap := 0
-    static recHold := 0
-
-    static NEED := Map(1, 8, 2, 5, 3, 6)
-
-    static TITLE := Map(1, "Phase 1 of 3 — ordinary taps",
-                        2, "Phase 2 of 3 — deliberate holds",
-                        3, "Phase 3 of 3 — double taps",
-                        4, "Results")
-
-    static PROMPT := Map(
-        1, "Tap any one key 8 times, at the speed you would really use "
-         . "mid-study. Do not try to be quick — be typical.",
-        2, "Now press and HOLD the same key 5 times. Hold it just long "
-         . "enough that you would expect a hold action to fire, then let go.",
-        3, "Now DOUBLE-TAP the same key 6 times, the way you would to "
-         . "trigger a double-tap binding.",
-        4, "")
-
-    ; ── lifecycle ───────────────────────────────────────────────────────────
-
-    static Show() {
-        if IsObject(Calib.lyr) {
-            try {
-                Calib.lyr.Show()
-                Calib.lyr.Activate()
-            }
-            return
-        }
-        Calib.Reset()
-        prev := LayerStack.ActiveLayer
-        lyr := Layer(Calib.W, Calib.H, "RadMapperCalibrate")
-        Calib.lyr := lyr
-        LayerStack.ActiveLayer := lyr
-        lyr.Center()
-        lyr.TopMost(true)          ; it is asking for keystrokes; it must be seen
-        try {
-            Atlas.Own(lyr)
-            lyr.Drag()
-            Calib.wasEnabled := g_Enabled
-            if g_Enabled
-                ToggleEnabled()        ; measure the hand, not the bindings
-            Calib.phase := 1
-            Calib.StartHook()
-            Calib.Paint()
-            lyr.Activate()
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static Close(*) {
-        Calib.StopHook()
-        if IsObject(Calib.lyr) {
-            Atlas.Disown(Calib.lyr)
-            try Calib.lyr.Dispose()
-            Calib.lyr := 0
-        }
-        Calib.phase := 0
-        if (Calib.wasEnabled && !g_Enabled)
-            ToggleEnabled()
-    }
-
-    static IsOpen() => IsObject(Calib.lyr)
-
-    static Reset() {
-        Calib.taps := []
-        Calib.holds := []
-        Calib.gaps := []
-        Calib.downAt := 0
-        Calib.vkDown := 0
-        Calib.lastUp := 0
-        Calib.recTap := 0
-        Calib.recHold := 0
-    }
-
-    static Restart(*) {
-        Calib.Reset()
-        Calib.phase := 1
-        Calib.Paint()
-    }
-
-    ; ── capture ─────────────────────────────────────────────────────────────
-
-    /**
-     * A NOTIFY-ONLY InputHook: no options string, no length limit, no end
-     * keys. It exists purely to have OnKeyDown / OnKeyUp called.
-     *
-     * It was built as InputHook("V L0"), copied from RecordCombo -- which is
-     * a different kind of hook entirely, one that COLLECTS and then ends. "L"
-     * is a length limit, and a length limit on a hook that is never meant to
-     * end is at best meaningless and at worst ends it immediately, before a
-     * single key is seen. That is the whole of "the calibrator does not do
-     * anything": the window drew, and the hook feeding it was already over.
-     *
-     * The failure is also no longer swallowed. A bare try with no catch meant
-     * that if the hook could not start there was nothing on screen and
-     * nothing in Diagnostics to say so.
-     */
-    static StartHook() {
-        Calib.StopHook()
-        try {
-            ih := InputHook()
-            ih.VisibleText := true           ; never swallow the keystroke
-            ih.VisibleNonText := true
-            ih.KeyOpt("{All}", "N")          ; notify on down AND up
-            ih.OnKeyDown := ObjBindMethod(Calib, "OnDown")
-            ih.OnKeyUp := ObjBindMethod(Calib, "OnUp")
-            ih.Start()
-            Calib.ih := ih
-        } catch as e {
-            Problem("calibrate", "key capture failed to start: " e.Message)
-            Lumi.Toast("Could not start key capture: " e.Message, "danger", 4000)
-        }
-    }
-
-    static StopHook() {
-        if IsObject(Calib.ih) {
-            try Calib.ih.Stop()
-            Calib.ih := 0
-        }
-    }
-
-    static OnDown(ih, vk, sc) {
-        if (vk = 27) {                        ; Escape closes, never records
-            Calib.Close()
-            return
-        }
-        if (Calib.phase < 1 || Calib.phase > 3)
-            return
-        if Calib.downAt                       ; auto-repeat, or a second key
-            return
-        now := A_TickCount
-        ; A gap is only a double-tap gap if it is short enough to have been
-        ; meant as one; the long pause BETWEEN pairs must not widen the window.
-        if (Calib.phase = 3 && Calib.lastUp && vk = Calib.vkDown) {
-            g := now - Calib.lastUp
-            if (g > 0 && g < 600)
-                Calib.gaps.Push(g)
-        }
-        Calib.downAt := now
-        Calib.vkDown := vk
-        Calib.Paint()
-    }
-
-    static OnUp(ih, vk, sc) {
-        if (!Calib.downAt || vk != Calib.vkDown)
-            return
-        dur := A_TickCount - Calib.downAt
-        Calib.downAt := 0
-        Calib.lastUp := A_TickCount
-        if (dur < 1)
-            dur := 1
-        switch Calib.phase {
-            case 1:
-                if (dur < 2000)               ; a 2 s "tap" was a mistake
-                    Calib.taps.Push(dur)
-            case 2:
-                if (dur < 6000)
-                    Calib.holds.Push(dur)
-        }
-        Calib.Advance()
-    }
-
-    static Done(phase) {
-        switch phase {
-            case 1: return Calib.taps.Length
-            case 2: return Calib.holds.Length
-            case 3: return Calib.gaps.Length
-        }
-        return 0
-    }
-
-    static Advance() {
-        p := Calib.phase
-        if (p >= 1 && p <= 3 && Calib.Done(p) >= Calib.NEED[p]) {
-            Calib.phase := p + 1
-            if (Calib.phase = 4)
-                Calib.Compute()
-        }
-        Calib.Paint()
-    }
-
-    ; ── the arithmetic ──────────────────────────────────────────────────────
-
-    /**
-     * Hold threshold goes in the empty space between the slowest ordinary tap
-     * and the quickest deliberate hold. When those two overlap -- a hand whose
-     * slow taps are longer than its fast holds -- there IS no empty space, so
-     * it biases upward off the taps: a threshold that steals taps is far more
-     * annoying than one that needs a slightly longer hold.
-     *
-     * Percentiles, not min/max, so one fumbled press cannot set the number.
-     */
-    static Compute() {
-        tapHi  := Calib.Pct(Calib.taps, 0.90)
-        holdLo := Calib.Pct(Calib.holds, 0.10)
-        if (holdLo > tapHi + 20)
-            ht := (tapHi + holdLo) // 2
-        else
-            ht := tapHi + 60
-        Calib.recHold := Calib.Snap(ht, 50, 2000)
-
-        gapHi := Calib.Pct(Calib.gaps, 0.90)
-        tw := (gapHi > 0) ? Round(gapHi * 1.25) : Cfg("tapWindow")
-        Calib.recTap := Calib.Snap(tw, 30, 1000)
-    }
-
-    static Snap(v, lo, hi) {
-        v := Round(v / 10) * 10
-        return Min(Max(v, lo), hi)
-    }
-
-    /** Nearest-rank percentile over a sorted copy. Never mutates the sample. */
-    static Pct(arr, p) {
-        if (arr.Length = 0)
-            return 0
-        a := []
-        for v in arr
-            a.Push(v)
-        i := 2
-        while (i <= a.Length) {
-            k := a[i]
-            j := i - 1
-            while (j >= 1 && a[j] > k) {
-                a[j + 1] := a[j]
-                j -= 1
-            }
-            a[j + 1] := k
-            i += 1
-        }
-        idx := Max(1, Min(a.Length, Ceil(p * a.Length)))
-        return a[idx]
-    }
-
-    static Mean(arr) {
-        if (arr.Length = 0)
-            return 0
-        t := 0
-        for v in arr
-            t += v
-        return Round(t / arr.Length)
-    }
-
-    ; ── apply ───────────────────────────────────────────────────────────────
-
-    static Apply(*) {
-        if (Calib.phase != 4)
-            return
-        tw := Calib.recTap
-        ht := Calib.recHold
-        CfgSet("tapWindow", tw)
-        CfgSet("holdThreshold", ht)
-        AfterCfgChange()
-        ok := Atlas.SaveOrWarn()
-        Calib.Close()
-        try Atlas.Build()
-        if ok
-            HUD("Timing calibrated — tap " tw " ms, hold " ht " ms", "jade")
-        else
-            HUD("Applied for now — not written to disk", "danger")
-    }
-
-    ; ── paint ───────────────────────────────────────────────────────────────
-
-    static Paint() {
-        lyr := Calib.lyr
-        if !IsObject(lyr)
-            return
-        prev := LayerStack.ActiveLayer
-        LayerStack.ActiveLayer := lyr
-        try {
-            Calib.__Paint(lyr, prev)
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static __Paint(lyr, prev) {
-        lyr.Clear()
-        w := Calib.W
-        h := Calib.H
-        p := Calib.phase
-
-        Lumi.Card(0, 0, w, h, "abyss", 0)
-        Rectangle(0, 0, w, 3, Lumi.C["cyan"], true)
-        Lumi.Label(24, 16, w - 90, "Calibrate tap & hold", "title")
-        Lumi.Label(24, 44, w - 90,
-            "Two numbers, measured off your own hand.", "mute", "left", 18)
-        Lumi.Btn(w - 54, 16, 32, 26, "X", (*) => Calib.Close(), "ghost")
-        Lumi.Rule(24, 72, w - 48)
-
-        Lumi.Label(24, 86, w - 48, Calib.TITLE[p], "section")
-
-        if (p <= 3) {
-            Lumi.Para(24, 112, w - 48, 56, Calib.PROMPT[p], "dim")
-            Calib.Ticks(24, 178, Calib.NEED[p], Calib.Done(p))
-            Lumi.Label(24, 206, w - 48,
-                Calib.Done(p) " of " Calib.NEED[p] " recorded", "mono", "left", 20)
-            Lumi.Card(24, 238, w - 48, 122)
-            Lumi.Label(44, 252, 300, "So far", "section")
-            Calib.Stat(44, 276, "Taps",    Calib.taps)
-            Calib.Stat(44, 302, "Holds",   Calib.holds)
-            Calib.Stat(44, 328, "Doubles", Calib.gaps)
-            Lumi.Label(24, 372, w - 48,
-                Calib.downAt ? "holding…" : "waiting for a key…",
-                Calib.downAt ? "accent" : "mute", "left", 20)
-        } else {
-            Lumi.Card(24, 108, w - 48, 168)
-            Lumi.Label(44, 122, 300, "Recommended", "section")
-            Calib.Rec(44, 150, "Tap window",     Calib.recTap,  "tapWindow")
-            Calib.Rec(44, 196, "Hold threshold", Calib.recHold, "holdThreshold")
-            Lumi.Para(44, 240, w - 88,
-                28, "Current values are shown beside each one.", "mute")
-            Lumi.Card(24, 288, w - 48, 84)
-            Lumi.Label(44, 300, 300, "Measured", "section")
-            Calib.Stat(44, 322, "Taps",    Calib.taps)
-            Calib.Stat(260, 322, "Holds",  Calib.holds)
-            Calib.Stat(440, 322, "Gaps",   Calib.gaps)
-        }
-
-        Lumi.Rule(24, h - 62, w - 48)
-        Lumi.Btn(24, h - 48, 110, 32, "Start over",
-            (*) => Calib.Restart(), "ghost")
-        Lumi.Btn(w - 258, h - 48, 110, 32, "Cancel",
-            (*) => Calib.Close(), "ghost")
-        if (p = 4)
-            Lumi.Btn(w - 140, h - 48, 116, 32, "Apply",
-                (*) => Calib.Apply(), "primary")
-
-        Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
-        lyr.Draw()
-    }
-
-    /** Progress squares -- filled once that repetition is in the sample. */
-    static Ticks(x, y, need, done) {
-        i := 0
-        while (i < need) {
-            RoundedRectangle(x + i * 22, y, 16, 16, 2,
-                (i < done) ? Lumi.C["jade"] : Lumi.C["raised"], true)
-            i += 1
-        }
-    }
-
-    static Stat(x, y, label, arr) {
-        Lumi.Label(x, y, 90, label, "dim", "left", 20)
-        if (arr.Length = 0) {
-            Lumi.Label(x + 92, y, 160, "—", "mute", "left", 20)
-            return
-        }
-        Lumi.Label(x + 92, y, 170,
-            "n=" arr.Length "  mean " Calib.Mean(arr) " ms", "mono", "left", 20)
-    }
-
-    static Rec(x, y, label, value, key) {
-        Lumi.Label(x, y, 170, label, "dim", "left", 32)
-        Lumi.Label(x + 176, y, 110, value " ms", "accent", "left", 32)
-        Lumi.Label(x + 300, y, 200, "now " Cfg(key) " ms", "mute", "left", 32)
-    }
-}
-
-
-; ══════════════════════════════════════════════════════════════════════════════
 ;  §14c  SHELF -- clipboard history and scratchpad
 ; ══════════════════════════════════════════════════════════════════════════════
 ;
@@ -22138,8 +21552,6 @@ class Warp {
             busy := "menu"
         else if IsObject(g_AppSw)
             busy := "window switcher"
-        else if (IsSet(Calib) && Calib.IsOpen())
-            busy := "calibrator"
         ; The settings window is the fourth: it drives itself from Tab,
         ; Space, Enter and the arrows (Lumi.Focus), and an InputHook that
         ; swallows all of them on top of it leaves the window looking
