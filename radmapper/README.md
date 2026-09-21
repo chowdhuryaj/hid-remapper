@@ -1,4 +1,4 @@
-# RadMapper 0.6.1-preview
+# RadMapper 0.7
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -31,7 +31,7 @@ thumb buttons jump the pointer between monitors on a tap, and inside PACS a
 presets. Review or remove these on the Mouse and Keyboard pages. Nothing else
 is remapped until you add it.
 
-**What a button can do (0.6.7):** a button has a **tap** and a **hold**, and
+**What a button can do (0.7):** a button has a **tap** and a **hold**, and
 nothing else. Left, right and middle click are always instant; a hold on them
 works only inside one program you name. Only the thumb buttons (or a key that
 does not type) can hold a layer open for other buttons, and only in Advanced

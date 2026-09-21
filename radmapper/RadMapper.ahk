@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.6.7  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7  --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -20,7 +20,16 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
-;  v0.6.7 -- FEWER WAYS FOR A BUTTON TO SURPRISE YOU.
+;  v0.7 -- FEWER WAYS FOR A BUTTON TO SURPRISE YOU.
+;    (Three review rounds -- Sonnet reviewers, Opus verifying each finding
+;    against the source -- closed 30-odd holes along the way: the pause
+;    hotkey now also drops queued PowerScribe keystrokes, keystroke delivery
+;    waits while a button is down, follow-focus never warps mid-gesture,
+;    watchdog recovery never commits a menu or a window switch, the
+;    clipboard hook never blocks, a cancelled shelf drag never pastes, a
+;    stale clipboard never reaches disk, tilt notches are dropped while a
+;    menu is open, and the Conflicts report warns only about delays that
+;    really happen.)
 ;    Colleagues trying 0.6.6.5 found tap-holds and held-button chords
 ;    getting in the way of ordinary mouse work. This release removes the
 ;    machinery behind that and points what is left at the radial menu.
@@ -1296,7 +1305,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.6.7"
+global RM_VERSION := "0.7"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1357,7 +1366,7 @@ global OLD_CFG_NAME := "RadMouseConfig.json"
 global BUTTONS := ["LButton", "RButton", "MButton", "XButton1", "XButton2"]
 global WHEELS  := ["WheelUp", "WheelDown", "WheelLeft", "WheelRight"]
 global EVENT_ITEMS := ["tap", "hold", "turn"]
-; Triggers retired in v0.6.7 (double-tap, triple-tap, tap-then-hold): a row
+; Triggers retired in v0.7 (double-tap, triple-tap, tap-then-hold): a row
 ; carrying one is dropped on load, with a Diagnostics line saying so.
 global RETIRED_EVENTS := ["double", "triple", "taphold"]
 
@@ -1368,7 +1377,7 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 global LAYER_BASE_LABEL := "Base (no button held)"
 ; Keys that host a layer whether or not they have a row of their own.
 ; CapsLock types nothing, so holding it is free (v0.6.6.5).
-; Which inputs may HOST a layer (v0.6.7): the two thumb buttons, and a key
+; Which inputs may HOST a layer (v0.7): the two thumb buttons, and a key
 ; that does not type. Left, right and middle never host one -- a host is
 ; silent while held, and those three are click, window/level and pan.
 global LAYER_HOSTS := ["XButton1", "XButton2"]
@@ -1646,7 +1655,7 @@ global DEFAULTS := Map(
     "radialRadius", 132,
     "radialSubMs", 340,        ; rest this long on a slice that opens another
                                ;   menu and that menu takes over, still held
-    ; v0.6.7 -- WHEEL DECK SETTLE. A deck is "hold a button, turn the wheel".
+    ; v0.7 -- WHEEL DECK SETTLE. A deck is "hold a button, turn the wheel".
     ; Pressed while the wheel is still turning (mid-way through a CT stack,
     ; say), the notches still arriving belong to the scroll, not the deck:
     ; they stay native until the wheel has been still this long. 0 = off.
@@ -2694,12 +2703,12 @@ SeedDefaultBindings(cfg) {
     ; thumb buttons -- monitor teleport, left and right
     b.Push(NewBinding("*", "*", "", "XButton1", "tap", "tele_prev", ""))
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
-    ; Nothing on the keyboard beyond the backtick (v0.6.7): the [ and ] rows
+    ; Nothing on the keyboard beyond the backtick (v0.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
     SeedPacsWheelRows(b, cfg["apps"])
 }
 
-; The radial menus, one gesture away in the viewer (v0.6.7): in PACS, HOLD
+; The radial menus, one gesture away in the viewer (v0.7): in PACS, HOLD
 ; button 4 for the PACS wheel and HOLD button 5 for the numbered window
 ; presets -- no door to go through for a preset. The taps still hop the
 ; pointer between monitors; a hold on a thumb button waits for the
@@ -2782,7 +2791,7 @@ MigrateCfg() {
     ; v0.4.8: the syngo.via profile, seeded once into an existing config.
     ; Guarded by a flag rather than by the profile's absence, so deleting it
     ; keeps it deleted. (It used to carry "instant clicks" for MB1-3; since
-    ; v0.6.7 that is the rule in every program and the field is gone.)
+    ; v0.7 that is the rule in every program and the field is gone.)
     if (IsObject(s) && !s.Has("seedSyngo")) {
         s["seedSyngo"] := 1
         if !AppMatches("syngo.Common.Container.exe") {
@@ -2858,7 +2867,7 @@ MigrateCfg() {
         if !MenuByName("Window presets")
             g_Cfg["menus"].Push(SeedPresetMenu())
     }
-    ; v0.6.7: the PACS wheel and the Window presets ring on the thumb
+    ; v0.7: the PACS wheel and the Window presets ring on the thumb
     ; buttons in PACS, seeded ONCE into a config that has no radial row and
     ; nothing held on either thumb button in PACS. Flag-guarded, so deleting
     ; the rows keeps them deleted.
@@ -2873,7 +2882,10 @@ MigrateCfg() {
                 && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = pacs)
                 free := false
         }
-        if free
+        ; ...and only when both menus are actually there to open. The
+        ; 0.6.1b block above seeds them ONCE, so a config that has deleted
+        ; one since must not gain a thumb hold that opens nothing (v0.7).
+        if (free && MenuByName("PACS") && MenuByName("Window presets"))
             SeedPacsWheelRows(g_Cfg["bindings"])
     }
     ; v0.3: chord and gesture ROWS are dropped outright -- there is no engine
@@ -3232,7 +3244,7 @@ NormalizeCfg(imported := false) {
         c["layers"] := ["Base"]
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
-    ValidateCfg()                            ; ...and the v0.6.7 host rules
+    ValidateCfg()                            ; ...and the v0.7 host rules
                                              ; applied to what migration wrote
     MigrateLayoutSlots(!imported)            ; v0.6.2: layouts learn their screen
     SeedNativeDefaults(c)                  ; unified button-path layer.
@@ -3258,12 +3270,32 @@ ValidateCfgShape(c) {
 ; Drop malformed rows from a hand-edited config file so one bad row cannot
 ; raise an error on every mouse event or break a GUI refresh.
 ValidateCfg() {
+    ; v0.7: the tap -> hold radial conversion below must not create a
+    ; SECOND hold row for a key a hand-authored hold row already owns.
+    ; RowKeyTaken only sees what has been kept SO FAR, so a rival later in
+    ; the list survived as well and FindBindingFor's later-wins tie-break
+    ; shadowed one of them with nothing in Diagnostics to say so. Scan the
+    ; whole list first, counting only the hold rows that will survive this
+    ; same pass (the two drops below).
+    rowKey(r) => MGet(r, "button", "") "|" MGet(r, "event", "") "|"
+        . MGet(r, "app", "*") "|" MGet(r, "layer", "*") "|" MGet(r, "mods", "")
+    holdKeys := Map()
+    holdKeys.CaseSense := "Off"
+    for row in g_Cfg["bindings"] {
+        if (!(row is Map) || MGet(row, "event", "") != "hold")
+            continue
+        if !LayerPathAllowed(MGet(row, "layer", "*"))
+            continue
+        if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "app", "*") = "*")
+            continue
+        holdKeys[rowKey(row)] := 1
+    }
     kept := []
     for row in g_Cfg["bindings"] {
         if !(row is Map && row.Has("button") && row.Has("event")
             && MGet(row, "action") is Map && MGet(row, "action").Has("type"))
             continue
-        ; v0.6.7: a double-tap, triple-tap or tap-then-hold row has no engine
+        ; v0.7: a double-tap, triple-tap or tap-then-hold row has no engine
         ; left to run it. Dropped here, named in Diagnostics, never silently
         ; kept where no dropdown could show it.
         if IsRetiredEvent(MGet(row, "event", "")) {
@@ -3271,13 +3303,13 @@ ValidateCfg() {
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
         }
-        ; v0.6.7: a radial menu opens on hold only. A tap row that opened one
+        ; v0.7: a radial menu opens on hold only. A tap row that opened one
         ; becomes a hold row; a wheel row that did cannot, and is dropped.
         if (MGet(MGet(row, "action", Map()), "type", "") = "radial"
             && MGet(row, "event", "") != "hold") {
             if (MGet(row, "event", "") = "tap") {
                 row["event"] := "hold"
-                if RowKeyTaken(kept, row) {
+                if (RowKeyTaken(kept, row) || holdKeys.Has(rowKey(row))) {
                     Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
                         . "radial menu dropped: that button already has a hold row here")
                     continue
@@ -3290,7 +3322,7 @@ ValidateCfg() {
                 continue
             }
         }
-        ; v0.6.7: a layer is held open by a thumb button or a non-typing key,
+        ; v0.7: a layer is held open by a thumb button or a non-typing key,
         ; one at a time; and left / right / middle hold only inside a program.
         if !LayerPathAllowed(MGet(row, "layer", "*")) {
             Problem("retired", InputLabel(MGet(row, "button", "")) " row dropped: "
@@ -3312,7 +3344,7 @@ ValidateCfg() {
         if !(app is Map && app.Has("name") && MGet(app, "match", 0) is Array
             && app["match"].Length > 0)
             continue
-        ; v0.6.7: per-program "instant clicks" is the rule everywhere now,
+        ; v0.7: per-program "instant clicks" is the rule everywhere now,
         ; so the field it lived in is retired from every profile.
         if app.Has("noHold")
             app.Delete("noHold")
@@ -4031,6 +4063,10 @@ RM_AppScanReal() {
 }
 
 ; Physically-held keyboard modifiers as a "^!+#" string.
+; PHYSICAL modifier state only, on purpose: a modifier a moddrag hold sends
+; synthetically is what the application sees, not what a "Also hold" row
+; means. Folding it in would change what every modifier-scoped row does for
+; the length of a drag.
 ModsHeld() {
     if !g_Idx.anyMods
         return ""                            ; no row anywhere uses modifiers
@@ -4149,7 +4185,7 @@ SpecFor(btn, ctx) {
     ; Left, right and middle are instant everywhere: the only hold the engine
     ; honours on them is one written for the program in front, and they never
     ; host a layer. ValidateCfg and the editors already keep such rows out of
-    ; the config; this is the guard for a hand-edited file (v0.6.7).
+    ; the config; this is the guard for a hand-edited file (v0.7).
     if IsPrimaryButton(btn) {
         if (IsObject(hold) && MGet(hold, "app", "*") = "*")
             hold := 0
@@ -4413,6 +4449,16 @@ OnPressHK(btn, *) {
     if (Warp.active && IsMouseInput(btn) && !IsWheel(btn)) {
         Warp.Close(true)
         HUD("Keyboard pointer closed", "mute")
+        prev := BS(btn)
+        if prev {
+            if (prev.down && !prev.consumed) {
+                if (prev.mode = "passthru")
+                    SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
+                else if (prev.mode = "held")
+                    ActionUp(prev.holdBinding, prev)
+            }
+            ClearBS(btn)
+        }
         st := NewBS(btn)
         st.down := true
         st.consumed := true
@@ -4439,6 +4485,19 @@ OnPressHK(btn, *) {
         && !(IsObject(g_Radial.holder) && g_Radial.holder.btn = btn)) {
         RadialClose(false)
         HUD("Menu cancelled", "mute")
+        ; A still-down state here owns a synthetic down that NewBS is about
+        ; to orphan out of g_BS, where not even the watchdog can find it.
+        ; Release it first, exactly as the not-ours branch below does.
+        prev := BS(btn)
+        if prev {
+            if (prev.down && !prev.consumed) {
+                if (prev.mode = "passthru")
+                    SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
+                else if (prev.mode = "held")
+                    ActionUp(prev.holdBinding, prev)
+            }
+            ClearBS(btn)
+        }
         ; down+consumed, like the click-lock escape below: the matching
         ; physical release must be inert, not a native Up with no Down.
         st := NewBS(btn)
@@ -4602,7 +4661,7 @@ OnPressHK(btn, *) {
     st.physSeen := InputHeldPhysical(btn)
     ; Pressed while the wheel was still turning? Then this host's wheel
     ; rows (a deck) stay out of the way until the wheel has been still for
-    ; deckSettleMs -- OnWheelHK clears the lock (v0.6.7).
+    ; deckSettleMs -- OnWheelHK clears the lock (v0.7).
     if spec.layerHost {
         gap := now - g_WheelLast
         if (gap >= 0 && gap < DeckSettleMs())
@@ -4650,7 +4709,7 @@ OnPressHK(btn, *) {
         return
     }
     st.mode := "pending"
-    ; (Until v0.6.7 the left button could host a layer and a drag watch let a
+    ; (Until v0.7 the left button could host a layer and a drag watch let a
     ; real left-drag through natively. Left, right and middle no longer host
     ; one -- LayerHostAllowed -- so a pending press here is a thumb button or
     ; a key, and there is nothing to watch for.)
@@ -4739,7 +4798,7 @@ HoldTimer(st, gen, *) {
     ; A STATEFUL hold on a host whose layer was ALREADY used by a nested
     ; press (thumb held, other thumb tapped inside the threshold) must not
     ; then open a menu or start a drag on top of the chord that just fired:
-    ; armedmod, where the release keeps a used host silent (v0.6.7).
+    ; armedmod, where the release keeps a used host silent (v0.7).
     if (IsObject(b) && spec.layerHost && st.usedAsMod) {
         st.mode := "armedmod"
         return
@@ -4898,7 +4957,7 @@ FireTap(st) {
 ; it is live state, like g_BS.
 global g_WheelAt := Map()
 ; Tick of the last notch of ANY wheel input, accepted or not, native or not:
-; "is the wheel still turning?" for the deck settle rule (v0.6.7).
+; "is the wheel still turning?" for the deck settle rule (v0.7).
 global g_WheelLast := 0
 
 DeckSettleMs() {
@@ -4957,8 +5016,18 @@ OnWheelHK(wh, *) {
     }
     ; A radial menu is up: the hand is mid-gesture on its holder, and that
     ; holder is also a layer host. A notch now must not drive a deck, the
-    ; switcher or a dial invisibly behind the wheel (v0.6.7).
+    ; switcher or a dial invisibly behind the wheel (v0.7).
     if (IsObject(g_Radial) && !g_Radial.trial) {
+        ; A VERTICAL notch still scrolls the study: the reader turned the
+        ; wheel and can see what it did. A TILT is dropped. On a trackball
+        ; the rocker sits under the same thumb that is holding the ring
+        ; open, it repeats while it is held over, and a sideways notch into
+        ; the viewer is input the reader never asked for and cannot see.
+        ; The status line, not the HUD: the menu owns the screen.
+        if tilt {
+            LastEvent(wh " dropped — the " g_Radial.name " menu is open")
+            return
+        }
         SendWheelRaw(wh, 1)
         return
     }
@@ -4997,7 +5066,7 @@ OnWheelHK(wh, *) {
             ; this notch belongs to an action, and passing it through would
             ; scroll the study instead.
             holder := LayerHolderSt(b)       ; deepest held holder (0 at Base)
-            ; WHEEL DECK SETTLE (v0.6.7). The holder was pressed while the
+            ; WHEEL DECK SETTLE (v0.7). The holder was pressed while the
             ; wheel was still turning -- scrolling a stack, thumb lands on
             ; the deck button before the wheel has stopped. Every notch of
             ; that same motion stays NATIVE; the deck only takes over once
@@ -5209,15 +5278,28 @@ ConflictReport(focus := "") {
         }
         for k, sc in scopes {
             where := ConflictScope(sc.any)
-            tapNative := !IsObject(sc.tap) || IsNativeAct(sc.tap["action"]["type"])
+            ; SpecFor's test, exactly: a native row is "the input being
+            ; itself" only with no value or its own. A tap that REMAPS onto
+            ; another input is withheld like any other tap.
+            tapNative := !IsObject(sc.tap)
+            if (!tapNative && IsNativeAct(sc.tap["action"]["type"])) {
+                tv := MGet(sc.tap["action"], "value", "")
+                tapNative := (tv = "" || tv = b)
+            }
             if (IsObject(sc.hold) && !tapNative)
                 out.Push({kind: "info", text: lbl " " where ": the tap fires on "
                     . "release (a hold is bound); holding past " HoldMs()
                     . " ms does " DescribeAction(sc.hold["action"]) "."})
-            if (IsObject(sc.hold) && b = "MButton")
-                out.Push({kind: "warn", text: "Middle button " where ": the hold "
-                    . "withholds the physical middle click for " HoldMs()
-                    . " ms, so a middle-drag starts late."})
+            ; Left, right and middle only -- those are the clicks a delay is
+            ; felt on -- and only when the press really WAITS. A native tap
+            ; with a STATEFUL hold engages at press (SpecFor.instantHold),
+            ; so nothing is withheld and the old line warned about a delay
+            ; that does not exist.
+            if (IsObject(sc.hold) && IsPrimaryButton(b)
+                && !(tapNative && StatefulHoldType(sc.hold["action"]["type"])))
+                out.Push({kind: "warn", text: lbl " " where ": the hold "
+                    . "withholds the physical click for " HoldMs()
+                    . " ms, so a drag starts late."})
         }
     }
     ; 4. layer hosts
@@ -5249,6 +5331,29 @@ ConflictReport(focus := "") {
         out.Push({kind: "info", text: txt ". While held it is silent; its own "
             . "tap or hold fires on release only if nothing in the layer "
             . "was used."})
+        ; A host that also OPENS A MENU on hold is a trap for the layer's
+        ; MOUSE rows: once the menu is up, OnPressHK reads any other mouse
+        ; button as "not this", cancels the menu and fires nothing. Key
+        ; rows in the layer are unaffected, so this is a warning, not a
+        ; refusal.
+        mouseRow := false
+        for r in hrows {
+            if IsMouseInput(MGet(r, "button", ""))
+                mouseRow := true
+        }
+        if mouseRow {
+            for r in rows {
+                if (MGet(r, "button", "") != host || MGet(r, "event", "") != "hold"
+                    || MGet(MGet(r, "action", Map()), "type", "") != "radial")
+                    continue
+                out.Push({kind: "warn", text: InputLabel(host) " hosts a layer AND "
+                    . "opens " DescribeAction(r["action"]) " on hold "
+                    . ConflictScope(r) ": once the menu is up, pressing another "
+                    . "mouse button cancels the menu instead of firing its layer "
+                    . "row. Put the layer and the menu on different buttons."})
+                break
+            }
+        }
     }
     ; 5. radial rows pointing at nothing
     for row in rows {
@@ -5393,7 +5498,7 @@ ActionFire(binding, st) {
         case "warp":
             Warp.Toggle()
         case "radial":
-            ; A menu opens on HOLD only (v0.6.7): there is no tap-opened,
+            ; A menu opens on HOLD only (v0.7): there is no tap-opened,
             ; rest-to-fire menu any more. Reached from a tap row, a macro
             ; step or a wheel notch, say why instead of doing nothing.
             HUD("Radial menus open while a button is HELD — set the trigger "
@@ -8939,7 +9044,7 @@ RadialUnbindCancel() {
  * Open a menu.
  *
  * holder = the input state holding it open: release commits, release in the
- * hub or Escape cancels. A menu is only ever opened by a HOLD (v0.6.7): the
+ * hub or Escape cancels. A menu is only ever opened by a HOLD (v0.7): the
  * tap-opened "latched" menu that fired by resting in a slice is gone, so a
  * hand on the mouse always has a way out. Practice (trial) draws at once and
  * fires nothing.
@@ -9250,7 +9355,7 @@ RadialClose(commit) {
     if !sl.live
         return
     ; Released ON a door: nothing to hold the next ring open with, so
-    ; nothing fires. Say how the door works instead (v0.6.7).
+    ; nothing fires. Say how the door works instead (v0.7).
     if (sl.sub != "") {
         HUD("Keep holding: pause on “" sl.label "” and its ring opens", "mute")
         return
@@ -11874,7 +11979,7 @@ LayerHostAllowed(inp) {
 }
 
 ; A row's layer path is usable when every component may host a layer and
-; there is only one of them: nesting went with the pairs (v0.6.7).
+; there is only one of them: nesting went with the pairs (v0.7).
 LayerPathAllowed(layer) {
     parts := 0
     for p in StrSplit(layer, "/") {
@@ -11889,7 +11994,7 @@ LayerPathAllowed(layer) {
 
 ; Left, right and middle: the three buttons every application already owns.
 ; A hold on one of them is only honoured when written FOR one program
-; (v0.6.7); an everywhere hold row is refused by the editors and dropped on
+; (v0.7); an everywhere hold row is refused by the editors and dropped on
 ; load, so a plain click is never withheld outside the program that asked.
 IsPrimaryButton(btn) {
     return (btn = "LButton" || btn = "RButton" || btn = "MButton")
@@ -15332,7 +15437,7 @@ class Atlas {
     ; (pan) are two of the most-used PACS gestures and the wizard offers
     ; them as tiles, so Simple mode has to be able to show the action they
     ; actually save.
-    ; v0.6.7: shorter again. Simple mode shows the eleven things a reading
+    ; v0.7: shorter again. Simple mode shows the eleven things a reading
     ; room binds; text, native, double-click, click lock, drag zoom, window
     ; placement, the keyboard pointer and "open settings" are Advanced.
     ; ActView still keeps a row's own action, so nothing bound is hidden.
@@ -16973,7 +17078,7 @@ class Atlas {
         ; the last two hung off the right edge of the window entirely. Widths
         ; come out of the column now (Atlas.BtnRow), so they always fit.
         by := y + h - 78
-        ; Wheel decks ("hold a button, turn the wheel") are Advanced (v0.6.7):
+        ; Wheel decks ("hold a button, turn the wheel") are Advanced (v0.7):
         ; a deck is a layer, and Simple mode has no layers.
         adv := Atlas.Advanced()
         b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
@@ -17372,7 +17477,7 @@ class Atlas {
             ["When you", "It does", "Also hold"])
 
         by := y + h - 78
-        adv := Atlas.Advanced()              ; wheel decks are Advanced (v0.6.7)
+        adv := Atlas.Advanced()              ; wheel decks are Advanced (v0.7)
         b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
                                       : [0.28, 0.2, 0.22, 0.3])
         Lumi.Btn(b[1].x, by, b[1].w, 34, "Add new",
@@ -18843,7 +18948,13 @@ class Atlas {
         ; they are shown next to the buttons and menus that also fire them.
         ; What is left here is the four keys that are about RadMapper itself,
         ; so the band needs two rows instead of three.
-        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [172, 160, 156])
+        ; Band 1 has to clear its own caption in ADVANCED mode, where the
+        ; timing column runs four rows: ry(32) + 4*pitch + 6 + a 40 px
+        ; label, and Pitch floors at 26 -- 182 px before the card can end.
+        ; 184 gives it two. The hotkeys band hands the difference back (its
+        ; two rows need p2 + 60 = 112), so the three minimums still total
+        ; what they did.
+        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [184, 148, 156])
         half := (w - 20) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
@@ -19436,7 +19547,7 @@ class Atlas {
         st.app := Lumi.Select(150, 70, 240, 30, apps,
             Atlas.IndexOfText(apps, AppDisp(row ? MGet(row, "app", "*")
                 : Atlas.ScopeApp())))
-        ; "Only while holding" is an Advanced-mode control (v0.6.7): Simple
+        ; "Only while holding" is an Advanced-mode control (v0.7): Simple
         ; mode keeps a row's existing layer but never offers one. DoSave
         ; reads st.layer.index either way.
         layIdx := Atlas.IndexOfText(layers, LayerLabelFromCode(row
@@ -20120,7 +20231,7 @@ class Atlas {
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
             return
         }
-        if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.6.7)
+        if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.7)
             Lumi.Toast("Only button 4, button 5 or a key that does not type "
                 . "can hold a deck", "warn", 3200)
             return

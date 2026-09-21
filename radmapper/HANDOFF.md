@@ -3,7 +3,7 @@
 **Objective.** Cut the tap-hold and chord complexity colleagues tripped over in
 0.6.6.5, and make the radial menu (windowing in PACS above all) the fast path.
 
-**State (v0.6.7).** Branch `claude/sleepy-maxwell-s6cvzw`, built on 0.6.6.6
+**State (v0.7).** Branch `claude/sleepy-maxwell-s6cvzw`, built on 0.6.6.6
 (`claude/determined-sagan-7w3fl7`). The parallel 0.6.6.5 line on
 `claude/charming-lamport-6k3h7e` (per-row hold threshold, per-input calibrator,
 left-button guarantee) is NOT merged here; only its left-button idea survives
@@ -23,7 +23,7 @@ in spirit (left/right/middle instant everywhere).
    door shows a hint. `SeedPacsWheelRows`: PACS hold 4 = PACS wheel, hold 5 =
    Window presets (new configs, and once via `seedPacsWheel067`). Wheel deck
    settle: `deckSettleMs` (250), `g_WheelLast`, `st.deckLocked`, Settings row.
-4. Simple action list trimmed to 11; version 0.6.7; header changelog; README.
+4. Simple action list trimmed to 11; version 0.7; header changelog; README.
 5. Wheel decks ("Scroll wheel…" buttons, deck settle row) are Advanced-only;
    the Layers page already was (Atlas.HIDDEN).
 
@@ -41,8 +41,21 @@ in spirit (left/right/middle instant everywhere).
   notch on the down and nothing on the up.
 - Not done (low value): FindDupBinding via g_Idx; RadialFocusLost PID cache.
 
+## Round 3 review fixes
+- ValidateCfg pre-scans hold keys so a converted radial row is never shadowed
+  silently; PACS wheel rows seed only when both menus exist by name.
+- Conflicts: warns when a host both hosts a layer with mouse rows and opens a
+  menu on hold; the "withholds the click" warning fires only for a real wait,
+  on any of left/right/middle.
+- Tilt notches are dropped while a menu is open (vertical stays native).
+- OnPressHK's menu-cancel and keyboard-pointer branches release a still-down
+  state before NewBS (no orphaned synthetic Down).
+- Settings band 1 minimum 184 so the Advanced timing caption fits at 940x640.
+- Deferred (documented in PR): Settings bands oversubscribe 940x640 by 42 px
+  (pre-existing), BindDlg blank strip in Simple mode, HoldTimer dead branch.
+
 ## Decisions
-- Unused layer host with no tap row stays silent on release (pre-0.6.7 rule).
+- Unused layer host with no tap row stays silent on release (pre-0.7 rule).
 - Deck settle measures "wheel still turning" from any notch of any wheel input.
 - Middle-button hold warning kept for program-scoped middle holds.
 
