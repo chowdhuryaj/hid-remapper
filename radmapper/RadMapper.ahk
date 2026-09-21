@@ -1757,6 +1757,7 @@ global g_ProblemSeq := 0     ; monotonic change signal (Length stalls at cap)
 global g_PSBusy := false     ; a PSDrain loop is mid-delivery
 global g_PSQueue := []       ; pending PowerScribe deliveries, FIFO
 global g_PSGen := 0          ; panic bumps this; in-flight deliveries abort
+global g_PSDefer := 0        ; drain deferrals while the hand is on a button
 global g_CfgDirty := false     ; a debounced config save is pending
 global g_UI := 0               ; main GUI control refs (object)
 global g_RecHook := 0          ; live recording InputHook (stopped on dialog close)
@@ -5746,8 +5747,10 @@ SendZoomRaw(dir) {
 }
 
 SPTick(*) {
-    global g_SPAccX, g_SPAccY
-    if !IsObject(g_ScrollPtr) {
+    Critical "On"                            ; shares g_ScrollPtr/g_SPAcc* with
+    global g_SPAccX, g_SPAccY                ; the hook threads (cf. MovePoll,
+    if !IsObject(g_ScrollPtr) {              ; Watchdog): a stop mid-tick used
+                                             ; to leave this dereferencing 0
         SetTimer(, 0)                        ; the timer outlived its state
         return
     }
@@ -5876,8 +5879,23 @@ ClickLockToggle(v) {
             ; pending / armedmod / held: no native down has gone out yet, and
             ; whatever this button was going to do on release must not fire
             ; now that it is being latched instead.
-            if (st.mode = "held")
+            if (st.mode = "held") {
+                ; ... unless it is RUNNING something that is not a button
+                ; hold (drag scroll, sniper, a radial holder). Tearing that
+                ; down and latching a raw synthetic down in its place is not
+                ; what the tap asked for -- same rule as "a lock with
+                ; nothing to lock is a no-op".
+                t := IsObject(st.holdBinding)
+                    ? st.holdBinding["action"]["type"] : ""
+                if (!IsNativeAct(t) && t != "dragmove") {
+                    HUD("Click lock: " InputLabel(src)
+                        . " is already doing something else", "warn")
+                    return
+                }
                 ActionUp(st.holdBinding, st)
+                if (st.passBtn != "")        ; a remapped hold latches the
+                    held := st.passBtn       ; button it was really holding
+            }
             st.usedAsMod := true
             st.consumed := true
         }
@@ -6212,6 +6230,17 @@ FollowTick(*) {
             return
     }
     if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr))
+        return
+    ; 2b. ... and a gesture whose holder is a KEY is invisible to the loop
+    ;     above. A radial menu and the switcher CHOOSE BY POINTER POSITION,
+    ;     the keyboard pointer may be holding LButton itself, and a moddrag
+    ;     holds it synthetically (which reads as up under "P"). Warping now
+    ;     commits the wrong slice or throws the drag across the study.
+    if (IsObject(g_Radial) || IsObject(g_AppSw))
+        return
+    if (IsSet(Warp) && Warp.active)
+        return
+    if HandBusy()
         return
     ; 3. our own windows: the settings GUI and the toast are not destinations
     if (g_OurHwnds.Has(hwnd) || OwnWindowAt(hwnd))
@@ -9847,10 +9876,47 @@ RM_PSFireReal(keys) {
 ; semantics; ps_next/ps_prev bursts), never interleaving two activation
 ; dances. One drain loop owns delivery; pushes that arrive mid-delivery are
 ; picked up by the running loop's next while-check.
+; True while the hand is mid-gesture on a button. The physical test alone is
+; not enough: a KEY-hosted moddrag or native hold has LButton down
+; SYNTHETICALLY, which reads as up under "P". Nothing may send keystrokes or
+; steal the foreground while one of these is out.
+HandBusy() {
+    if (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
+        return true
+    for name, st in g_BS {
+        if (!st.down || st.consumed)
+            continue
+        btn := (st.passBtn != "" ? st.passBtn : name)
+        if (st.mode = "passthru" && IsMouseInput(btn))
+            return true
+        if (st.mode = "held" && IsObject(st.holdBinding)) {
+            t := st.holdBinding["action"]["type"]
+            if (t = "moddrag" || (t = "dragmove" && st.dragOn)
+                || (IsNativeAct(t) && IsMouseInput(btn)))
+                return true
+        }
+    }
+    return false
+}
+
 PSDrain() {
-    global g_PSBusy, g_PSQueue
+    global g_PSBusy, g_PSQueue, g_PSDefer
     if g_PSBusy
         return
+    if !g_Enabled {                          ; paused: input is native, and
+        g_PSQueue := []                      ; nothing of ours may land in
+        g_PSDefer := 0                       ; the study
+        return
+    }
+    ; Never activate another window or send keys under the user's hand -- a
+    ; W/L sweep, a marquee, a moddrag. Bounded at ~1.5 s: a click lock is a
+    ; deliberate indefinite latch and must not strand the queue for ever.
+    if (HandBusy() && g_PSDefer < 50) {
+        g_PSDefer += 1
+        SetTimer(PSDrain, -30)
+        return
+    }
+    g_PSDefer := 0
     g_PSBusy := true
     try {
         while (g_PSQueue.Length > 0) {
@@ -10434,6 +10500,14 @@ Watchdog() {
             ClearBS(name)                    ; any more; just drop it
             continue
         }
+        ; Recovery is a TEARDOWN, and teardown never commits (same rule as
+        ; ForceReleaseActive). Close first: ActionUp's RadialClose(true) is
+        ; then a no-op, and AppSwitchWatch never sees this holder go up and
+        ; read it as the commit gesture.
+        if (IsObject(g_Radial) && IsObject(g_Radial.holder) && g_Radial.holder = st)
+            RadialClose(false)
+        if (IsObject(g_AppSw) && IsObject(g_AppSw.holder) && g_AppSw.holder = st)
+            AppSwitchClose(false)
         if (st.mode = "passthru")
             SendNativeUp(st.passBtn != "" ? st.passBtn : name)
         else if (st.mode = "held")
@@ -10468,13 +10542,21 @@ Watchdog() {
 }
 
 ToggleEnabled() {
-    global g_Enabled
+    global g_Enabled, g_PSQueue, g_PSGen
     g_Enabled := !g_Enabled
-    if !g_Enabled
+    if !g_Enabled {
         ForceReleaseActive()                 ; nothing may stay down once hooks drop
-    SetTimer(Watchdog, g_Enabled ? 750 : 0)  ; reconcile only while engine runs
-    SyncFollowFocus()                        ; paused means hands off the cursor
-    AppCacheClear()                          ; foreground may change around a toggle
+        g_PSQueue := []                      ; and nothing may still be on its
+        g_PSGen += 1                         ; way into the study: queued
+    }                                        ; deliveries die, the in-flight
+                                             ; one aborts unsent (as panic does)
+    SetTimer(Watchdog, 750)                  ; keeps ticking while PAUSED: the
+    SyncFollowFocus()                        ; block above its own !g_Enabled
+    AppCacheClear()                          ; test (EditGuard, a hidden system
+                                             ; cursor) is explicitly meant to
+                                             ; run then, and stopping the timer
+                                             ; made it unreachable. The inner
+                                             ; test still gates reconciliation.
     wasTesting := g_Testing                  ; tester off BEFORE SyncHooks: "~*X"
     if wasTesting                            ; and "*X" are the same hotkey
         TestStop()
