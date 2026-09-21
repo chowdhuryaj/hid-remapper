@@ -31,6 +31,13 @@ thumb buttons jump the pointer between monitors on a tap, and inside PACS a
 presets. Review or remove these on the Mouse and Keyboard pages. Nothing else
 is remapped until you add it.
 
+**Layers are tabs.** The Mouse and Keyboard pages have a tab strip: **Base**,
+**Hold Button 4**, **Hold Button 5**, and a tab for any key that holds a
+layer. A tab shows what every part of the mouse does *while that button is
+held*, exactly like a keymap layer in QMK or ZMK. Click a part of the mouse
+and its two slots appear on the right, **Tap it** and **Hold it down**, each
+with Set/Change and Clear.
+
 **What a button can do (0.7):** a button has a **tap** and a **hold**, and
 nothing else. Left, right and middle click are always instant; a hold on them
 works only inside one program you name. Only the thumb buttons (or a key that

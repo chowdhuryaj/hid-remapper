@@ -54,6 +54,21 @@ in spirit (left/right/middle instant everywhere).
 - Deferred (documented in PR): Settings bands oversubscribe 940x640 by 42 px
   (pre-existing), BindDlg blank strip in Simple mode, HoldTimer dead branch.
 
+## UI redesign (v0.7, after the review rounds)
+- `Atlas.LayerTabs`: one tab strip (Base / Hold Button 4 / Hold Button 5 /
+  key hosts in Advanced) drives `Atlas.layerIdx` for BOTH pages (`kbLayerIdx`
+  removed; `KbScopeLayer` returns `ScopeLayer`).
+- `Atlas.SlotPanel`: per selected input, Tap/Hold (or Turn) slot cards with
+  Set/Change/Clear (`SlotRef`, `EditSlot` seeds `BindDlg` with a NewBinding,
+  `ClearGo` -> `DeleteRef`), plus a list of modifier rows underneath.
+- `BindDlg` no longer offers "Only while holding": the layer is the tab.
+- `MouseMap` redrawn: channel for the wheel column, no overlapping zones,
+  thumb shelf. Card footprint unchanged (300 x bodyH+56).
+- Workstation checks: tabs switch the map; Set on an empty slot opens the
+  editor with program/layer/button/trigger prefilled; Clear asks first; the
+  Hold Button 4 tab shows button 4 as "held" with no slots; Keyboard page
+  same; 940x640 layout (slots + list + buttons fit in the right column).
+
 ## Decisions
 - Unused layer host with no tap row stays silent on release (pre-0.7 rule).
 - Deck settle measures "wheel still turning" from any notch of any wheel input.
