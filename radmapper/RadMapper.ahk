@@ -20,10 +20,21 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
+;  v0.7 (later) -- CAPSLOCK DICTATES; THREE LAYERS, NO MORE.
+;    * Layers are held open by button 4, button 5 or CapsLock only. Rows
+;      under any other host are dropped on load and named in Diagnostics;
+;      the hidden Layers page is gone (the tabs are the layers page).
+;    * CapsLock ships as dictation on a tap (seeded once into an existing
+;      config with no CapsLock row); its hold is the "Hold CapsLock" tab.
+;      A long press on it that uses nothing in the layer is silent.
+;    * PowerScribe/PACS keystrokes no longer leave Shift or the left button
+;      stuck: deliveries wait out a click, the watchdog releases an orphan,
+;      and Panic records what it found in Diagnostics.
+;
 ;  v0.7 -- FEWER WAYS FOR A BUTTON TO SURPRISE YOU.
 ;    * LAYERS ARE TABS. The Mouse and Keyboard pages carry one tab strip:
-;      Base, Hold Button 4, Hold Button 5, and a tab per key that hosts a
-;      layer -- the QMK/ZMK picture of a keymap. A tab shows what every
+;      Base, Hold Button 4, Hold Button 5 and Hold CapsLock -- the QMK/ZMK
+;      picture of a keymap. A tab shows what every
 ;      part of the mouse does WHILE that button is held; the editor no
 ;      longer asks "Only while holding", it takes the layer from the tab.
 ;    * SLOTS, NOT ROWS. Click a part of the mouse and the right side shows
@@ -53,8 +64,7 @@
 ;      press now resolves to exactly one of tap or hold (FireTap).
 ;    * ONE TIMING NUMBER. The tap window and the calibrator are gone; the
 ;      hold threshold is a single field on Settings with a sentence.
-;    * LAYERS ON THE THUMB BUTTONS ONLY (or a key that does not type), one
-;      at a time. The pairs, the CapsLock reservation and right / middle as
+;    * LAYERS ON THE THUMB BUTTONS AND CAPSLOCK ONLY, one at a time. The pairs, the CapsLock reservation and right / middle as
 ;      hosts are gone: a host is silent while held, and those buttons are
 ;      window/level and pan. "Only while holding" and the Layer selectors
 ;      are Advanced-mode controls.
@@ -1388,12 +1398,10 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 ; a stranded assignment lower in the file never runs before Init (auto-exec is
 ; top-to-bottom, RM_TEST hides this because it skips Init).
 global LAYER_BASE_LABEL := "Base (no button held)"
-; Keys that host a layer whether or not they have a row of their own.
-; CapsLock types nothing, so holding it is free (v0.6.6.5).
-; Which inputs may HOST a layer (v0.7): the two thumb buttons, and a key
-; that does not type. Left, right and middle never host one -- a host is
-; silent while held, and those three are click, window/level and pan.
-global LAYER_HOSTS := ["XButton1", "XButton2"]
+; The ONLY inputs that may host a layer: the two thumb buttons and CapsLock
+; (it types nothing, so holding it is free). Everything else -- left, right,
+; middle, any other key -- is refused by the editors and dropped on load.
+global LAYER_HOSTS := ["XButton1", "XButton2", "CapsLock"]
 
 ; Friendly display names for inputs (config/JSON always stores the codes).
 global INPUT_LABELS := Map(
@@ -1712,8 +1720,6 @@ global DEFAULTS := Map(
 
 global g_Cfg := 0              ; whole config (Map), see DefaultCfg()
 global g_BS := Map()           ; per-input live state objects
-global g_Layer := "Base"
-global g_LayerStack := []
 global g_Enabled := true
 global g_PollSeq := 0          ; movement-poll generation counter
 global g_SpeedSaved := ""      ; original SPI mouse speed ("" = untouched)
@@ -2061,14 +2067,6 @@ EventLabelOf(code) {
     return code
 }
 
-EventCodeOf(label) {
-    for code, l in EVENT_LABELS {
-        if (l = label)
-            return code
-    }
-    return label
-}
-
 ; --- input-valued action values (v0.3.1) ---------------------------------------
 ; "Native input" and "Native drag after move" take an INPUT NAME as their
 ; value -- the input to press instead. v0.2/v0.3 accepted only the internal
@@ -2140,16 +2138,6 @@ TakesInputValue(atype) {
     return false
 }
 
-; Mid-sentence name for an input ("the middle button"), for the wizard's
-; one-line summary. Falls back to the label for anything not on the list.
-InputPhrase(code) {
-    for c, ph in INPUT_PHRASES {
-        if (c = code)
-            return ph
-    }
-    return InputLabel(code)
-}
-
 ; Plain name for one of the four drag modifiers.
 ModifierLabel(code) {
     for c, l in MODDRAG_LABELS {
@@ -2157,14 +2145,6 @@ ModifierLabel(code) {
             return l
     }
     return code
-}
-
-ModifierCodeFromLabel(label) {
-    for code, l in MODDRAG_LABELS {
-        if (l = label)
-            return code
-    }
-    return label
 }
 
 /**
@@ -2622,14 +2602,6 @@ MenuByName(name) {
     return 0
 }
 
-/** Menu names for a picker. */
-MenuNames() {
-    out := []
-    for m in MGet(g_Cfg, "menus", [])
-        out.Push(MGet(m, "name", ""))
-    return out
-}
-
 ; Default config is a clean slate (v0.3): nothing bound, every input fully
 ; native until the user adds bindings in the GUI. The site's app profiles and
 ; one demo macro are pre-created because they hook nothing on their own.
@@ -2713,12 +2685,22 @@ SeedDefaultBindings(cfg) {
     b := cfg["bindings"]
     ; ` -- dictation, the single most-pressed control in the room
     b.Push(NewBinding("*", "*", "", "``", "tap", "ps_dictate", ""))
+    ; CapsLock -- dictation on a tap; held, it opens the CapsLock layer tab
+    b.Push(CapsLockDictateRow())
     ; thumb buttons -- monitor teleport, left and right
     b.Push(NewBinding("*", "*", "", "XButton1", "tap", "tele_prev", ""))
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; Nothing on the keyboard beyond the backtick (v0.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
     SeedPacsWheelRows(b, cfg["apps"])
+}
+
+; CapsLock ships as dictation on a TAP. Its HOLD is its layer (the "Hold
+; CapsLock" tab): while that tab is empty a press fires dictation at once;
+; once it has rows, a tap dictates on release and a hold arms the layer.
+; Hooking CapsLock suppresses its native toggle, so Caps Lock stays off.
+CapsLockDictateRow() {
+    return NewBinding("*", "*", "", "CapsLock", "tap", "ps_dictate", "")
 }
 
 ; The radial menus, one gesture away in the viewer (v0.7): in PACS, HOLD
@@ -2901,6 +2883,18 @@ MigrateCfg() {
         if (free && MenuByName("PACS") && MenuByName("Window presets"))
             SeedPacsWheelRows(g_Cfg["bindings"])
     }
+    ; v0.7: CapsLock = dictate on tap, seeded ONCE into a config with no
+    ; CapsLock row at all. Flag-guarded, so deleting it keeps it deleted.
+    if (IsObject(s) && !s.Has("seedCapsLock07")) {
+        s["seedCapsLock07"] := 1
+        free := true
+        for row in g_Cfg["bindings"] {
+            if (MGet(row, "button", "") = "CapsLock")
+                free := false
+        }
+        if free
+            g_Cfg["bindings"].Push(CapsLockDictateRow())
+    }
     ; v0.3: chord and gesture ROWS are dropped outright -- there is no engine
     ; left to run them, and a silently-kept row would reappear in no UI.
     if g_Cfg.Has("chords")
@@ -2924,7 +2918,6 @@ MigrateRow(row) {
     }
     if row.Has("while")
         row.Delete("while")
-    row["layer"] := CapLayerDepth(MGet(row, "layer", "*"))
     a := MGet(row, "action", 0)
     if (IsObject(a)) {
         t := MGet(a, "type", "")
@@ -2972,30 +2965,10 @@ MigrateRow(row) {
     }
 }
 
-; A layer path holds at most 2 held-button components (Swift Point X1 style):
-; keep the first two, drop the rest so a hand-edited deep path can't create an
-; unreachable context.
-CapLayerDepth(layer) {
-    if (layer = "*" || layer = "" || layer = "Base")
-        return "*"
-    parts := []
-    for p in StrSplit(layer, "/") {
-        if (p != "")
-            parts.Push(p)
-    }
-    if (parts.Length = 0)
-        return "*"
-    out := parts[1]
-    if (parts.Length >= 2)
-        out .= "/" parts[2]
-    return out
-}
-
 ; The held-button components a row's layer requires (empty for Base "*"). The
 ; single funnel every layer-aware site uses so the "*"/"Base" base-context
-; spellings are interpreted in exactly one place. Deliberately UNCAPPED: depth
-; capping happens only at load time (MigrateRow -> CapLayerDepth), so the
-; resolver, index, hooks, and mark paths all see identical components.
+; spellings are interpreted in exactly one place. ValidateCfg drops any path
+; with more than one component, so in practice this is zero or one host.
 LayerParts(row) {
     L := MGet(row, "layer", "*")
     if (L = "*" || L = "" || L = "Base")
@@ -3335,12 +3308,12 @@ ValidateCfg() {
                 continue
             }
         }
-        ; v0.7: a layer is held open by a thumb button or a non-typing key,
-        ; one at a time; and left / right / middle hold only inside a program.
+        ; v0.7: a layer is held open by a thumb button or CapsLock, one at
+        ; a time; and left / right / middle hold only inside a program.
         if !LayerPathAllowed(MGet(row, "layer", "*")) {
             Problem("retired", InputLabel(MGet(row, "button", "")) " row dropped: "
                 . "'" MGet(row, "layer", "*") "' can no longer hold a layer "
-                . "(only button 4, button 5 or a non-typing key can)")
+                . "(only button 4, button 5 or CapsLock can)")
             continue
         }
         if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "event", "") = "hold"
@@ -4934,8 +4907,14 @@ OnReleaseHK(btn, *) {
             if IsObject(b) {
                 ActionFire(b, st)
                 LastEvent(st.btn " hold", b)
-            } else if IsObject(st.spec.tap)  ; no tap row: an unused host
-                FireTap(st)                  ; stays silent, as before
+            } else if (IsObject(st.spec.tap) && !IsKeyInput(st.btn))
+                FireTap(st)                  ; no tap row: an unused host
+                                             ; stays silent, as before. A
+                                             ; KEY host (CapsLock) is silent
+                                             ; too: a long press on it is a
+                                             ; layer gesture, and firing its
+                                             ; tap (dictation) on release
+                                             ; would surprise
         }
         ClearBS(btn)
         return
@@ -5680,8 +5659,7 @@ DialStep(holderSt, v) {
 ; v1.0 (E1): layers are button-holds now, resolved entirely through the binding
 ; index (a held layer-host button raises the specificity of its scoped rows in
 ; MatchScore). There is no standalone named-layer state machine anymore -- the
-; old LayerPush/Release/Toggle + g_Layer/g_LayerStack are retired. The globals
-; remain declared (reset by PanicRelease/RigReset) but are inert. A layer can
+; old LayerPush/Release/Toggle + g_Layer/g_LayerStack are gone. A layer can
 ; never "orphan": it is active exactly while its holder button is physically
 ; held, and the watchdog's stuck-button sweep already reconciles that.
 
@@ -7237,14 +7215,6 @@ LayoutByName(name) {
     for lay in MGet(g_Cfg, "layouts", []) {
         if (MGet(lay, "name", "") = name)
             return lay
-    }
-    return 0
-}
-
-LayoutIndexOf(name) {
-    for i, lay in MGet(g_Cfg, "layouts", []) {
-        if (MGet(lay, "name", "") = name)
-            return i
     }
     return 0
 }
@@ -10915,7 +10885,7 @@ ToggleEnabled() {
 }
 
 PanicRelease() {
-    global g_Layer, g_LayerStack, g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
+    global g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
     global g_MacroBusy, g_MacroGen
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
@@ -10947,8 +10917,6 @@ PanicRelease() {
     RadialSweepLayers()                      ; and any wheel layer that lost
                                              ; its menu (this is what panic
                                              ; is for)
-    g_Layer := "Base"
-    g_LayerStack := []
     if (g_SpeedSaved != "") {
         RM_SetSpeed(g_SpeedSaved)
         g_SpeedSaved := ""
@@ -11514,8 +11482,7 @@ BuildMain() {
         . " bindable but warn first: telling a tap from a hold means holding the"
         . " character back, which reads as laggy typing and, mid-dictation, a"
         . " character that lands in the report. Modifier combos and F-keys are"
-        . " unaffected. Any key with a row can host a layer -- CapsLock is an"
-        . " excellent one.")
+        . " unaffected. CapsLock is the one key that can host a layer.")
     g.SetFont("s10 c" (ThemeDark() ? "D6D8DA" : "Default"))
 
     ; ---------- Macros ----------
@@ -12182,22 +12149,17 @@ LayerChoices() {
     out := [LAYER_BASE_LABEL]
     for b in LAYER_HOSTS
         out.Push("Hold " InputLabel(b))
-    for k in KeyInputsInUse() {              ; a bound KEY can host a layer
-        if LayerHostAllowed(k)               ; (CapsLock is the obvious one)
-            out.Push("Hold " k)
-    }
     return out
 }
 
-; May this input hold a layer open? The thumb buttons, and any key that does
-; not type. Everything else is refused by the editors and dropped on load
-; (ValidateCfg), so the engine never meets a host it cannot stay silent on.
+; May this input hold a layer open? Only LAYER_HOSTS. Everything else is
+; refused by the editors and dropped on load (ValidateCfg).
 LayerHostAllowed(inp) {
     for b in LAYER_HOSTS {
         if (b = inp)
             return true
     }
-    return IsKeyInput(inp) && !IsBareTypingKey(inp)
+    return false
 }
 
 ; A row's layer path is usable when every component may host a layer and
@@ -12224,8 +12186,7 @@ IsPrimaryButton(btn) {
 
 ; Every key already used as an input somewhere in the config, in config
 ; order, de-duplicated. Keys have no enumerable list, so the config is the
-; only source for "which keys exist" -- bind a key first, then it can host a
-; layer.
+; only source for "which keys exist" (the Keyboard page's tiles).
 KeyInputsInUse() {
     seen := Map()
     seen.CaseSense := "Off"
@@ -12752,7 +12713,7 @@ BindingOk(dlg, editRow, ddApp, ddLayer, boxes, ddBtn, ddEvent, ddAct, edVal) {
         return
     }
     if !LayerPathAllowed(lay) {
-        MsgBox("Only button 4, button 5 or a key that does not type can hold a"
+        MsgBox("Only button 4, button 5 or CapsLock can hold a"
             . " layer, one at a time.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
@@ -13021,7 +12982,7 @@ KeyOk(dlg, editRow, ddApp, ddLayer, boxes, edKey, ddEvent, ddAct, edVal) {
         return
     }
     if !LayerPathAllowed(lay) {
-        MsgBox("Only button 4, button 5 or a key that does not type can hold a"
+        MsgBox("Only button 4, button 5 or CapsLock can hold a"
             . " layer, one at a time.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
@@ -15627,7 +15588,7 @@ class Atlas {
     ; removed: the pages, their config and every action still exist, and one
     ; switch on Home brings them back. Index semantics are unchanged --
     ; hidden entries keep their slot in PANELS; the rail just skips them.
-    static HIDDEN := Map("Layers", 1, "Macros", 1, "Apps", 1, "Windows", 1,
+    static HIDDEN := Map("Macros", 1, "Apps", 1, "Windows", 1,
                          "Pointer", 1)
     static Advanced() => Cfg("uiAdvanced") ? true : false
     static PanelHidden(name) => !Atlas.Advanced() && Atlas.HIDDEN.Has(name)
@@ -15701,9 +15662,8 @@ class Atlas {
         return codes.Has(sel.index) ? codes[sel.index] : "none"
     }
 
-    static PANELS := ["Home", "Mouse", "Layers", "Keyboard", "Macros", "Apps",
+    static PANELS := ["Home", "Mouse", "Keyboard", "Macros", "Apps",
                       "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
-    static hostRefs := []          ; Layers panel row -> host input code
 
     ; ── WINDOW ──────────────────────────────────────────────────────────────
 
@@ -16561,7 +16521,6 @@ class Atlas {
             switch Atlas.PanelName() {
                 case "Home":        Atlas.PanelHome(px, py, pw, ph)
                 case "Mouse":       Atlas.PanelMouse(px, py, pw, ph)
-                case "Layers":      Atlas.PanelLayers(px, py, pw, ph)
                 case "Keyboard":    Atlas.PanelKeys(px, py, pw, ph)
                 case "Macros":      Atlas.PanelMacros(px, py, pw, ph)
                 case "Apps":        Atlas.PanelApps(px, py, pw, ph)
@@ -16840,7 +16799,7 @@ class Atlas {
             . "there and you never have to guess which page you want.`n`n"
             . "The switch at the bottom of Home is Simple or Advanced. "
             . "Simple shows Mouse, Keyboard, Menus, Settings and Diagnostics, "
-            . "and a short list of actions. Advanced adds Layers, Macros, "
+            . "and a short list of actions. Advanced adds Macros, "
             . "Apps, Windows and Pointer. Nothing is lost either way -- the "
             . "switch changes what is SHOWN, never what is set up.`n`n"
             . "If something goes wrong, go to Diagnostics and press "
@@ -17263,19 +17222,13 @@ class Atlas {
      * THE LAYER TABS (v0.7). A layer is a whole second map of the mouse that
      * exists while one button is held -- the way a QMK or ZMK keymap has a
      * base layer and a layer per hold key. So it is shown as a TAB, not a
-     * dropdown inside a dialog: Base, Hold Button 4, Hold Button 5, and a
-     * tab per key that hosts one. Every tab shows the same mouse; what
-     * changes is what each part does. Simple mode shows the thumb tabs
-     * only; a key host appears once the key is bound (Advanced).
+     * dropdown inside a dialog: Base, Hold Button 4, Hold Button 5 and Hold
+     * CapsLock -- the only three hosts. Every tab shows the same mouse;
+     * what changes is what each part does.
      */
     static LayerTabs(x, y, w) {
         items := LayerChoices()
-        adv := Atlas.Advanced()
-        ; a hidden tab cannot stay selected, nor one whose host is gone
-        if !items.Has(Atlas.layerIdx)
-            Atlas.layerIdx := 1
-        cur := LayerCodeFromLabel(items[Atlas.layerIdx])
-        if (!adv && cur != "*" && !IsMouseInput(cur))
+        if !items.Has(Atlas.layerIdx)        ; a tab whose host is gone
             Atlas.layerIdx := 1
         ; measure first: the strip must never drop the ACTIVE tab, so when
         ; it runs out of room the last tab that fits gives way to it
@@ -17283,8 +17236,6 @@ class Atlas {
         for i, lab in items {
             code := LayerCodeFromLabel(lab)
             host := (code = "*") ? "" : code
-            if (!adv && host != "" && !IsMouseInput(host))
-                continue
             txt := (host = "") ? "Base"
                 : "Hold " (IsMouseInput(host) ? "Button " Atlas.ZoneCap(host) : host)
             tabs.Push({i: i, txt: txt, bw: Max(72, 22 + StrLen(txt) * 7)})
@@ -17656,69 +17607,6 @@ class Atlas {
     ; best hidden: it existed only as a dropdown inside the edit dialog, so
     ; nothing ever told you a button armed one. This panel makes it a place.
 
-    static PanelLayers(x, y, w, h) {
-        Lumi.Label(x, y, 400, "Layers", "title")
-        Lumi.Para(x, y + 28, w - 40, 56,
-            "Hold one button down and a second set of actions comes alive "
-            . "for as long as you hold it, so one thumb button doubles "
-            . "everything else. Tap that button without using the second set "
-            . "and it still does its own job.", "mute")
-
-        hosts := Atlas.LayerHosts()
-        rows := []
-        Atlas.hostRefs := []
-        for code, n in hosts {
-            rows.Push({cells: [InputLabel(code), code,
-                IsKeyInput(code) ? "key" : "mouse",
-                n " row" (n = 1 ? "" : "s")]})
-            Atlas.hostRefs.Push(code)
-        }
-        Atlas.list := Lumi.List(x, y + 92, w, h - 220, rows,
-            [{w: 240}, {w: 150, kind: "mono"}, {w: 90, kind: "mute"},
-             {w: 110, kind: "mute"}],
-            (i, dbl) => Atlas.GoLayerRow(i), 30,
-            ["Hold this", "Code", "Kind", "Brings alive"])
-        if (rows.Length = 0)
-            Lumi.Label(x + 16, y + 130, w - 32,
-                "Nothing set up yet. Pick a button below, then add actions "
-                . "to it on the Mouse page.", "mute")
-
-        Lumi.Label(x, y + h - 116, w,
-            "Click a row and the Mouse or Keyboard page opens on that layer's "
-            . "tab — anything you set there works while that button is held.",
-            "mute", "left", 24)
-        by := y + h - 82
-        Lumi.Btn(x, by, 190, 34, "Open the Button 4 tab",
-            (*) => Atlas.GoLayer("XButton1"), "primary")
-        Lumi.Btn(x + 200, by, 190, 34, "Open the Button 5 tab",
-            (*) => Atlas.GoLayer("XButton2"), "ghost")
-        ; No shortcut button for a KEY host, and that is deliberate: keys
-        ; have no enumerable list, so "Hold CapsLock" only becomes a layer
-        ; choice once CapsLock is bound somewhere. Bind the key first on the
-        ; Keyboard tab and it appears here, listed and clickable like any
-        ; other host.
-        Lumi.Label(x, y + h - 40, w,
-            "A thumb button is the usual choice — already under your hand, "
-            . "and holding it costs no movement. A KEY can host a layer just "
-            . "as well (CapsLock types nothing, so holding it is free): bind "
-            . "it on the Keyboard tab first and it shows up in this list.",
-            "mute", "left", 24)
-    }
-
-    /** input code -> number of rows that input arms, in config order. */
-    static LayerHosts() {
-        out := Map()
-        out.CaseSense := "Off"
-        for row in g_Cfg["bindings"] {
-            for part in LayerParts(row) {
-                if (part = "")
-                    continue
-                out[part] := (out.Has(part) ? out[part] : 0) + 1
-            }
-        }
-        return out
-    }
-
     static IsLayerHost(code) {
         for row in g_Cfg["bindings"] {
             for part in LayerParts(row) {
@@ -17727,39 +17615,6 @@ class Atlas {
             }
         }
         return false
-    }
-
-    static GoLayerRow(i) {
-        if (i >= 1 && i <= Atlas.hostRefs.Length)
-            Atlas.GoLayer(Atlas.hostRefs[i])
-    }
-
-    /**
-     * Scope the input tab to this layer and go there.
-     *
-     * A layer can be hosted by a KEY just as well as by a thumb button --
-     * CapsLock is the classic one -- so this lands on the panel that
-     * actually edits the host, not always the Mouse tab. Both panels carry
-     * the same Layer selector, so the scope is set the same way either way.
-     */
-    static GoLayer(code) {
-        items := LayerChoices()
-        idx := Atlas.IndexOfText(items, "Hold " InputLabel(code))
-        if (idx < 1)                 ; IndexOfText returns 0 when the host has
-            idx := 1                 ; no "Hold ..." entry yet; 0 is not a
-                                     ; selectable index and drew a blank box
-        if IsKeyInput(code) {
-            Atlas.layerIdx := idx
-            tab := "Keyboard"
-        } else {
-            Atlas.layerIdx := idx
-            tab := "Mouse"
-        }
-        Atlas.panel := Atlas.PanelIndex(tab)
-        Atlas.Build()
-        Lumi.Toast("The " tab " page now belongs to " InputLabel(code)
-            . " — what you add here only works while you hold it",
-            "cyan", 2800)
     }
 
     ; ── PANEL: KEYBOARD ─────────────────────────────────────────────────────
@@ -20259,7 +20114,7 @@ class Atlas {
             return
         }
         if !LayerPathAllowed(lay) {
-            Lumi.Toast("Only button 4, button 5 or a key that does not type "
+            Lumi.Toast("Only button 4, button 5 or CapsLock "
                 . "can hold a layer, one at a time", "warn", 3200)
             return
         }
@@ -20429,8 +20284,10 @@ class Atlas {
             Lumi.Btn(466, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
-            for b in LAYER_HOSTS             ; the thumb buttons: the only
-                inputs.Push(InputLabel(b))   ; mouse buttons that host a layer
+            for b in LAYER_HOSTS {           ; the thumb buttons: the only
+                if IsMouseInput(b)           ; mouse buttons that host a layer
+                    inputs.Push(InputLabel(b))
+            }
             st.input := Lumi.Select(150, 126, 300, 30, inputs,
                 Atlas.IndexOfText(inputs,
                     InputLabel(IsWheel(host) ? "XButton1" : host)))
@@ -20558,8 +20415,8 @@ class Atlas {
             return
         }
         if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.7)
-            Lumi.Toast("Only button 4, button 5 or a key that does not type "
-                . "can hold a deck", "warn", 3200)
+            Lumi.Toast("Only button 4, button 5 or CapsLock can hold a deck",
+                "warn", 3200)
             return
         }
 
@@ -21434,7 +21291,6 @@ class Shelf {
         Shelf.lyr := 0
     }
 
-    static IsOpen() => IsObject(Shelf.lyr)
 
     static Place(lyr) {
         PlaceAtCursor(lyr)

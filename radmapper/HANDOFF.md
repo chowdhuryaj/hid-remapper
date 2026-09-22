@@ -112,6 +112,24 @@ in spirit (left/right/middle instant everywhere).
   page: a key mapped only under Hold Button 4 is absent on Base; a key with
   only a "Native" row can be Cleared and disappears.
 
+## Simplification pass: three layer hosts, CapsLock dictate
+- `LAYER_HOSTS` = XButton1, XButton2, CapsLock; `LayerHostAllowed` is plain
+  membership; `LayerChoices` = Base + those three; the tab strip shows all
+  three in Simple and Advanced. Rows under any other host drop on load.
+- CapsLock tap = `ps_dictate`: `CapsLockDictateRow`, in `SeedDefaultBindings`
+  and once via `seedCapsLock07` (skipped if any CapsLock row exists). A
+  key host's unused hold is silent (OnReleaseHK armedmod) so a long CapsLock
+  press never toggles dictation; thumb buttons keep their tap-on-unused rule.
+- Removed: hidden Layers page (PanelLayers/LayerHosts/GoLayer*), CapLayerDepth,
+  g_Layer/g_LayerStack, dead EventCodeOf/InputPhrase/LayoutIndexOf/MenuNames/
+  ModifierCodeFromLabel, Shelf.IsOpen.
+- Not touched (candidates, ask first): the classic Win32 window (duplicates
+  Atlas, ~2k lines), vendored GpGFX.
+- Workstation checks: tap CapsLock anywhere -> dictation toggles, Caps Lock
+  light stays off; add a row on the Hold CapsLock tab -> tap still dictates
+  (on release), hold + use the row works, long hold unused does nothing;
+  an old config with a layer on another key shows "retired" in Diagnostics.
+
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,
   config/editors) are being applied on this branch; see the PR for the list.
