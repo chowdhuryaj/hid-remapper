@@ -4399,8 +4399,37 @@ WinClassOf(hwnd) {
 ; engine still processes clicks over other apps. On any error, default to 1
 ; (engine active) -- never silently disable the engine everywhere.
 HookActive(hk) {
-    try return OwnWindowAt(RM_WinAt()) ? 0 : 1
-    return 1
+    ours := false
+    try ours := OwnWindowAt(RM_WinAt())
+    if !ours
+        return 1
+    ; A TILT is never gated: nothing of ours scrolls sideways, and a tilt
+    ; bound to a monitor hop must hop wherever the pointer is. OnWheelHK
+    ; already exempted tilts from its own-window test, but this gate runs
+    ; FIRST and passed the tilt straight to the window underneath -- so a
+    ; window of ours sitting over the PACS series list (an overlay, a
+    ; toast) turned the teleport into a sideways scroll of the list.
+    if InStr(hk, "WheelLeft") || InStr(hk, "WheelRight") {
+        TiltNote("gate", WinClassOf(RM_WinAt()))
+        return 1
+    }
+    return 0
+}
+
+; Diagnostics for a bound tilt that did NOT do its job, once per reason and
+; window class per session, so a copy of the list says where it went.
+TiltNote(why, cls) {
+    static seen := Map()
+    k := why "|" cls
+    if seen.Has(k)
+        return
+    seen[k] := 1
+    if (why = "gate")
+        Problem("tilt", "tilt over a RadMapper window (" cls ") -- now kept"
+            . " on its binding instead of passing through")
+    else
+        Problem("tilt", "tilt passed through natively over " cls
+            . " -- no tilt row applies in " (why = "" ? "this program" : why))
 }
 
 ; HotIf gate for the engine's KEYBOARD hooks (v0.3 fix). The mouse gate above
@@ -5084,6 +5113,8 @@ OnWheelHK(wh, *) {
         LastEvent(wh (LayerParts(b).Length ? " (layer " lay ")" : ""), b)
         return
     }
+    if tilt
+        TiltNote(ctx.app, WinClassOf(RM_WinAt()))
     SendWheelRaw(wh, 1)
 }
 
