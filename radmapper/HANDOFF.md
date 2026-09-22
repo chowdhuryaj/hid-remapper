@@ -123,12 +123,29 @@ in spirit (left/right/middle instant everywhere).
 - Removed: hidden Layers page (PanelLayers/LayerHosts/GoLayer*), CapLayerDepth,
   g_Layer/g_LayerStack, dead EventCodeOf/InputPhrase/LayoutIndexOf/MenuNames/
   ModifierCodeFromLabel, Shelf.IsOpen.
-- Not touched (candidates, ask first): the classic Win32 window (duplicates
-  Atlas, ~2k lines), vendored GpGFX.
+- Vendored GpGFX kept on purpose: Atlas, radial menus, switcher, shelf,
+  Warp and toasts all draw with it (user chose "remove classic only").
 - Workstation checks: tap CapsLock anywhere -> dictation toggles, Caps Lock
   light stays off; add a row on the Hold CapsLock tab -> tap still dictates
   (on release), hold + use the row works, long hold unused does nothing;
   an old config with a layer on another key shows "retired" in Diagnostics.
+
+## Classic window removed; tilt fix
+- Removed BuildMain/ShowClassic, the tray item, Atlas.Classic, g_UI and
+  every top-level function left unreachable (call-graph pass, 426 -> ~359
+  functions, -1.5k lines). Kept shared helpers Atlas uses (RecordCombo,
+  KeyPicker, InputPicker, FieldEdit, AppDlg, StyleDlg, ModalOpen/Close).
+- Ported: input tester -> `TesterShow`/`TesterClose` (own small Gui,
+  g_TestUI); app profiles -> Programs page Add/Edit/Delete (`Atlas.AppEdit`
+  -> `AppDlg`, owner `DlgOwner()`, `AtlasRefresh()`).
+- ShowMain has no fallback now: an Atlas failure logs + MsgBox.
+- Tilt: `HookActive` never gates WheelLeft/Right; `TiltNote` logs a bound
+  tilt that still passes through ("tilt" in Diagnostics).
+- Workstation checks: tray has no classic item; Programs page Add/Edit/
+  Delete; Diagnostics > Test my mouse opens the tester, bars light, Close
+  stops it; tilt over the PACS series list teleports. If it still scrolls,
+  copy Diagnostics: no "tilt" line + no LastEvent means the trackball driver
+  sends it past the hook (check the trackball software's tilt setting).
 
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,

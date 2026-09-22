@@ -94,7 +94,7 @@ inside this one. Size 9 is the numbered ring for presets.
 |---|---|
 | A button or modifier seems stuck | Press **Ctrl+Alt+Q**, or **Unstick my buttons** at the bottom of the settings window |
 | I want everything native right now | **Ctrl+Alt+Shift+F11** pauses the whole engine; press again to resume. NumLock also pauses. |
-| The settings window will not open | Tray icon > *Settings (classic)…* opens the plain Windows version |
+| The settings window will not open | Tray icon > *Rendering self-test…* shows whether graphics draw on this machine; copy Diagnostics and send it. The engine keeps working either way. |
 | I lost my bindings after updating | You did not. Config lives in `%APPDATA%\RadMapper\RadMapperConfig.json`; the path is shown on Home. |
 | The header says "Not saved to disk" | A write to the settings folder failed. Your edits still work in memory; fix access to the folder and make any edit to retry. Details are on the Diagnostics page. |
 | A corrupt config was found on start | It was copied next to the original with a `.corrupt-` suffix and defaults were loaded. If that copy could not be made, saving is blocked until you move the file and restart. |
