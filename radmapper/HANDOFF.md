@@ -87,6 +87,31 @@ in spirit (left/right/middle instant everywhere).
   the wheel pauses 250 ms; hold thumb 4, tap thumb 5 inside the threshold,
   keep holding 4 past it: the PACS wheel must NOT open.
 
+## Click freeze between PACS and PS + per-tab key list (branch `claude/modest-cray-0ufegs`)
+- **Cause.** 0.7 never got the 0.6.6.5 fix (`4fd8f6b` on
+  `claude/charming-lamport-6k3h7e`). ps_next/ps_prev/PACS-keys deliveries
+  send from a non-Critical timer; a click landing inside a "+{Tab}" leaves
+  Shift and/or LButton logically down in the OS while g_BS balances, so the
+  watchdog saw nothing and Diagnostics stayed empty until Panic.
+- **Ported:** `PSSendAtomic` (keystroke under Critical), `PSDeferForButtons`
+  (per-delivery, front-of-queue, 100 ms retry, 1.5 s bound; settled
+  held/fired/armedmod/consumed presses do not count), PSDrain stops on
+  "defer". Watchdog parts 4/5 sweep a modifier or orphan LButton that is
+  logically down / physically up for two ticks, guarded by
+  `WatchdogSweepSafe` (no live press, latch, drag scroll, menu, switcher,
+  Warp, delivery, macro). Each sweep logs a "recovered" Problem.
+- **New:** `PanicSnapshot` -- Panic logs a "panic" Diagnostics line first
+  (stuck keys/buttons, engine states, live features, foreground exe).
+- **Keyboard page:** tiles are `Atlas.KeysInScope()` -- only keys with a row
+  on the current tab + program (host key of the tab excluded). Slot Clear
+  works on any row incl. system-default (inert) ones.
+- **Workstation checks:** tap ps_prev while clicking in PACS repeatedly: no
+  dead click; force `{LShift Down}` / `{LButton Down}` from another script:
+  toast + Diagnostics "recovered" within ~1.5 s; Panic writes a "panic"
+  line; moddrag / click lock / drag scroll / Warp survive 5+ s; Keyboard
+  page: a key mapped only under Hold Button 4 is absent on Base; a key with
+  only a "Native" row can be Cleared and disappears.
+
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,
   config/editors) are being applied on this branch; see the PR for the list.

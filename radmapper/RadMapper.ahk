@@ -9910,7 +9910,83 @@ AppCrits(appName, prefer := "") {
     return {pref: pref, all: all}
 }
 
+; The keystroke itself, and ONLY the keystroke, uninterruptible. A hook thread
+; that runs between the "+" and the "{Tab}" of a "+{Tab}" emits its own
+; "{Blind}{...Down}" inside our modifier: that is the shift-click, and the
+; Shift left logically down behind it. The WinWaitActive and the Sleeps
+; around the send stay interruptible on purpose (see the design note above
+; RM_PSFireReal). SafeSend swallows its own errors; the finally is there
+; because a Critical left ON would cost far more than the two lines.
+; (Ported from the 0.6.6.5 line, where it fixed the same dead left click.)
+PSSendAtomic(keys) {
+    Critical "On"
+    try {
+        SafeSend(keys)
+    } finally {
+        Critical "Off"
+    }
+}
+
+; A delivery must never run THROUGH a click. Field navigation sends "+{Tab}",
+; and a mouse button that changes state inside that send goes out carrying
+; the Shift the send still has down: the click lands shift-modified, in
+; PowerScribe rather than where the pointer is, and its Up arrives after focus
+; has gone back to PACS. What is left behind is a Shift that is logically
+; down with the key physically up (every later click is a shift-click) and an
+; orphan left-button down that the engine's own bookkeeping knows nothing
+; about -- clicks "freeze" until Panic. So a delivery WAITS while a mouse
+; button is physically held AND its press could still put a native down or
+; up on the wire, and the keys go back to the FRONT of the queue so order is
+; kept. PSDrain's HandBusy check covers the moment the drain starts; this one
+; runs per delivery, so a click that starts between two queued deliveries
+; (a ps_next burst) is covered too.
+;
+; BOUNDED: after PS_DEFER_MS of continuous deferral the keys go out anyway.
+PSDeferForButtons(entry) {
+    global g_PSQueue
+    static since := 0
+    static PS_DEFER_MS := 1500
+    gen := g_PSGen
+    held := false
+    for b in BUTTONS {
+        if !GetKeyState(b, "P")
+            continue
+        ; A press the engine has already SETTLED owes the OS nothing: "held"
+        ; and "fired" have delivered, "armedmod" is a silent layer host, and
+        ; a consumed state is inert. Counting those would make a hold-bound
+        ; field-nav action defer its own keystroke for the full 1.5 s. The
+        ; hazards are "pending", "passthru" and NO STATE (the native left
+        ; click).
+        st := BS(b)
+        if (st && (st.consumed || st.mode = "held" || st.mode = "fired"
+            || st.mode = "armedmod"))
+            continue
+        held := true
+        break
+    }
+    if !held {
+        since := 0
+        return false
+    }
+    now := A_TickCount
+    if (since = 0)
+        since := now
+    else if (now - since >= PS_DEFER_MS || now < since) {
+        since := 0                           ; deliver anyway; fresh window
+        Problem("ps-defer", "delivered after " PS_DEFER_MS " ms with a mouse"
+            . " button still held")
+        return false
+    }
+    if (g_PSGen != gen)                      ; panic fired: drop these keys
+        return true
+    g_PSQueue.InsertAt(1, entry)             ; front, not back: FIFO survives
+    SetTimer(PSDrain, -100)
+    return true
+}
+
 AppDeliverNow(appName, keys) {
+    if PSDeferForButtons({app: appName, keys: keys})
+        return "defer"                       ; re-queued; PSDrain stops draining
     gen := g_PSGen
     prefer := (appName = Cfg("pacsApp")) ? Cfg("pacsWindow") : ""
     cr := AppCrits(appName, prefer)
@@ -9928,7 +10004,7 @@ AppDeliverNow(appName, keys) {
     fast := (prefer != "" && cr.pref.Length > 0) ? cr.pref : crits
     for crit in fast {
         if WinActive(crit) {
-            SafeSend(keys)
+            PSSendAtomic(keys)
             return
         }
     }
@@ -9980,7 +10056,7 @@ AppDeliverNow(appName, keys) {
         return
     }
     Sleep(50)
-    SafeSend(keys)
+    PSSendAtomic(keys)
     if prev {
         Sleep(Cfg("psReturnDelay"))
         try WinActivate("ahk_id " prev)
@@ -10053,6 +10129,7 @@ PSDrain() {
     }
     g_PSDefer := 0
     g_PSBusy := true
+    deferred := false
     try {
         while (g_PSQueue.Length > 0) {
             keys := ""
@@ -10060,21 +10137,33 @@ PSDrain() {
             catch                    ; panic swapped/cleared the queue between
                 break                ; the while-check and this line
             if IsObject(keys)                ; an app-targeted delivery
-                AppDeliverNow(keys.app, keys.keys)
+                r := AppDeliverNow(keys.app, keys.keys)
             else
-                PSDeliverNow(keys)
+                r := PSDeliverNow(keys)
+            ; A deferred delivery put its keys back at the FRONT and re-armed
+            ; this timer at 100 ms. Stop, or the loop picks the same entry
+            ; straight back up and spins on it until the button comes up.
+            if (r = "defer") {
+                deferred := true
+                break
+            }
         }
     } finally {
         g_PSBusy := false
     }
-    if (g_PSQueue.Length > 0)        ; a push can interleave between the last
-        SetTimer(PSDrain, -1)        ; while-check and the unlock above
+    if (!deferred && g_PSQueue.Length > 0)   ; a push can interleave between
+        SetTimer(PSDrain, -1)                ; the last while-check and the
+                                             ; unlock above (NOT after a
+                                             ; deferral: -1 would replace its
+                                             ; 100 ms retry and spin)
 }
 
 PSDeliverNow(keys) {
+    if PSDeferForButtons(keys)   ; never send through a click -- see the note
+        return "defer"           ; on PSDeferForButtons
     gen := g_PSGen               ; panic mid-flight bumps this: abort unsent
     if PSActive() {
-        SafeSend(keys)
+        PSSendAtomic(keys)
         return
     }
     psWin := PSMatch()
@@ -10113,7 +10202,7 @@ PSDeliverNow(keys) {
         return
     }
     Sleep(50)
-    SafeSend(keys)
+    PSSendAtomic(keys)
     if prev {
         Sleep(Cfg("psReturnDelay"))
         try WinActivate("ahk_id " prev)
@@ -10674,6 +10763,125 @@ Watchdog() {
         Problem("recovered", "stopped orphaned drag scroll")
         HUD("RadMapper stopped drag scroll")
     }
+    ; 4) and 5) THE OS's OWN STATE, not ours. Parts 1-3 reconcile g_BS, and
+    ;    that is exactly what the PowerScribe/PACS click freeze slipped past:
+    ;    a click whose Down went out inside a "+{Tab}" delivery leaves a Shift
+    ;    logically down and/or an orphan LButton down in the OS while g_BS's
+    ;    books balance, so nothing here saw it, nothing reached Diagnostics,
+    ;    and only Panic cleared it. These sweeps read the logical/physical
+    ;    pair straight from Windows, so they are timid: two consecutive ticks
+    ;    (~1.5 s) of the same reading, and only while nothing of ours could
+    ;    be holding anything down (WatchdogSweepSafe).
+    static modTicks := Map()
+    static lbTicks := 0
+    if !WatchdogSweepSafe() {
+        modTicks.Clear()                     ; a count may never survive a
+        lbTicks := 0                         ; period when the guard was up
+        return
+    }
+    for k in ["LShift", "RShift", "LCtrl", "RCtrl",
+              "LAlt", "RAlt", "LWin", "RWin"] {
+        down := false
+        try down := (GetKeyState(k) && !GetKeyState(k, "P"))
+        if !down {
+            modTicks[k] := 0
+            continue
+        }
+        modTicks[k] := (modTicks.Has(k) ? modTicks[k] : 0) + 1
+        if (modTicks[k] < 2)                 ; one tick can be mid-keystroke
+            continue
+        ; NEGATIVE, not zero: if the Up does not take (an elevated window
+        ; eats injected input) retry about every 7.5 s, not every tick
+        modTicks[k] := -8
+        SafeSend("{Blind}{" k " Up}")
+        Problem("recovered", "released a stuck " k " (logically down, key"
+            . " physically up for two ticks)")
+        HUD("RadMapper released a stuck " k)
+    }
+    ; LButton only: a middle or right button logically down with no physical
+    ; anchor is the everyday shape of a DRIVER-INJECTED pan or right-drag,
+    ; which AutoHotkey never counts as physically held.
+    lbStuck := false
+    try lbStuck := (GetKeyState("LButton")
+        && !InputHeldPhysical("LButton") && !g_BS.Has("LButton"))
+    if !lbStuck
+        lbTicks := 0
+    else {
+        lbTicks += 1
+        if (lbTicks >= 2) {
+            lbTicks := -8
+            SendNativeUp("LButton")
+            Problem("recovered", "released an orphan LButton (down in the OS"
+                . " with no press of ours and no hand on it)")
+            HUD("RadMapper released a stuck left button")
+        }
+    }
+}
+
+; Guard for the two OS-state sweeps in Watchdog: they may run only when
+; nothing of ours could legitimately be holding a key or button down -- a
+; live press (a moddrag holds "{mod Down}{LButton Down}", a passthrough
+; holds its button), a click-lock latch, a drag scroll, the keyboard pointer,
+; a delivery mid-flight (its own "+" is down for a moment), a macro, or an
+; open menu/switcher.
+WatchdogSweepSafe() {
+    for name, st in g_BS {
+        if st.down
+            return false
+    }
+    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr)
+        || IsObject(g_Radial) || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
+        return false
+    try {
+        if (Warp.active || Warp.grabbing)
+            return false
+    }
+    return true
+}
+
+; Evidence for Diagnostics, taken the moment Panic is pressed and BEFORE it
+; clears anything: which keys/buttons Windows thinks are down without a hand
+; on them, what the engine believes is held, and what else was live. A
+; freeze that only Panic fixes used to leave no trace at all.
+PanicSnapshot() {
+    stuck := ""
+    for k in ["LButton", "RButton", "MButton", "XButton1", "XButton2",
+              "LShift", "RShift", "LCtrl", "RCtrl", "LAlt", "RAlt",
+              "LWin", "RWin"] {
+        try {
+            if (GetKeyState(k) && !GetKeyState(k, "P"))
+                stuck .= (stuck = "" ? "" : " ") k
+        }
+    }
+    held := ""
+    for name, st in g_BS
+        held .= (held = "" ? "" : " ") name "=" st.mode
+            . (st.down ? "" : "/up") (st.consumed ? "/consumed" : "")
+    live := ""
+    if IsObject(g_ClickLock)
+        live .= " clicklock"
+    if IsObject(g_ScrollPtr)
+        live .= " dragscroll"
+    if IsObject(g_Radial)
+        live .= " menu"
+    if IsObject(g_AppSw)
+        live .= " switcher"
+    try {
+        if Warp.active
+            live .= " kbpointer"
+    }
+    if g_PSBusy
+        live .= " delivering"
+    if g_PSQueue.Length
+        live .= " queued=" g_PSQueue.Length
+    if g_MacroBusy
+        live .= " macro"
+    fg := ""
+    try fg := WinGetProcessName("A")
+    return "logically down, no hand: " (stuck = "" ? "none" : stuck)
+        . " | engine: " (held = "" ? "none" : held)
+        . " | live:" (live = "" ? " none" : live)
+        . " | fg: " (fg = "" ? "?" : fg)
 }
 
 ToggleEnabled() {
@@ -10716,6 +10924,7 @@ PanicRelease() {
     ; sending its remaining steps into the study. RunMacro snapshots this
     ; generation and breaks as soon as it moves. g_MacroBusy is cleared too,
     ; so the next macro is not refused by a loop that is on its way out.
+    try Problem("panic", PanicSnapshot())   ; BEFORE anything is cleared
     g_MacroGen += 1
     g_MacroBusy := false
     try SysCursorShow()                      ; never leave the pointer hidden
@@ -17134,10 +17343,10 @@ class Atlas {
         Atlas.list := 0
         by := ly + lh - 40
         if (input = "") {
-            Lumi.Label(lx, ly, lw, keyMode ? "No keys bound" : "Nothing selected", "title")
+            Lumi.Label(lx, ly, lw, keyMode ? "No keys on this tab" : "Nothing selected", "title")
             Lumi.Para(lx, ly + 30, lw, 70, keyMode
-                ? ("“Add new” hooks a key. A key nothing references is never "
-                . "touched, so the keyboard keeps its native latency.")
+                ? ("Nothing is mapped to a key here for this program. “Add "
+                . "new” hooks one; a key nothing references is never touched.")
                 : "Click a part of the mouse.", "mute")
             Lumi.Btn(lx, by, 150, 34, "Add new",
                 (*) => Atlas.EditRow(0, keyMode), "primary")
@@ -17176,8 +17385,12 @@ class Atlas {
             Lumi.Btn(lx + lw - 198, sy + 13, 92, 34, live ? "Change" : "Set",
                 blocked ? 0 : Atlas.SlotGo(input, ev, keyMode, ref),
                 blocked ? "muted" : (live ? "accent" : "primary"))
+            ; Clear works on ANY row that fills the slot, a system-default
+            ; one included: that is a real row in the config, and with
+            ; Clear muted on it there was no way to remove it from here.
             Lumi.Btn(lx + lw - 98, sy + 13, 86, 34, "Clear",
-                live ? Atlas.ClearGo(ref) : 0, live ? "ghost" : "muted")
+                IsObject(row) ? Atlas.ClearGo(ref) : 0,
+                IsObject(row) ? "ghost" : "muted")
             if ref
                 slotRefs.Push(ref)
             sy += 66
@@ -17573,14 +17786,39 @@ class Atlas {
         Lumi.Select(x + w - 196, y, 196, 30, apps, Atlas.kbAppIdx,
             (i, t) => Atlas.SetKbApp(i))
         Atlas.LayerTabs(x, y + 50, w)
-        ; KeyInputsInUse is the same list the layer tabs are built from, so
-        ; the tiles here and the "Hold <key>" tabs can never disagree. It
-        ; already includes keys that appear ONLY as a layer host.
-        keys := KeyInputsInUse()
+        ; Only the keys that have a row ON THIS TAB, for this program. The
+        ; picker used to list every key used anywhere in the config (the
+        ; same list the "Hold <key>" tabs come from), so a key mapped only
+        ; under Hold Button 4 sat on the Base tab with nothing in its slots
+        ; and nothing to delete -- it could not be got rid of from here.
+        keys := Atlas.KeysInScope()
         if (Atlas.keySel = "" || !Atlas.HasKey(keys, Atlas.keySel))
             Atlas.keySel := keys.Length ? keys[1] : ""
         Atlas.KeyMap(x, y + 100, keys)
         Atlas.SlotPanel(x + 320, y + 100, w - 320, h - 100, Atlas.keySel, true)
+    }
+
+    /**
+     * Keys with at least one row in the current program + layer tab, in
+     * config order. A system-default (inert) row counts: it is still a row,
+     * and listing it is what lets it be cleared. The key that HOSTS the
+     * current tab is left out -- holding it is how you got here.
+     */
+    static KeysInScope() {
+        app := Atlas.KbScopeApp()
+        lay := Atlas.KbScopeLayer()
+        have := Map()
+        have.CaseSense := "Off"
+        for row in g_Cfg["bindings"] {
+            if (MGet(row, "app", "*") = app && MGet(row, "layer", "*") = lay)
+                have[MGet(row, "button", "")] := 1
+        }
+        out := []
+        for k in KeyInputsInUse() {
+            if (have.Has(k) && !LayerIncludes(lay, k))
+                out.Push(k)
+        }
+        return out
     }
 
     static SetKbApp(i) {
@@ -17626,13 +17864,12 @@ class Atlas {
         ; Same footprint as the mouse schematic next door, so switching tabs
         ; does not move the row list a pixel.
         Lumi.Card(x, y - 10, 300, 324, "surface")
-        Lumi.Label(x + 14, y, 272, "KEYS IN USE", "section")
+        Lumi.Label(x + 14, y, 272, "KEYS ON THIS TAB", "section")
         if (keys.Length = 0) {
             Lumi.Para(x + 14, y + 34, 272, 90,
-                "No keys bound yet. “Add new” hooks one. A key nothing "
-                . "references is never touched at all, so an untouched "
-                . "keyboard keeps its native latency — which is why this "
-                . "list is short by design.", "mute")
+                "No keys mapped on this tab for this program. Keys mapped "
+                . "on other tabs are listed there. “Add new” hooks one; a "
+                . "key nothing references is never touched at all.", "mute")
             return
         }
         cols := 2
