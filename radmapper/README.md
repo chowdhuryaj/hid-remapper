@@ -25,31 +25,32 @@ workstation. Treat it as a candidate for testing.
 To watch every button light up as you press it, use **Test my mouse and
 keyboard…** on the Diagnostics page.
 
-**Shipped defaults are active:** the backtick key toggles dictation, the two
+**Shipped defaults are active:** a tap of CapsLock or the backtick key toggles
+dictation (CapsLock is seeded once into an existing config too), the two
 thumb buttons jump the pointer between monitors on a tap, and inside PACS a
 **hold** of button 4 opens the PACS wheel and a hold of button 5 the window
 presets. Review or remove these on the Mouse and Keyboard pages. Nothing else
 is remapped until you add it.
 
 **Layers are tabs.** The Mouse and Keyboard pages have a tab strip: **Base**,
-**Hold Button 4**, **Hold Button 5**, and a tab for any key that holds a
-layer. A tab shows what every part of the mouse does *while that button is
+**Hold Button 4**, **Hold Button 5** and **Hold CapsLock** -- the only three
+layers. A tab shows what every part of the mouse does *while that button is
 held*, exactly like a keymap layer in QMK or ZMK. Click a part of the mouse
 and its two slots appear on the right, **Tap it** and **Hold it down**, each
 with Set/Change and Clear.
 
 **What a button can do (0.7):** a button has a **tap** and a **hold**, and
 nothing else. Left, right and middle click are always instant; a hold on them
-works only inside one program you name. Only the thumb buttons (or a key that
-does not type) can hold a layer open for other buttons, and only in Advanced
-view. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
+works only inside one program you name. Only the thumb buttons and CapsLock
+can hold a layer open; rows under any other layer are dropped on load and named
+in Diagnostics. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
 wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
-pages and every action", adds Layers, Macros, Apps, Windows and Pointer, the
-wheel decks ("Scroll wheel…" on the Mouse and Keyboard pages), the layer
-controls and the full action list. Nothing is lost either way.
+pages and every action", adds Macros, Apps, Windows and Pointer, the wheel
+decks ("Scroll wheel…" on the Mouse and Keyboard pages) and the full action
+list. Nothing is lost either way.
 
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.
@@ -93,7 +94,7 @@ inside this one. Size 9 is the numbered ring for presets.
 |---|---|
 | A button or modifier seems stuck | Press **Ctrl+Alt+Q**, or **Unstick my buttons** at the bottom of the settings window |
 | I want everything native right now | **Ctrl+Alt+Shift+F11** pauses the whole engine; press again to resume. NumLock also pauses. |
-| The settings window will not open | Tray icon > *Settings (classic)…* opens the plain Windows version |
+| The settings window will not open | Tray icon > *Rendering self-test…* shows whether graphics draw on this machine; copy Diagnostics and send it. The engine keeps working either way. |
 | I lost my bindings after updating | You did not. Config lives in `%APPDATA%\RadMapper\RadMapperConfig.json`; the path is shown on Home. |
 | The header says "Not saved to disk" | A write to the settings folder failed. Your edits still work in memory; fix access to the folder and make any edit to retry. Details are on the Diagnostics page. |
 | A corrupt config was found on start | It was copied next to the original with a `.corrupt-` suffix and defaults were loaded. If that copy could not be made, saving is blocked until you move the file and restart. |
