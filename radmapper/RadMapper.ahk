@@ -9678,8 +9678,8 @@ RadialPaint() {
                 ty := cy + (ro - 11) * Sin(t)
                 Text(Round(tx - 58), Round(ty - 10), 116, 20,
                     txt (sl.sub != "" ? " ›" : ""), inkCol,
-                    Round(Lumi.Size["small"] * sc), Lumi.Face,
-                    active ? "Bold" : "Regular").TextAlign("center", "middle")
+                    Round(Lumi.Size["small"] * sc), Lumi.Face)
+                    .TextAlign("center", "middle")
             }
             i += 1
         }
@@ -9733,7 +9733,7 @@ RadialPaint() {
         if R.trial
             Text(cx - ri + 4, cy + 16, inner, 16,
                 "practice — nothing is sent", Lumi.C["warn"],
-                Lumi.Size["tiny"], Lumi.Face, "Bold")
+                Lumi.Size["small"], Lumi.Face)
                 .TextAlign("center", "middle")
         ; Kando fades a menu in over 75 ms. There is no matching fade OUT:
         ; a closing wheel may not leave a timer behind it, and a blocking
@@ -11604,7 +11604,7 @@ KeyPicker(owner, ed) {
     owner := ValueHostHwnd(owner)
     kp := Gui("+Owner" owner " -MinimizeBox -MaximizeBox", "Pick a key")
     kp.BackColor := "F5F6F8"
-    kp.SetFont("s9", "Segoe UI")
+    kp.SetFont("s10", "Segoe UI")
     kp.AddText("x12 y10 w520",
         "Arm modifiers, then click a key. Each click appends one Send token to the Value field.")
     cbCtrl  := kp.AddCheckbox("x12 y+8 w78", "Ctrl  ^")
@@ -11748,7 +11748,7 @@ InputPicker(owner, ed) {
     owner := ValueHostHwnd(owner)
     ip := Gui("+Owner" owner " -MinimizeBox -MaximizeBox", "Pick an input")
     ip.BackColor := "F5F6F8"
-    ip.SetFont("s9", "Segoe UI")
+    ip.SetFont("s10", "Segoe UI")
     ip.AddText("x12 y10 w420", "The input this action presses instead. Leave"
         . " the value blank in the dialog to mean “this same input”.")
     ip.AddText("x12 y+10 w52", "Value:")
@@ -11920,7 +11920,7 @@ KeyNamePicker(owner, ed) {
     owner := ValueHostHwnd(owner)
     kp := Gui("+Owner" owner " -MinimizeBox -MaximizeBox", "Pick a key")
     kp.BackColor := "F5F6F8"
-    kp.SetFont("s9", "Segoe UI")
+    kp.SetFont("s10", "Segoe UI")
     kp.AddText("x12 y10 w520", "Click the key this binding listens to. Hold"
         . " modifiers with the checkboxes in the dialog, not here.")
     kp.AddText("x12 y+8 w52", "Key:")
@@ -12334,8 +12334,19 @@ class Lumi {
     ; 30-32, List rowH 30, SELROW 28, Toast h=52) -- the smallest, Chip's
     ; 20 px with "tiny", still clears a 10 px line with headroom. hero/
     ; title/sub are left alone: their boxes (34/24/-) are already tight.
-    static Size := Map("hero", 20, "title", 14, "sub", 12, "body", 13,
-                       "small", 11, "tiny", 10)
+    ;
+    ; FOUR TYPE STYLES, NO MORE (v0.7 audit). Every piece of text in the kit,
+    ; the radial menu, the switcher and the keyboard pointer is one of:
+    ;   Title  Segoe UI 14 px Bold     page and dialog titles (hero = title)
+    ;   Body   Segoe UI 13 px Regular  text, fields, dropdowns, button labels
+    ;   Small  Segoe UI 11 px Regular  helper text, section caps, list cells
+    ;   Mono   Consolas 11 px Regular  key names, codes, readouts, chips
+    ; The radial menu's slot number and the keyboard pointer's grid letters
+    ; are Title SCALED to their cell, not a fifth style. The old hero (20),
+    ; sub (12) and tiny (10) sizes and the bold body/section/button labels
+    ; are folded in; the keys stay so no call site breaks.
+    static Size := Map("hero", 14, "title", 14, "sub", 13, "body", 13,
+                       "small", 11, "tiny", 11)
 
     ; one spacing scale, no in-between values
     static SP  := Map("xs", 4, "sm", 8, "md", 12, "lg", 16, "xl", 24, "xxl", 32)
@@ -12835,7 +12846,7 @@ class Lumi {
                     Lumi.Face, "Bold").TextAlign(alignH, "middle")
             case "section":
                 return Text(x, y, w, 18, StrUpper(str), Lumi.C["inkMute"],
-                    Lumi.Size["tiny"], Lumi.Face, "Bold").TextAlign(alignH, "middle")
+                    Lumi.Size["small"], Lumi.Face).TextAlign(alignH, "middle")
             case "dim":
                 return Text(x, y, w, h, str, Lumi.C["inkDim"], Lumi.Size["body"],
                     Lumi.Face).TextAlign(alignH, "middle")
@@ -12850,7 +12861,7 @@ class Lumi {
                     Lumi.Mono).TextAlign(alignH, "middle")
             case "accent":
                 return Text(x, y, w, h, str, Lumi.C["cyan"], Lumi.Size["body"],
-                    Lumi.Face, "Bold").TextAlign(alignH, "middle")
+                    Lumi.Face).TextAlign(alignH, "middle")
             default:
                 return Text(x, y, w, h, str, Lumi.C["ink"], Lumi.Size["body"],
                     Lumi.Face).TextAlign(alignH, "middle")
@@ -12911,13 +12922,13 @@ class Lumi {
                 ; the primary action without a glow or a gradient.
                 hit := RoundedRectangle(x, y, w, h, r, Lumi.C["magenta"], true)
                 Text(x, y, w, h, label, Lumi.C["abyss"], Lumi.Size["body"],
-                    Lumi.Face, "Bold").TextAlign("center", "middle")
+                    Lumi.Face).TextAlign("center", "middle")
                 hit.Hover(Lumi.C["pink"], Lumi.C["magenta"])
             case "accent":
                 hit := RoundedRectangle(x, y, w, h, r, Lumi.C["raised"], true)
                 RoundedRectangle(x, y, w, h, r, Lumi.C["cyan"], false)
                 Text(x, y, w, h, label, Lumi.C["cyanSoft"], Lumi.Size["body"],
-                    Lumi.Face, "Bold").TextAlign("center", "middle")
+                    Lumi.Face).TextAlign("center", "middle")
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
             case "danger":
                 ; The BORDER carries the red; the LABEL uses dangerInk, which
@@ -12925,7 +12936,7 @@ class Lumi {
                 hit := RoundedRectangle(x, y, w, h, r, Lumi.C["raised"], true)
                 RoundedRectangle(x, y, w, h, r, Lumi.C["danger"], false)
                 Text(x, y, w, h, label, Lumi.C["dangerInk"], Lumi.Size["body"],
-                    Lumi.Face, "Bold").TextAlign("center", "middle")
+                    Lumi.Face).TextAlign("center", "middle")
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
             case "muted":
                 ; Nothing is selected, so this button has nothing to act on.
@@ -12964,7 +12975,7 @@ class Lumi {
     static Chip(x, y, w, h, label, tone := "cyan") {
         col := Lumi.Col(tone)
         Rectangle(x, y + 3, 2, h - 6, col, true)
-        return Text(x + 8, y, w - 8, h, StrUpper(label), col, Lumi.Size["tiny"],
+        return Text(x + 8, y, w - 8, h, StrUpper(label), col, Lumi.Size["small"],
             Lumi.Mono).TextAlign("left", "middle")
     }
 
@@ -16588,11 +16599,11 @@ class Atlas {
         hasMacro := (Atlas.macroSel != "")
         b := Atlas.BtnRow(x, lw, [0.34, 0.33, 0.33])
         by := y + h - 92
-        Lumi.Btn(b[1].x, by, b[1].w, 32, "Rename",
+        Lumi.Btn(b[1].x, by, b[1].w, 34, "Rename",
             (*) => Atlas.MacroRename(), hasMacro ? "ghost" : "muted")
-        Lumi.Btn(b[2].x, by, b[2].w, 32, "Test run",
+        Lumi.Btn(b[2].x, by, b[2].w, 34, "Test run",
             (*) => Atlas.MacroTest(), hasMacro ? "accent" : "muted")
-        Lumi.Btn(b[3].x, by, b[3].w, 32, "Delete",
+        Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
             (*) => Atlas.MacroDeleteSel(), hasMacro ? "danger" : "muted")
         Lumi.Label(x, y + h - 52, lw,
             "Rename uses the name typed above.", "mute", "left", 20)
@@ -17871,7 +17882,7 @@ class Atlas {
         Lumi.Label(rx + 24, py0, pl, "Dictate key", "dim", "left", 30)
         Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
             (t) => Atlas.SetCfgStr("psDictateKey", t), "F4", true)
-        Lumi.Btn(rx + 24 + pl + 126, py0 + 1, 44, 28, "Rec",
+        Lumi.Btn(rx + 24 + pl + 126, py0, 44, 30, "Rec",
             Atlas.RecSendKey("psDictateKey"), "accent")
         ; Where to FIND it. Nobody knows this key by heart, and the wrong
         ; one here is a dictation button that silently does nothing.
@@ -17968,8 +17979,8 @@ class Atlas {
             . CFG_PATH
             . (CFG_ADOPTED != "" ? "   (adopted from " CFG_ADOPTED ")" : ""),
             "code", "left", 22)
-        Lumi.Label(x + w - 300, B.y + 90, 86, "HUD corner", "dim", "left", 26)
-        Lumi.Select(x + w - 210, B.y + 88, 186, 28, Atlas.HUD_CORNER_LABELS,
+        Lumi.Label(x + w - 300, B.y + 88, 86, "HUD corner", "dim", "left", 30)
+        Lumi.Select(x + w - 210, B.y + 88, 186, 30, Atlas.HUD_CORNER_LABELS,
             Atlas.HudCornerIdx(), (i, t) => Atlas.SetHudCorner(i))
         ; ── follow-focus exceptions (v0.6.6.1) ──────────────────────────
         ; Where the pointer is never moved, whatever comes to the front.
@@ -18081,7 +18092,7 @@ class Atlas {
         Lumi.Label(x, y, lw, Lumi.Elide(label, lw, "dim"), "dim", "left", 28)
         Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
             "unassigned", true)
-        Lumi.Btn(x + lw + fw + 6, y + 1, 44, 28, "Rec",
+        Lumi.Btn(x + lw + fw + 6, y, 44, 30, "Rec",
             Atlas.RecHotkey(key), "accent")
         Lumi.Label(x + lw, y + 30, fw + 50, Lumi.Elide(words, fw + 50, "mute"),
             "mute", "left", 14)
@@ -21544,7 +21555,8 @@ class Warp {
             Picture(frame, frame, LW, LW, bmp, "w" LW " h" LW)
         } else {
             Rectangle(frame, frame, LW, LW, Lumi.C["abyss"], true)
-            Warp.Txt(frame, frame, LW, LW, "no picture", Lumi.C["inkMute"], 12, false)
+            Warp.Txt(frame, frame, LW, LW, "no picture", Lumi.C["inkMute"],
+                Lumi.Size["small"], false)
         }
         ; THE SCALE INSIDE THE LOUPE IS NOT `z`. The source square is
         ; sw = Max(Round(LW / z), 8) screen pixels, and that rounding (and
