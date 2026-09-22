@@ -10794,7 +10794,8 @@ WatchdogSweepSafe() {
     return true
 }
 
-; KEEP OUR MOUSE HOOK AT THE FRONT OF THE CHAIN WHILE PACS IS IN FRONT.
+; KEEP OUR MOUSE AND KEYBOARD HOOKS AT THE FRONT OF THE CHAIN WHILE PACS
+; IS IN FRONT.
 ; Windows calls low-level mouse hooks newest-first, and any hook may eat an
 ; event before the older ones see it. IntelliSpace can install its own while
 ; it runs, AFTER RadMapper started, so over its images and series list it
@@ -10829,25 +10830,36 @@ HookFrontTick(*) {
         if GetKeyState(b)                    ; logically down: a native drag
             return
     }
+    ; ...and no modifier down: a Ctrl or Shift held across the keyboard
+    ; reinstall would lose its physical reading mid-chord
+    for k in ["LShift", "RShift", "LCtrl", "RCtrl", "LAlt", "RAlt",
+              "LWin", "RWin"] {
+        if GetKeyState(k)
+            return
+    }
     if (IsObject(g_Radial) || IsObject(g_AppSw) || IsObject(g_ClickLock)
-        || IsObject(g_ScrollPtr))
+        || IsObject(g_ScrollPtr) || IsObject(g_RecHook))
         return
     try {
         if Warp.active
             return
     }
     try {
+        ; BOTH hooks: the keyboard one carries CapsLock (dictation), the
+        ; bound keys and every Settings hotkey, and a hook PACS installs
+        ; after ours can eat a keystroke exactly as it ate the tilt.
         InstallMouseHook(true, true)
+        InstallKeybdHook(true, true)
         HookChanged()
         lastHwnd := fg
         lastAt := now
         if !logged {                         ; once per session: proof it ran
             logged := true
-            Problem("hook", "mouse hook moved back to the front of the chain"
-                . " (PACS in front)")
+            Problem("hook", "mouse and keyboard hooks moved back to the front"
+                . " of the chain (PACS in front)")
         }
     } catch as e {
-        Problem("hook-error", "could not reinstall the mouse hook: " e.Message)
+        Problem("hook-error", "could not reinstall the input hooks: " e.Message)
         lastHwnd := fg
         lastAt := now
     }
@@ -12165,7 +12177,7 @@ Init() {
     StationWatchStart()                      ; recognise the screens, place windows
     OnExit(Cleanup)
     SetTimer(Watchdog, 750)                  ; physical-state reconciliation
-    SetTimer(HookFrontTick, 2000)            ; keep our mouse hook first in line
+    SetTimer(HookFrontTick, 2000)            ; keep our input hooks first in line
     ; TrayTip is (Text, Title, Options) in v2 -- Text first. (The old
     ; not-admin UIPI warning is gone: AJ's whole stack runs standard-user,
     ; so it was a false alarm on every launch.)
