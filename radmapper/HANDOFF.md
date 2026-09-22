@@ -171,9 +171,13 @@ in spirit (left/right/middle instant everywhere).
   Settings path row, App labels), Rec/Pick gaps, empty-state labels in the
   first-row slot, slot-card buttons 30 px, Menus/Apps button rows on
   BtnRow, list rowH 30 everywhere, Settings gutter 12.
-- Deferred (need more minimum height first): Home jobs vertical gap,
-  Settings Behaviour card gaps and Timing pitch at the band minimum,
-  MenuDlg grid gaps/pitch, BtnRow/footer 10 px gap -> 12.
+- Deferred items done in the next pass: Atlas.MINH 640 -> 760 (Compact
+  960x760, Default/winH 1120x800); Settings bands [adv 228|184, 148, 188],
+  timing pitch 34-38; Behaviour card is a 3x2 grid (5 toggles + HUD corner)
+  with a BtnRow of six, config path moved to the Home footer; Tilt guard in
+  the compact hotkey-cell shape; Home job rows 8 px apart; MenuDlg pitch
+  34/38, grid gaps 8, wheel header off the rule; BtnRow default gap and all
+  dialog footers 12 px; Lumi.Toggle takes a label width.
 
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,

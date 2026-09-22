@@ -1565,7 +1565,7 @@ global DEFAULTS := Map(
     "hud", 1,                  ; 1 = show tooltip feedback (dial, layer, ...)
     "layoutGuardMs", 1500,     ; how often an armed layout re-checks drift
     "winW", 1120,              ; remembered Atlas window size (>= the design
-    "winH", 720,               ;   minimum; the grip and [] button write these)
+    "winH", 800,               ;   minimum; the grip and [] button write these)
     "winMax", 0,
     "hudCorner", "bl",         ; bl | br | tl | tr | bc -- where the HUD parks
     "hudFollow", 1,            ; 1 = on the monitor under the cursor
@@ -12986,7 +12986,7 @@ class Lumi {
     ; default hit target raised 44x22 -> 52x28 (WCAG pass: 22 px was below
     ; the 28 px floor for an interactive target). Explicit w/h passed by a
     ; caller (e.g. the modifier toggles in the key-recorder) are untouched.
-    static Toggle(x, y, label, value, onChange := 0, w := 52, h := 28) {
+    static Toggle(x, y, label, value, onChange := 0, w := 52, h := 28, lw := 340) {
         track := RoundedRectangle(x, y, w, h, Lumi.RAD["field"],
             value ? Lumi.C["teal"] : Lumi.C["raised"], true)
         edge := RoundedRectangle(x, y, w, h, Lumi.RAD["field"],
@@ -12995,7 +12995,7 @@ class Lumi {
             h - 6, h - 6, 2,
             value ? Lumi.C["jade"] : Lumi.C["inkMute"], true)
         if (label != "")
-            Lumi.Label(x + w + Lumi.SP["md"], y, 340, label, "dim", "left", h)
+            Lumi.Label(x + w + Lumi.SP["md"], y, lw, label, "dim", "left", h)
         state := {value: value, x: x, w: w, h: h,
                   track: track, edge: edge, knob: knob, onChange: onChange}
         ; both visible parts take the click; neither needs an overlay
@@ -14241,7 +14241,7 @@ class Lumi {
 class Atlas {
 
     static W := 1120
-    static H := 720
+    static H := 800
     ; The window SHRINKS as well as grows (v0.4.7). It used to bottom out at
     ; the design size, because Settings and Pointer were laid out on absolute
     ; offsets that assumed one height -- so "make it smaller" did nothing and
@@ -14250,7 +14250,8 @@ class Atlas {
     ; were already height-relative. The floor below is where the hotkey card
     ; can still hold two columns and the timing rows are still legible.
     static MINW := 940
-    static MINH := 640
+    static MINH := 760             ; the Settings page's three bands at their
+                                   ; minimums (Advanced) plus header and gaps
     static maxed := false
     static restore := 0            ; pre-maximise rect
     static resizing := false
@@ -14597,11 +14598,11 @@ class Atlas {
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 200, 20, rows.Length " finding"
             . (rows.Length = 1 ? "" : "s"), "cyan")
-        Lumi.Btn(w - 400, h - 60, 130, 36, "Copy report",
+        Lumi.Btn(w - 404, h - 60, 130, 36, "Copy report",
             (*) => (A_Clipboard := ConflictReportText(focus),
                 Lumi.Toast("Copied — paste it into an email", "jade")), "accent")
         if (focus != "")
-            Lumi.Btn(w - 260, h - 60, 110, 36, "Everything",
+            Lumi.Btn(w - 262, h - 60, 110, 36, "Everything",
                 (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg()), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Close",
             (*) => Atlas.CloseDlg(), "primary")
@@ -15018,7 +15019,7 @@ class Atlas {
      * share none of that machinery: a size is applied straight from a button
      * click and from a hotkey, both of which are demonstrably working.
      */
-    static SIZES := [["Compact", 960, 640], ["Default", 1120, 720],
+    static SIZES := [["Compact", 960, 760], ["Default", 1120, 800],
                      ["Wide", 1400, 900], ["Large", 1680, 1050]]
 
     static SizeMenu(*) {
@@ -15425,7 +15426,7 @@ class Atlas {
         ; The rail used to step a fixed 44 px per entry. With eleven entries
         ; that runs THROUGH the engine switch and the panic button at the
         ; bottom on any window shorter than about 780 px -- and the minimum
-        ; is 640. The pitch is derived from the space that is actually there
+        ; is 760. The pitch is derived from the space that is actually there
         ; now, and never grows past the 44 the design was drawn at.
         floorY := Atlas.H - 128           ; the rule above the engine switch
         shown := 0
@@ -15877,7 +15878,7 @@ class Atlas {
             . "on or off.", "mute", "left", 20)
 
         ; ── the four jobs ───────────────────────────────────────────────
-        jy := sy + 54
+        jy := sy + 56
         Lumi.Label(x, jy, 420, "What do you want to do?", "section")
         bw := Min(380, (w - 16) // 2)
         bh := 40
@@ -15886,15 +15887,15 @@ class Atlas {
         Lumi.Btn(x + bw + 16, jy + 22, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
-        Lumi.Btn(x, jy + 66, bw, bh, "Set up a radial menu",
+        Lumi.Btn(x, jy + 70, bw, bh, "Set up a radial menu",
             (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
-        Lumi.Btn(x + bw + 16, jy + 66, bw, bh, "Apply a starter pack",
+        Lumi.Btn(x + bw + 16, jy + 70, bw, bh, "Apply a starter pack",
             (*) => Atlas.PackChoose(), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
         ; Pinned to the BOTTOM, so this block is in the same place whatever
         ; size the window is, and nothing above it has to be measured
-        ; against it. At the 640 px minimum the jobs end 2 px above the rule.
+        ; against it. At the 760 px minimum there is room to spare.
         Lumi.Rule(x, y + h - 104, w)
         Lumi.Para(x, y + h - 96, w - 20, 44,
             "Keys that always work: " Atlas.HkWords("hkPanic")
@@ -15903,7 +15904,12 @@ class Atlas {
             . " reopens this window · F1 opens quick help.", "dim")
         Lumi.Toggle(x, y + h - 50, "Show advanced pages and every action",
             Atlas.Advanced() ? 1 : 0, (v) => Atlas.SetAdvanced(v))
-        Lumi.Label(x, y + h - 22, w - 20, "Saved in  " CFG_PATH, "code", "left", 20)
+        ; Where the config lives, always on screen (it moved here from the
+        ; Settings page, which now has no spare row for it).
+        Lumi.Label(x, y + h - 22, w - 20, "Saved in  "
+            . (CFG_PORTABLE ? "PORTABLE · " : "") CFG_PATH
+            . (CFG_ADOPTED != "" ? "   (adopted from " CFG_ADOPTED ")" : ""),
+            "code", "left", 20)
     }
 
     ; ── PANEL: MOUSE ────────────────────────────────────────────────────────
@@ -16890,7 +16896,7 @@ class Atlas {
         Atlas.StepHint(st)
 
         Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
             (*) => Atlas.DoSaveStep(st), "primary")
@@ -17722,7 +17728,7 @@ class Atlas {
      * size -- the last two buttons hung off the right-hand edge of the
      * window, unreachable, on every small screen.
      */
-    static BtnRow(x, w, parts, gap := 10) {
+    static BtnRow(x, w, parts, gap := 12) {
         n := parts.Length
         total := 0
         for v in parts
@@ -17756,8 +17762,8 @@ class Atlas {
         Lumi.Label(x, y, 400, "Pointer", "title")
         ; Band 2 grew a second column in v0.6.5 (the wheel repeat guards),
         ; so it takes a larger share and a taller minimum; band 3 gives the
-        ; difference back. At the 940x640 minimum the three still fit:
-        ; 148 + 166 + 132 + 2 gaps of 12 = 446 = the space the three bands are given (h - 34 - 24).
+        ; difference back. The three minimums total 446 (148 + 166 + 132 +
+        ; 2 gaps of 12); at the 940x760 minimum the bands are given 566.
         bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 166, 132])
         sw := Min(300, Max(160, w - 340))    ; slider track
         lx := x + 24
@@ -17850,7 +17856,12 @@ class Atlas {
         ; 184 gives it two. The hotkeys band hands the difference back (its
         ; two rows need p2 + 60 = 112), so the three minimums still total
         ; what they did.
-        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [184, 148, 156])
+        ; v0.7 audit: every stacked gap on the 4/8/12 scale. Timing rows
+        ; step 34-38 on 30 px fields (they used to squeeze to 26 and
+        ; overlap); Behaviour is five rows at 8 px gaps. The window's
+        ; minimum height (Atlas.MINH, 760) is what makes all three fit.
+        bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34],
+            [Atlas.Advanced() ? 228 : 184, 148, 188])
         half := (w - 12) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
@@ -17861,7 +17872,7 @@ class Atlas {
         cx := x + 24
         Lumi.Label(cx, B.y + 12, 300, "Timing", "section")
         adv := Atlas.Advanced()              ; deck settle belongs to decks,
-        pitch := Atlas.Pitch(B.h - 82, adv ? 4 : 3)   ; which are Advanced
+        pitch := Atlas.Pitch(B.h - 82, adv ? 4 : 3, 34, 38)   ; which are Advanced
         nl := Min(200, half - 160)
         ry := B.y + 32
         Atlas.NumRow(cx, ry,             "Hold threshold (ms)", "holdThreshold", 50, 2000, 200, nl)
@@ -17869,11 +17880,11 @@ class Atlas {
         Atlas.NumRow(cx, ry + pitch * 2, "Auto-repeat (ms)",    "repeatRate",    10, 1000,  50, nl)
         if adv
             Atlas.NumRow(cx, ry + pitch * 3, "Wheel deck settle (ms)", "deckSettleMs", 0, 1000, 250, nl)
-        Lumi.Label(cx, ry + pitch * (adv ? 4 : 3) + 6, half - 48,
+        Lumi.Label(cx, ry + pitch * (adv ? 3 : 2) + 38, half - 48,
             "Hold threshold: how long a button stays down before it counts "
             . "as a hold." (adv ? " Deck settle: after pressing a deck button "
             . "the wheel must be still this long before it changes meaning." : ""),
-            "mute", "left", 40)
+            "mute", "left", adv ? 44 : 32)
 
         ; ── band 1: PowerScribe ─────────────────────────────────────────
         rx := x + half + 12
@@ -17930,12 +17941,12 @@ class Atlas {
         ; Sized to the COLUMN: colw is (940 - 188 - 48 - 72) / 3 = 210 at the
         ; minimum window width, and 100 + 4 + 80 = 184 fits inside it.
         if !Atlas.Advanced() {
-            Lumi.Label(c3, hy + p2, 100, "Tilt guard", "dim", "left", 30)
-            Lumi.Field(c3 + 104, hy + p2, 80, 30,
+            Lumi.Label(c3, hy + p2, colw, "Tilt guard (ms)", "dim", "left", 16)
+            Lumi.Field(c3, hy + p2 + 17, 80, 26,
                 String(Cfg("tiltRepeatMs")),
                 (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150),
                 "", true)
-            Lumi.Para(c3, hy + p2 + 32, colw, Max(20, B.h - (hy + p2 + 32 - B.y) - 6),
+            Lumi.Para(c3, hy + p2 + 44, colw, Max(20, B.h - (hy + p2 + 44 - B.y) - 6),
                 "Milliseconds. Razer tilt wheels repeat while held; 150 "
                 . "turns a held tilt into one press. 0 = off.", "mute")
         }
@@ -17943,55 +17954,52 @@ class Atlas {
         ; ── band 3: behaviour + where the config lives ──────────────────
         B := bands[3]
         Lumi.Card(x, B.y, w, B.h)
-        Lumi.Label(x + 24, B.y + 6, 300, "Behaviour", "section")
-        tw := (w - 48) // 5
-        Lumi.Toggle(x + 24, B.y + 26, "Show HUD", Cfg("hud"),
-            (v) => Atlas.SetCfg("hud", v ? 1 : 0))
-        Lumi.Toggle(x + 24 + tw, B.y + 26, "Follow focus", Cfg("followFocus"),
-            (v) => Atlas.SetCfgLive("followFocus", v ? 1 : 0))
+        Lumi.Label(x + 24, B.y + 12, 300, "Behaviour", "section")
+        ; Three columns, two rows. Five switches in one row did not fit at
+        ; the minimum width: each label ran into the next switch.
+        tc := Atlas.BtnRow(x + 24, w - 48, [1, 1, 1])
+        tlw := tc[1].w - 52 - Lumi.SP["md"] - 8
+        r1 := B.y + 38
+        r2 := B.y + 74
+        Lumi.Toggle(tc[1].x, r1, "Show HUD", Cfg("hud"),
+            (v) => Atlas.SetCfg("hud", v ? 1 : 0), , , tlw)
+        Lumi.Toggle(tc[2].x, r1, "Follow focus", Cfg("followFocus"),
+            (v) => Atlas.SetCfgLive("followFocus", v ? 1 : 0), , , tlw)
         ; Off by default: a second window of the SAME app is not an app
         ; switch, and chasing those is what made the pointer feel jumpy.
-        Lumi.Toggle(x + 24 + tw * 2, B.y + 26, "Follow in-app",
-            Cfg("followSameApp"),
-            (v) => Atlas.SetCfgLive("followSameApp", v ? 1 : 0))
-        Lumi.Toggle(x + 24 + tw * 3, B.y + 26, "Landing flash",
-            Cfg("focusFlash"), (v) => Atlas.SetCfgLive("focusFlash", v ? 1 : 0))
-        Lumi.Toggle(x + 24 + tw * 4, B.y + 26, "Teleport flash",
-            Cfg("teleportFlash"),
-            (v) => Atlas.SetCfg("teleportFlash", v ? 1 : 0))
-        bw := (w - 98) // 6
-        by := B.y + 56
+        Lumi.Toggle(tc[3].x, r1, "Follow in-app", Cfg("followSameApp"),
+            (v) => Atlas.SetCfgLive("followSameApp", v ? 1 : 0), , , tlw)
+        Lumi.Toggle(tc[1].x, r2, "Landing flash", Cfg("focusFlash"),
+            (v) => Atlas.SetCfgLive("focusFlash", v ? 1 : 0), , , tlw)
+        Lumi.Toggle(tc[2].x, r2, "Teleport flash", Cfg("teleportFlash"),
+            (v) => Atlas.SetCfg("teleportFlash", v ? 1 : 0), , , tlw)
+        Lumi.Label(tc[3].x, r2 - 1, 90, "HUD corner", "dim", "left", 30)
+        Lumi.Select(tc[3].x + 94, r2 - 1, tc[3].w - 94, 30,
+            Atlas.HUD_CORNER_LABELS, Atlas.HudCornerIdx(),
+            (i, t) => Atlas.SetHudCorner(i))
+        by := B.y + 112
+        cb := Atlas.BtnRow(x + 24, w - 48, [1, 1, 1, 1, 1, 1])
         ; Both of these throw away everything that is loaded, and neither
         ; used to ask. Reload is one misclick away from Export.
-        Lumi.Btn(x + 24, by, bw, 30, "Reload from disk",
+        Lumi.Btn(cb[1].x, by, cb[1].w, 30, "Reload from disk",
             (*) => Atlas.ReloadFromDisk(), "ghost")
-        Lumi.Btn(x + 34 + bw, by, bw, 30, "Open config file",
+        Lumi.Btn(cb[2].x, by, cb[2].w, 30, "Open config file",
             (*) => (SaveCfg(), Run('notepad.exe "' CFG_PATH '"')), "ghost")
-        Lumi.Btn(x + 44 + bw * 2, by, bw, 30, "Open folder",
+        Lumi.Btn(cb[3].x, by, cb[3].w, 30, "Open folder",
             (*) => (SaveCfg(), Run('explorer.exe "' CFG_DIR '"')), "ghost")
-        Lumi.Btn(x + 54 + bw * 3, by, bw, 30, "Import config…",
+        Lumi.Btn(cb[4].x, by, cb[4].w, 30, "Import config…",
             (*) => Atlas.ImportConfig(), "accent")
-        Lumi.Btn(x + 64 + bw * 4, by, bw, 30, "Export…",
+        Lumi.Btn(cb[5].x, by, cb[5].w, 30, "Export…",
             (*) => CfgExport(), "ghost")
-        Lumi.Btn(x + 74 + bw * 5, by, bw, 30, "Restore shipped defaults…",
+        Lumi.Btn(cb[6].x, by, cb[6].w, 30, "Restore shipped defaults…",
             (*) => Atlas.RestoreShipped(), "ghost")
-        ; Where the config actually is, on screen, always. This is the thing
-        ; whose absence caused the bindings to look lost on every upgrade.
-        Lumi.Label(x + 24, B.y + 88, w - 330,
-            (CFG_PORTABLE ? "PORTABLE · " : "")
-            . CFG_PATH
-            . (CFG_ADOPTED != "" ? "   (adopted from " CFG_ADOPTED ")" : ""),
-            "code", "left", 30)
-        Lumi.Label(x + w - 300, B.y + 88, 86, "HUD corner", "dim", "left", 30)
-        Lumi.Select(x + w - 210, B.y + 88, 186, 30, Atlas.HUD_CORNER_LABELS,
-            Atlas.HudCornerIdx(), (i, t) => Atlas.SetHudCorner(i))
         ; ── follow-focus exceptions (v0.6.6.1) ──────────────────────────
         ; Where the pointer is never moved, whatever comes to the front.
         ; A plain text field, because the list is short and every entry
         ; is a word: a program file name, title:part, or class:Name.
-        fy := B.y + 120
+        fy := B.y + 150
         Lumi.Label(x + 24, fy, 176, "Follow focus except in", "dim", "left", 30)
-        Lumi.Field(x + 204, fy, w - 204 - 24 - 214, 30, Cfg("followExcept"),
+        Lumi.Field(x + 208, fy, w - 208 - 24 - 216, 30, Cfg("followExcept"),
             (t) => Atlas.SetCfgStr("followExcept", t),
             "e.g. IntelliSpacePACSRadiology.exe; title:Report", true)
         Lumi.Btn(x + w - 24 - 204, fy, 204, 30, "Grab window in front (3 s)",
@@ -18542,7 +18550,7 @@ class Atlas {
         Lumi.Chip(24, h - 52, 190, 20,
             keyMode ? "keyboard" : "mouse",
             keyMode ? "jade" : "cyan")
-        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
             Atlas.SaveDlg(st), "primary")
@@ -19050,7 +19058,7 @@ class Atlas {
         Lumi.Chip(24, h - 52, 190, 20,
             keyMode ? "keyboard deck" : "mouse deck",
             keyMode ? "jade" : "cyan")
-        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
             Atlas.SaveWheel(st), "primary")
@@ -19290,7 +19298,7 @@ class Atlas {
         ref := IsObject(draft) ? draft.ref : Atlas.MenuSelRef()
         slices := MGet(menu, "slices", [])
         count := RadialCountFor(slices.Length)
-        pitch := (count = 9) ? 33 : 37
+        pitch := (count = 9) ? 34 : 38      ; 4 / 8 px gaps between 30 px rows
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
                      Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
@@ -19324,11 +19332,11 @@ class Atlas {
         st.app := Lumi.Select(374, 84, 220, 30, apps,
             Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
 
-        Lumi.Label(612, 84, 40, "Size", "dim", "left", 30)
-        st.size := Lumi.Select(656, 84, 120, 30, ["4", "8", "9 (1-9)"],
+        Lumi.Label(610, 84, 40, "Size", "dim", "left", 30)
+        st.size := Lumi.Select(654, 84, 102, 30, ["4", "8", "9 (1-9)"],
             count = 9 ? 3 : (count = 8 ? 2 : 1), (i, t) => Atlas.MenuResize(st, i))
 
-        Lumi.Label(24, 122, 752,
+        Lumi.Label(24, 122, 732,
             "Program chooses the automatic menu. A named binding opens it directly.",
             "mute", "left", 22)
         Lumi.Rule(24, 156, w - 48)
@@ -19340,8 +19348,8 @@ class Atlas {
         Lumi.Label(24, 164, 80, count = 9 ? "Number" : "Direction", "section")
         Lumi.Label(108, 164, 140, "Label", "section")
         Lumi.Label(256, 164, 210, "It does", "section")
-        Lumi.Label(472, 164, 134, "Details", "section")
-        Lumi.Label(612, 164, 88, "Icon", "section")
+        Lumi.Label(474, 164, 132, "Details", "section")
+        Lumi.Label(614, 164, 86, "Icon", "section")
 
         icons := []
         for nm in RADIAL_ICONS
@@ -19364,15 +19372,15 @@ class Atlas {
                 (v) => Atlas.MenuWheelPaint(st), "label", true)
             r.act := Atlas.ActSelect(256, ry, 210, 30, code,
                 (i2, t) => Atlas.MenuWheelPaint(st))
-            r.value := Lumi.Field(472, ry, 134, 30, val, 0, "value", true)
-            r.icon := Lumi.Select(612, ry, 88, 30, icons,
+            r.value := Lumi.Field(474, ry, 132, 30, val, 0, "value", true)
+            r.icon := Lumi.Select(614, ry, 86, 30, icons,
                 Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
-            Lumi.Btn(706, ry, 50, 30, "Rec", Atlas.DeckRec(r), "accent")
+            Lumi.Btn(708, ry, 48, 30, "Rec", Atlas.DeckRec(r), "accent")
             st.rows.Push(r)
             i += 1
         }
 
-        Lumi.Para(24, Min(494, 186 + count * pitch + 6), 732, 56,
+        Lumi.Para(24, 186 + (count - 1) * pitch + 38, 732, 48,
             "For a PACS shortcut, choose Send keys and use Rec to press the "
             . "shortcut from your viewer settings. Disabled leaves a direction "
             . "empty. A direction set to Radial menu opens that menu inside "
@@ -19385,19 +19393,19 @@ class Atlas {
         ; target, because every Pie shares the same bounding box and
         ; GpGFX hit-tests boxes, not arcs -- so the wedge under the
         ; pointer is worked out from the angle here, never by GpGFX.
-        st.wheel := {x: 776, y: 176, d: 200, shapes: [], src: 0, dst: 0}
-        Lumi.Label(776, 156, 200, "As it opens", "section", "center")
+        st.wheel := {x: 776, y: 186, d: 200, shapes: [], src: 0, dst: 0}
+        Lumi.Label(776, 164, 200, "As it opens", "section", "center")
         Atlas.MenuWheelPaint(st)
         grab := Container(st.wheel.x, st.wheel.y, st.wheel.d, st.wheel.d)
         grab.OnEvent("LeftMouseDown", ObjBindMethod(Atlas, "MenuWheelDown", st))
-        Lumi.Para(776, 388, 200, 60,
+        Lumi.Para(776, 394, 200, 60,
             "Drag one wedge onto another to swap the two commands. "
             . "The rows on the left swap with them.", "mute")
 
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
             : count " directions · clockwise", "cyan")
-        Lumi.Btn(w - 260, h - 60, 110, 36, "Cancel",
+        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
             (*) => Atlas.CloseDlg(), "ghost")
         Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
             Atlas.SaveMenu(st), "primary")
