@@ -160,6 +160,21 @@ in spirit (left/right/middle instant everywhere).
 - Check: tilt over the series list teleports; Diagnostics shows one "hook"
   line. If not, the next suspect is raw input, which no hook can block.
 
+## Keyboard hook + UI audit
+- HookFrontTick reinstalls the keyboard hook too (also waits for no
+  modifier held and no key recording).
+- Type: four styles only (Title 14B, Body 13, Small 11, Mono Consolas 11);
+  documented at Lumi.Size. Buttons, accent and section labels not bold.
+- Layout audit (subagent, static): applied the verified fixes -- 4 overlaps
+  (Diag list/label, Processes label, Home status lines, Pointer toggles),
+  label/control centre mismatches (header, nav, Home, NumRow, Pointer,
+  Settings path row, App labels), Rec/Pick gaps, empty-state labels in the
+  first-row slot, slot-card buttons 30 px, Menus/Apps button rows on
+  BtnRow, list rowH 30 everywhere, Settings gutter 12.
+- Deferred (need more minimum height first): Home jobs vertical gap,
+  Settings Behaviour card gaps and Timing pitch at the band minimum,
+  MenuDlg grid gaps/pitch, BtnRow/footer 10 px gap -> 12.
+
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,
   config/editors) are being applied on this branch; see the PR for the list.

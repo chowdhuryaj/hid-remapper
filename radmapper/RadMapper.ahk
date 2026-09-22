@@ -14592,7 +14592,7 @@ class Atlas {
         }
         Lumi.List(24, 78, w - 48, h - 78 - 82, rows,
             [{w: 24, kind: "accent", align: "center"}, {w: w - 48 - 40}],
-            0, 28)
+            0, 30)
         st := {dlg: dlg, focus: focus}
         Lumi.Rule(24, h - 78, w - 48)
         Lumi.Chip(24, h - 52, 200, 20, rows.Length " finding"
@@ -15309,8 +15309,8 @@ class Atlas {
         Lumi.Rule(0, Atlas.HEADH, w, Lumi.C["hair"])
         ; No tagline. "reading-room input engine" under the wordmark was
         ; marketing copy in a tool the user already opened on purpose.
-        Lumi.Label(Lumi.SP["xl"], 18, 260, "RadMapper", "title")
-        Lumi.Label(Lumi.SP["xl"] + 108, 18, 120, "v" RM_VERSION, "mute", "left", 24)
+        Lumi.Label(Lumi.SP["xl"], 20, 260, "RadMapper", "title")
+        Lumi.Label(Lumi.SP["xl"] + 108, 20, 120, "v" RM_VERSION, "mute", "left", 24)
 
         ; live state chips, right-aligned
         ; One status line, right-aligned, in reading order: engine, app, and
@@ -15466,8 +15466,8 @@ class Atlas {
         Lumi.Rule(Lumi.SP["md"], Atlas.H - 116, Atlas.NAVW - 24, Lumi.C["hairSoft"])
         Lumi.Toggle(Lumi.SP["md"], Atlas.H - 96, "", g_Enabled,
             (v) => Atlas.ToggleEngine(v))
-        Lumi.Label(Lumi.SP["md"] + 56, Atlas.H - 96, 120,
-            g_Enabled ? "Engine on" : "Engine off", "dim", "left", 22)
+        Lumi.Label(Lumi.SP["md"] + 64, Atlas.H - 96, 120,
+            g_Enabled ? "Engine on" : "Engine off", "dim", "left", 28)
         ; "Panic release" is the name of the feature, not a description of
         ; what it does for you. The word on the button is now the job.
         Lumi.Btn(Lumi.SP["md"], Atlas.H - 62, Atlas.NAVW - 24, 30,
@@ -15827,9 +15827,9 @@ class Atlas {
 
     static PanelHome(x, y, w, h) {
         Lumi.Label(x, y, 220, "Start here", "title")
-        Lumi.Label(x + 228, y + 4, Max(200, w - 248),
+        Lumi.Label(x + 228, y, Max(200, w - 248),
             "Make your mouse and keyboard work the way you read.",
-            "mute", "left", 22)
+            "mute", "left", 24)
 
         ; ── reading room essentials ─────────────────────────────────────
         ; WIDTH, at the 940 px minimum: the panel is
@@ -15871,7 +15871,7 @@ class Atlas {
             g_Enabled
                 ? "RadMapper is ON — your buttons and keys do what you set up here."
                 : "RadMapper is OFF — your mouse and keyboard behave normally.",
-            "body", "left", 22)
+            "body", "left", 20)
         Lumi.Label(x + 120, sy + 24, w - 140,
             "Use the switch at the bottom of the list on the left to turn it "
             . "on or off.", "mute", "left", 20)
@@ -15895,7 +15895,7 @@ class Atlas {
         ; Pinned to the BOTTOM, so this block is in the same place whatever
         ; size the window is, and nothing above it has to be measured
         ; against it. At the 640 px minimum the jobs end 2 px above the rule.
-        Lumi.Rule(x, y + h - 104, w - 8)
+        Lumi.Rule(x, y + h - 104, w)
         Lumi.Para(x, y + h - 96, w - 20, 44,
             "Keys that always work: " Atlas.HkWords("hkPanic")
             . " if a button ever feels stuck down · " Atlas.HkWords("hkToggle")
@@ -15910,9 +15910,9 @@ class Atlas {
 
     static PanelMouse(x, y, w, h) {
         Lumi.Label(x, y, 300, "Mouse map", "title")
-        Lumi.Label(x, y + 26, 420,
+        Lumi.Label(x, y + 28, 420,
             "Pick a layer tab, then click a part of the mouse.", "mute")
-        Lumi.Label(x + w - 236, y + 4, 40, "App", "mute", "left", 24)
+        Lumi.Label(x + w - 236, y, 40, "App", "mute", "left", 30)
         apps := AppChoices()
         Lumi.Select(x + w - 196, y, 196, 30, apps, Atlas.appIdx,
             (i, t) => Atlas.SetApp(i))
@@ -16012,7 +16012,7 @@ class Atlas {
         Lumi.Label(lx, ly + 26, lw,
             AppDisp(app) "   ·   " LayerLabelFromCode(lay), "mute")
         if LayerIncludes(lay, input) {
-            Lumi.Para(lx, ly + 62, lw, 90,
+            Lumi.Para(lx, ly + 54, lw, 90,
                 "You hold this to reach this layer, so it has no actions of "
                 . "its own here. Its tap and hold live on the Base tab.",
                 "mute")
@@ -16028,26 +16028,26 @@ class Atlas {
             row := ref ? g_Cfg["bindings"][ref] : 0
             live := IsObject(row) && !IsInertRow(row)
             Lumi.Card(lx, sy, lw, 60, "raised")
-            Lumi.Label(lx + 14, sy + 7, 160, EventLabelOf(ev), "dim", "left", 18)
+            Lumi.Label(lx + 12, sy + 7, 160, EventLabelOf(ev), "dim", "left", 18)
             what := !IsObject(row) ? "Nothing set — works the normal way"
                 : (live ? DescribeAction(row["action"]) : "Native (system default)")
             blocked := (ev = "hold" && !live && IsPrimaryButton(input) && app = "*")
             if blocked
                 what := "Nothing set — a hold here only works inside one program"
-            Lumi.Label(lx + 14, sy + 27, lw - 220, what,
+            Lumi.Label(lx + 12, sy + 27, lw - 220, what,
                 live ? "body" : "mute", "left", 24)
-            Lumi.Btn(lx + lw - 198, sy + 13, 92, 34, live ? "Change" : "Set",
+            Lumi.Btn(lx + lw - 198, sy + 15, 92, 30, live ? "Change" : "Set",
                 blocked ? 0 : Atlas.SlotGo(input, ev, keyMode, ref),
                 blocked ? "muted" : (live ? "accent" : "primary"))
             ; Clear works on ANY row that fills the slot, a system-default
             ; one included: that is a real row in the config, and with
             ; Clear muted on it there was no way to remove it from here.
-            Lumi.Btn(lx + lw - 98, sy + 13, 86, 34, "Clear",
+            Lumi.Btn(lx + lw - 98, sy + 15, 86, 30, "Clear",
                 IsObject(row) ? Atlas.ClearGo(ref) : 0,
                 IsObject(row) ? "ghost" : "muted")
             if ref
                 slotRefs.Push(ref)
-            sy += 66
+            sy += 68
         }
         ; every other row in this scope: one that needs a modifier held, and
         ; anything hand-edited that no slot can show -- listed, never hidden,
@@ -16070,9 +16070,9 @@ class Atlas {
             [{w: 90, kind: "mute"}, {w: lw - 220}, {w: 90, kind: "code"}],
             Atlas.Picker(mode), 30, ["When you", "It does", "Also hold"])
         if (rows.Length = 0)
-            Lumi.Label(lx + 14, listY + 30, lw - 28,
+            Lumi.Label(lx + 12, listY + 26, lw - 24,
                 "None — “Add new” makes one (Ctrl, Alt, Shift or Win plus "
-                . "this " (keyMode ? "key" : "button") ").", "mute", "left", 24)
+                . "this " (keyMode ? "key" : "button") ").", "mute", "left", 30)
         adv := Atlas.Advanced()
         b := Atlas.BtnRow(lx, lw, adv ? [0.2, 0.14, 0.16, 0.28, 0.22]
                                       : [0.28, 0.2, 0.22, 0.3])
@@ -16337,9 +16337,9 @@ class Atlas {
      */
     static PanelKeys(x, y, w, h) {
         Lumi.Label(x, y, 300, "Keyboard map", "title")
-        Lumi.Label(x, y + 26, 420,
+        Lumi.Label(x, y + 28, 420,
             "Pick a layer tab, then click a key.", "mute")
-        Lumi.Label(x + w - 236, y + 4, 40, "App", "mute", "left", 24)
+        Lumi.Label(x + w - 236, y, 40, "App", "mute", "left", 30)
         apps := AppChoices()
         Lumi.Select(x + w - 196, y, 196, 30, apps, Atlas.kbAppIdx,
             (i, t) => Atlas.SetKbApp(i))
@@ -16422,9 +16422,9 @@ class Atlas {
         ; Same footprint as the mouse schematic next door, so switching tabs
         ; does not move the row list a pixel.
         Lumi.Card(x, y - 10, 300, 324, "surface")
-        Lumi.Label(x + 14, y, 272, "KEYS ON THIS TAB", "section")
+        Lumi.Label(x + 16, y, 272, "KEYS ON THIS TAB", "section")
         if (keys.Length = 0) {
-            Lumi.Para(x + 14, y + 34, 272, 90,
+            Lumi.Para(x + 16, y + 34, 272, 90,
                 "No keys mapped on this tab for this program. Keys mapped "
                 . "on other tabs are listed there. “Add new” hooks one; a "
                 . "key nothing references is never touched at all.", "mute")
@@ -16439,17 +16439,17 @@ class Atlas {
         for k in keys {
             if (i >= cap)
                 break
-            kx := x + 14 + Mod(i, cols) * (tw + 10)
+            kx := x + 16 + Mod(i, cols) * (tw + 8)
             ky := y + 26 + (i // cols) * (th + 6)
             Atlas.KeyTile(k, kx, ky, tw, th)
             i += 1
         }
         if (keys.Length > i)
-            Lumi.Label(x + 14, y + 278, 272,
+            Lumi.Label(x + 16, y + 278, 272,
                 "+" (keys.Length - i) " more — they are listed on the rows "
                 . "to the right",
                 "mute", "left", 16)
-        Lumi.Label(x + 14, y + 296, 272,
+        Lumi.Label(x + 16, y + 296, 272,
             "Olive rim = assigned here.   Pink ring + L = holds a layer.",
             "mute", "center", 16)
     }
@@ -16589,9 +16589,10 @@ class Atlas {
             try Lumi.__ListPaint(Atlas.macroList)
         }
         if (rows.Length = 0)
-            Lumi.Label(x, listY + 40, lw, "No macros yet — name one below.", "mute")
+            Lumi.Label(x + 12, listY + 26, lw - 24, "No macros yet — name one below.",
+                "mute", "left", 30)
 
-        ny := y + h - 132
+        ny := y + h - 130
         Atlas.macroName := Lumi.Field(x, ny, lw - 70, 30, "", 0,
             "new macro name", true)
         Lumi.Btn(x + lw - 62, ny, 62, 30, "Add",
@@ -16605,7 +16606,7 @@ class Atlas {
             (*) => Atlas.MacroTest(), hasMacro ? "accent" : "muted")
         Lumi.Btn(b[3].x, by, b[3].w, 34, "Delete",
             (*) => Atlas.MacroDeleteSel(), hasMacro ? "danger" : "muted")
-        Lumi.Label(x, y + h - 52, lw,
+        Lumi.Label(x, y + h - 50, lw,
             "Rename uses the name typed above.", "mute", "left", 20)
 
         ; ── right: the picked macro's steps ────────────────────────────
@@ -16628,8 +16629,8 @@ class Atlas {
             [{w: 40, kind: "mono"}, {w: 230}, {w: rw - 290, kind: "code"}],
             Atlas.Picker("step"), 30, ["#", "Step", "Details"])
         if (IsObject(steps) && steps.Length = 0)
-            Lumi.Label(rx, listY + 40, rw,
-                "No steps yet — click “Add step”.", "mute")
+            Lumi.Label(rx + 12, listY + 26, rw - 24,
+                "No steps yet — click “Add step”.", "mute", "left", 30)
 
         hasSel := Atlas.HasSel(srows.Length)
         b := Atlas.BtnRow(rx, rw, [0.22, 0.18, 0.2, 0.2, 0.2])
@@ -16645,7 +16646,7 @@ class Atlas {
             (*) => Atlas.MacroStepMove(-1), hasSel ? "ghost" : "muted")
         Lumi.Btn(b[5].x, by, b[5].w, 34, "Move down",
             (*) => Atlas.MacroStepMove(1), hasSel ? "ghost" : "muted")
-        Lumi.Para(rx, y + h - 88, rw, 56,
+        Lumi.Para(rx, y + h - 90, rw, 56,
             "Double-click a step to edit it. Pick a step and press Delete "
             . "to remove it, or right-click it. Steps run from the top; "
             . "PowerScribe steps wait for PowerScribe before the next one.",
@@ -16997,8 +16998,8 @@ class Atlas {
             ["Program", "Recognised by", "Pointer spot", "Special"])
 
         hasSel := Atlas.HasSel(rows.Length)
-        ay := y + h - 96
-        a := Atlas.BtnRow(x, w, [0.25, 0.25, 0.25, 0.25])
+        ay := y + h - 98
+        a := Atlas.BtnRow(x, w, [0.34, 0.33, 0.33])
         Lumi.Btn(a[1].x, ay, a[1].w, 34, "Add program…",
             (*) => Atlas.AppEdit(0), "accent")
         Lumi.Btn(a[2].x, ay, a[2].w, 34, "Edit…",
@@ -17138,8 +17139,9 @@ class Atlas {
             Atlas.Picker("menu"), 30,
             ["Menu", "Program", "Size", "Filled in", "Opened by"])
         if (rows.Length = 0)
-            Lumi.Label(x, y + 136, w,
-                "No menus yet — type a name below and click Add.", "mute")
+            Lumi.Label(x + 12, y + 122, w - 24,
+                "No menus yet — type a name below and click Add.", "mute",
+                "left", 30)
 
         ; How the wheel LOOKS, never what a direction does. Both are on by
         ; default; both are here rather than on Settings because they are
@@ -17154,24 +17156,24 @@ class Atlas {
         Lumi.Label(x, by, 90, "New menu", "dim", "left", 30)
         Atlas.menuName := Lumi.Field(x + 96, by, 230, 30, "", 0,
             "e.g. Viewer", true)
-        Lumi.Btn(x + 336, by, 130, 30, "Add",
+        Lumi.Btn(x + 334, by, 130, 30, "Add",
             (*) => Atlas.MenuAddNew(), "primary")
-        Lumi.Label(x + 480, by, w - 480,
+        Lumi.Label(x + 476, by, w - 476,
             "4 or 8 directions, or 9 numbered slots for window presets.",
             "mute", "left", 30)
 
-        by2 := y + h - 48
-        bw := (w - 40) // 5
+        by2 := y + h - 50
+        mb := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
         hasSel := Atlas.HasSel(rows.Length)
-        Lumi.Btn(x, by2, bw, 34, "Edit commands",
+        Lumi.Btn(mb[1].x, by2, mb[1].w, 34, "Edit commands",
             (*) => Atlas.MenuEditSel(), hasSel ? "accent" : "muted")
-        Lumi.Btn(x + bw + 10, by2, bw, 34, "Assign a button",
+        Lumi.Btn(mb[2].x, by2, mb[2].w, 34, "Assign a button",
             (*) => Atlas.MenuAssign(), hasSel ? "accent" : "muted")
-        Lumi.Btn(x + (bw + 10) * 2, by2, bw, 34, "Practice safely",
+        Lumi.Btn(mb[3].x, by2, mb[3].w, 34, "Practice safely",
             (*) => Atlas.MenuTry(), hasSel ? "ghost" : "muted")
-        Lumi.Btn(x + (bw + 10) * 3, by2, bw, 34, "Duplicate",
+        Lumi.Btn(mb[4].x, by2, mb[4].w, 34, "Duplicate",
             (*) => Atlas.MenuDuplicate(), "ghost")
-        Lumi.Btn(x + (bw + 10) * 4, by2, bw, 34, "Delete",
+        Lumi.Btn(mb[5].x, by2, mb[5].w, 34, "Delete",
             (*) => Atlas.MenuDelete(), "danger")
     }
 
@@ -17415,9 +17417,10 @@ class Atlas {
             (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : 0), 30,
             ["Arrangement", "Windows", "Keep in place", "Now", "Saved on"])
         if (rows.Length = 0)
-            Lumi.Label(x, y + 136, w,
+            Lumi.Label(x + 12, y + 122, w - 24,
                 "Nothing saved yet — arrange your windows the way you want "
-                . "them, type a name below, and click Save this one.", "mute")
+                . "them, type a name below, and click Save this one.", "mute",
+                "left", 30)
 
         ; ── this station ────────────────────────────────────────────────
         ; The monitor set in front of the engine right now, which arrangement
@@ -17478,19 +17481,19 @@ class Atlas {
             "A lettered grid over the screen: type a cell, refine with Q W E / "
             . "A S D / Z X C, Space clicks, G drags, N snaps to a control.", "mute")
 
-        by := y + h - 92
+        by := y + h - 96
         Lumi.Label(x, by, 90, "New name", "dim", "left", 30)
         Atlas.layoutName := Lumi.Field(x + 96, by, 250, 30, "", 0,
             "e.g. Reading", true)
-        Lumi.Btn(x + 356, by, 170, 30, "Save this one",
+        Lumi.Btn(x + 354, by, 170, 30, "Save this one",
             (*) => Atlas.LayoutCaptureNew(), "primary")
-        Lumi.Label(x + 540, by, w - 540,
+        Lumi.Label(x + 536, by, w - 536,
             g_LayoutGuard != ""
                 ? ("Keeping “" g_LayoutGuard "” in place · " g_LayoutSnaps
                    " window" (g_LayoutSnaps = 1 ? "" : "s") " put back so far")
                 : "Not keeping anything in place", "mute", "left", 30)
 
-        by2 := y + h - 56
+        by2 := y + h - 58
         ; The Keep button carries the longest label ("Keep in place: new
         ; windows", 26 characters), so it gets the widest share: at Lumi's
         ; body size Elide fits 27 characters into 194 px, and 0.35 of the
@@ -17785,25 +17788,25 @@ class Atlas {
         col := Max(240, (w - 72) // 2)
         rxw := lx + col + 24
         Lumi.Label(lx, B.y + 12, 300, "Drag scroll", "section")
-        Lumi.Label(lx, B.y + 36, 150, "Pixels per notch", "dim", "left", 24)
+        Lumi.Label(lx, B.y + 34, 150, "Pixels per notch", "dim", "left", 30)
         Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("scrollPtrPx")),
             (t) => Atlas.SetCfgInt("scrollPtrPx", t, 2, 200, 18), "", true)
         Lumi.Toggle(lx, B.y + 70, "Pin the cursor while scrolling",
             Cfg("scrollPtrPin"), (v) => Atlas.SetCfg("scrollPtrPin", v ? 1 : 0))
-        Lumi.Toggle(lx, B.y + 98, "Invert (push to scroll)",
+        Lumi.Toggle(lx, B.y + 102, "Invert (push to scroll)",
             Cfg("scrollPtrInvert"),
             (v) => Atlas.SetCfg("scrollPtrInvert", v ? 1 : 0))
         Lumi.Label(rxw, B.y + 12, 300, "Wheel repeat", "section")
-        Lumi.Label(rxw, B.y + 36, 150, "Tilt guard (ms)", "dim", "left", 24)
+        Lumi.Label(rxw, B.y + 34, 150, "Tilt guard (ms)", "dim", "left", 30)
         Lumi.Field(rxw + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
             (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150), "", true)
-        Lumi.Label(rxw, B.y + 72, 150, "Wheel guard (ms)", "dim", "left", 24)
+        Lumi.Label(rxw, B.y + 70, 150, "Wheel guard (ms)", "dim", "left", 30)
         Lumi.Field(rxw + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
             (t) => Atlas.SetCfgInt("wheelRepeatMs", t, 0, 1000, 0), "", true)
         Lumi.Para(rxw, B.y + 104, col, 40,
             "Razer tilt wheels repeat while held; 150 ms turns a held tilt "
             . "into one press. 0 = off.", "mute")
-        Lumi.Para(lx, B.y + 128, col, B.h - 140,
+        Lumi.Para(lx, B.y + 134, col, B.h - 146,
             "Bind “Drag scroll” to an input, hold it and move the mouse. "
             . "Pinning holds the cursor on the spot you started from, so "
             . "travel is unlimited and the pointer never drifts off the "
@@ -17813,7 +17816,7 @@ class Atlas {
         B := bands[3]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Click lock", "section")
-        Lumi.Label(lx, B.y + 38, 170, "Lock button", "dim", "left", 30)
+        Lumi.Label(lx, B.y + 36, 170, "Lock button", "dim", "left", 30)
         Lumi.Field(lx + 176, B.y + 36, 170, 30, Cfg("hkClickLock"),
             Atlas.StrCommit("hkClickLock"), "unassigned", true)
         Lumi.Toggle(lx, B.y + 76, "Release on the next keystroke",
@@ -17848,7 +17851,7 @@ class Atlas {
         ; two rows need p2 + 60 = 112), so the three minimums still total
         ; what they did.
         bands := Atlas.Bands(y + 34, h - 34, [0.34, 0.32, 0.34], [184, 148, 156])
-        half := (w - 20) // 2
+        half := (w - 12) // 2
         ; hotkeys: three stacked columns, derived from the width
         colw := (w - 72) // 3
 
@@ -17873,7 +17876,7 @@ class Atlas {
             "mute", "left", 40)
 
         ; ── band 1: PowerScribe ─────────────────────────────────────────
-        rx := x + half + 20
+        rx := x + half + 12
         rw := w - (rx - x)
         Lumi.Card(rx, B.y, rw, B.h)
         pl := Min(180, rw - 190)
@@ -17898,14 +17901,14 @@ class Atlas {
         for exe in g_Cfg["psExes"]
             psList .= (psList = "" ? "" : "; ") exe
         py2 := py1 + 36
-        Lumi.Label(rx + 24, py2, pl, "Processes", "dim", "left", 26)
+        Lumi.Label(rx + 24, py2, pl, "Processes", "dim", "left", 24)
         Lumi.Label(rx + 24, py2 + 24, rw - 48, psList,
             "code", "left", Max(16, B.h - (py2 + 24 - B.y) - 10))
 
         ; ── band 2: hotkeys ─────────────────────────────────────────────
         B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
-        Lumi.Label(x + 24, B.y + 10, 300, "Hotkeys", "section")
+        Lumi.Label(x + 24, B.y + 12, 300, "Hotkeys", "section")
         p2 := Atlas.Pitch(B.h - 44, 2, 52, 58)
         hy := B.y + 30
         c1 := x + 24
@@ -17974,11 +17977,11 @@ class Atlas {
             (*) => Atlas.RestoreShipped(), "ghost")
         ; Where the config actually is, on screen, always. This is the thing
         ; whose absence caused the bindings to look lost on every upgrade.
-        Lumi.Label(x + 24, B.y + 90, w - 330,
+        Lumi.Label(x + 24, B.y + 88, w - 330,
             (CFG_PORTABLE ? "PORTABLE · " : "")
             . CFG_PATH
             . (CFG_ADOPTED != "" ? "   (adopted from " CFG_ADOPTED ")" : ""),
-            "code", "left", 22)
+            "code", "left", 30)
         Lumi.Label(x + w - 300, B.y + 88, 86, "HUD corner", "dim", "left", 30)
         Lumi.Select(x + w - 210, B.y + 88, 186, 30, Atlas.HUD_CORNER_LABELS,
             Atlas.HudCornerIdx(), (i, t) => Atlas.SetHudCorner(i))
@@ -18054,7 +18057,7 @@ class Atlas {
     }
 
     static NumRow(x, y, label, key, lo, hi, dflt, lw := 200) {
-        Lumi.Label(x, y, lw, label, "dim", "left", 26)
+        Lumi.Label(x, y, lw, label, "dim", "left", 30)
         Lumi.Field(x + lw, y, 90, 30, String(Cfg(key)),
             Atlas.NumCommit(key, lo, hi, dflt), "", true)
     }
@@ -18204,9 +18207,9 @@ class Atlas {
             rows.Push({cells: [p.time, p.kind, p.detail]})
             i -= 1
         }
-        Atlas.list := Lumi.List(x, y + 66, w, h - 150, rows,
+        Atlas.list := Lumi.List(x, y + 66, w, h - 162, rows,
             [{w: 90, kind: "code"}, {w: 150, kind: "mono"}, {w: w - 280}],
-            0, 28, ["Time", "Kind", "What happened"])
+            0, 30, ["Time", "Kind", "What happened"])
 
         Lumi.Label(x, y + h - 92, w,
             "To watch your mouse live — to check that every button is "
@@ -18226,7 +18229,7 @@ class Atlas {
         Lumi.Btn(b[4].x, by, b[4].w, 34, "Test my mouse and keyboard…",
             (*) => TesterShow(), "ghost")
         if (rows.Length = 0)
-            Lumi.Label(x, y + 110, w,
+            Lumi.Label(x + 12, y + 92, w - 24,
                 "Nothing to report — nothing has gone wrong since RadMapper "
                 . "started.", "mute")
     }
@@ -18465,9 +18468,9 @@ class Atlas {
             ; Rec and Pick are to the KEY what Rec/Keys are to the value: the
             ; field wants a key NAME, and typing "{Numpad1}" or "^c" into it
             ; produces a row that can never be hooked.
-            Lumi.Btn(400, 154, 60, 30, "Rec",
+            Lumi.Btn(396, 154, 60, 30, "Rec",
                 Atlas.RecKey(st), "accent")
-            Lumi.Btn(466, 154, 70, 30, "Pick",
+            Lumi.Btn(462, 154, 70, 30, "Pick",
                 Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
@@ -18998,8 +19001,8 @@ class Atlas {
             ; be two more places for the deck to drift from the editor.
             st.input := Lumi.Field(150, 126, 240, 30,
                 IsWheel(host) ? "" : host, 0, "Numpad1, F8, CapsLock", true)
-            Lumi.Btn(400, 126, 60, 30, "Rec", Atlas.RecKey(st), "accent")
-            Lumi.Btn(466, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
+            Lumi.Btn(396, 126, 60, 30, "Rec", Atlas.RecKey(st), "accent")
+            Lumi.Btn(462, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
             for b in LAYER_HOSTS {           ; the thumb buttons: the only
@@ -19017,7 +19020,7 @@ class Atlas {
 
         i := 0
         for d in Atlas.DECK_DIRS {
-            ry := 208 + i * 44
+            ry := 208 + i * 42
             wheel := d[1]
             existing := Atlas.DeckFind(app, host, wheel)
             code := existing ? existing["action"]["type"] : "none"
