@@ -10775,6 +10775,11 @@ Watchdog() {
 ; a delivery mid-flight (its own "+" is down for a moment), a macro, or an
 ; open menu/switcher.
 WatchdogSweepSafe() {
+    ; A hook (re)install wipes AutoHotkey's physical-state table, so for a
+    ; few seconds "physically up" is not evidence of anything.
+    since := A_TickCount - g_HookChangedAt
+    if (since >= 0 && since < 5000)
+        return false
     for name, st in g_BS {
         if st.down
             return false
@@ -10787,6 +10792,65 @@ WatchdogSweepSafe() {
             return false
     }
     return true
+}
+
+; KEEP OUR MOUSE HOOK AT THE FRONT OF THE CHAIN WHILE PACS IS IN FRONT.
+; Windows calls low-level mouse hooks newest-first, and any hook may eat an
+; event before the older ones see it. IntelliSpace can install its own while
+; it runs, AFTER RadMapper started, so over its images and series list it
+; got the tilt first and consumed it: RadMapper never saw the notch, the
+; list scrolled sideways, the teleport never fired and nothing reached
+; Diagnostics. InstallMouseHook(true, true) removes our hook and installs it
+; again, which puts it back in front.
+;
+; Done when a PACS window comes to the front and then every 10 s while it
+; stays there -- and ONLY while nothing is held: a reinstall wipes
+; AutoHotkey's physical-state table (HookChanged), and a press that
+; straddles one would be judged on a reading that means nothing.
+HookFrontTick(*) {
+    static lastHwnd := 0, lastAt := 0, logged := false
+    if !g_Enabled
+        return
+    fg := FgHwnd()
+    exe := ""
+    try exe := WinGetProcessName("ahk_id " fg)
+    if (exe != "IntelliSpacePACSRadiology.exe") {
+        lastHwnd := 0
+        return
+    }
+    now := A_TickCount
+    if (fg = lastHwnd && now - lastAt >= 0 && now - lastAt < 10000)
+        return
+    for name, st in g_BS {
+        if st.down
+            return
+    }
+    for b in BUTTONS {
+        if GetKeyState(b)                    ; logically down: a native drag
+            return
+    }
+    if (IsObject(g_Radial) || IsObject(g_AppSw) || IsObject(g_ClickLock)
+        || IsObject(g_ScrollPtr))
+        return
+    try {
+        if Warp.active
+            return
+    }
+    try {
+        InstallMouseHook(true, true)
+        HookChanged()
+        lastHwnd := fg
+        lastAt := now
+        if !logged {                         ; once per session: proof it ran
+            logged := true
+            Problem("hook", "mouse hook moved back to the front of the chain"
+                . " (PACS in front)")
+        }
+    } catch as e {
+        Problem("hook-error", "could not reinstall the mouse hook: " e.Message)
+        lastHwnd := fg
+        lastAt := now
+    }
 }
 
 ; Evidence for Diagnostics, taken the moment Panic is pressed and BEFORE it
@@ -12043,6 +12107,7 @@ BuildTray() {
 Cleanup(*) {
     global g_SpeedSaved, g_Problems, g_FgLockSaved
     SetTimer(Watchdog, 0)
+    SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
@@ -12100,6 +12165,7 @@ Init() {
     StationWatchStart()                      ; recognise the screens, place windows
     OnExit(Cleanup)
     SetTimer(Watchdog, 750)                  ; physical-state reconciliation
+    SetTimer(HookFrontTick, 2000)            ; keep our mouse hook first in line
     ; TrayTip is (Text, Title, Options) in v2 -- Text first. (The old
     ; not-admin UIPI warning is gone: AJ's whole stack runs standard-user,
     ; so it was a false alarm on every launch.)

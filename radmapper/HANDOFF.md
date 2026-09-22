@@ -147,6 +147,19 @@ in spirit (left/right/middle instant everywhere).
   copy Diagnostics: no "tilt" line + no LastEvent means the trackball driver
   sends it past the hook (check the trackball software's tilt setting).
 
+## Tilt eaten by PACS's own mouse hook
+- User report: tilt still scrolls the series list, no Diagnostics, wired
+  Logitech without software. Cause taken as IntelliSpace installing its own
+  low-level mouse hook after ours (newest hook runs first and can eat it).
+- `HookFrontTick` (2 s timer): when an IntelliSpace window comes to the front
+  and every 10 s while it stays there, with nothing held (no g_BS down, no
+  logical button down, no menu/switcher/latch/drag scroll/Warp),
+  `InstallMouseHook(true, true)` + `HookChanged()`. Logs "hook" once.
+- `WatchdogSweepSafe` stands down 5 s after any hook change (the physical
+  table is wiped).
+- Check: tilt over the series list teleports; Diagnostics shows one "hook"
+  line. If not, the next suspect is raw input, which no hook can block.
+
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,
   config/editors) are being applied on this branch; see the PR for the list.
