@@ -1328,7 +1328,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7"
+global RM_VERSION := "0.7.1"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1385,6 +1385,13 @@ global CFG_NAME     := "RadMapperConfig.json"
 ; v0.1 rename: the pre-RadMapper config is adopted once and deliberately LEFT
 ; ON DISK afterwards as a fallback.
 global OLD_CFG_NAME := "RadMouseConfig.json"
+; v0.7.1 one-time reset: a config whose "resetEpoch" is below this is set
+; aside once (RadMapperConfig.pre-reset-<stamp>.json beside it, a name the
+; backup pruning never touches) and replaced with the shipped defaults, so
+; the station is set up fresh. Every config the script writes afterwards --
+; defaults, imports, restored backups -- is stamped, so it never fires twice.
+; Raise this only to force another reset on every station.
+global CFG_RESET_EPOCH := 1
 
 global BUTTONS := ["LButton", "RButton", "MButton", "XButton1", "XButton2"]
 global WHEELS  := ["WheelUp", "WheelDown", "WheelLeft", "WheelRight"]
@@ -2583,6 +2590,7 @@ MenuByName(name) {
 DefaultCfg() {
     c := Map()
     c["version"] := 1
+    c["resetEpoch"] := CFG_RESET_EPOCH
     c["settings"] := Map()
     for k, v in DEFAULTS
         c["settings"][k] := v
@@ -3099,6 +3107,9 @@ LoadCfg() {
             loaded := JsonLoad(txt)
             ValidateCfgShape(loaded)
             if (IsObject(loaded) && loaded.Has("bindings")) {
+                if (MGet(loaded, "resetEpoch", 0) < CFG_RESET_EPOCH
+                    && ResetCfgOnce())
+                    return
                 BackupCfg()                  ; pre-migration snapshot (v1.3)
                 g_Cfg := loaded
                 NormalizeCfg()               ; backfill + validate + migrate
@@ -3131,6 +3142,29 @@ LoadCfg() {
     g_Cfg := DefaultCfg()
     SaveCfg()
     RebuildIndex()
+}
+
+/**
+ * The v0.7.1 one-time reset (see CFG_RESET_EPOCH). Copies the old config
+ * aside FIRST and gives up -- loading it as normal -- if that copy fails, so
+ * the old setup can never be lost. Returns true when defaults are in place.
+ */
+ResetCfgOnce() {
+    global g_Cfg
+    aside := CFG_DIR "\RadMapperConfig.pre-reset-"
+        . FormatTime(, "yyyyMMdd-HHmmss") ".json"
+    try FileCopy(CFG_PATH, aside, 0)
+    catch
+        return false
+    g_Cfg := DefaultCfg()
+    SaveCfg()
+    RebuildIndex()
+    Problem("config-reset", "Config reset to the shipped defaults for v"
+        . RM_VERSION "; the old one is saved as " aside)
+    TrayTip("Settings were reset to the shipped defaults. Your old config is"
+        . " saved in " CFG_DIR " (Import config… brings it back).",
+        "RadMapper", "Iconi")
+    return true
 }
 
 /**
@@ -3183,6 +3217,7 @@ RestoreNewestBackup(why) {
 NormalizeCfg(imported := false) {
     c := g_Cfg
     ValidateCfgShape(c)
+    c["resetEpoch"] := CFG_RESET_EPOCH       ; a config kept is a config chosen
     if !c.Has("settings")
         c["settings"] := Map()
     for k in ["apps", "layers"] {

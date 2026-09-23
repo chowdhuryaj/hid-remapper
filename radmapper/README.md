@@ -1,4 +1,4 @@
-# RadMapper 0.7
+# RadMapper 0.7.1
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -6,6 +6,11 @@ IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
 **This is a review build.** It has been checked for syntax balance, by reading,
 and by the portable checks below, but it has not yet run on a Windows
 workstation. Treat it as a candidate for testing.
+
+**0.7.1 starts fresh.** The first time 0.7.1 loads an existing config, it
+copies it aside as `RadMapperConfig.pre-reset-<date>.json` in the config
+folder (`%APPDATA%\RadMapper`) and starts from the shipped defaults. This
+happens once. To get the old setup back, use **Import config…** on that file.
 
 ## Try it in two minutes (Windows)
 
