@@ -62,7 +62,7 @@ global VER := "1.0"
 global CFG_DIR := A_AppData "\RadWheel"
 global CFG_FILE := CFG_DIR "\RadWheel.ini"
 
-global S := Map()                ; settings
+global Conf := Map()                ; settings
 global Menus := []               ; menu objects, in file order
 global Cur := 0                  ; the open wheel, or 0
 global Held := Map()             ; trigger key -> press info
@@ -81,7 +81,7 @@ ClickSwallow.CaseSense := "Off"
 
 global SETTING_KEYS := ["Size", "ShowDelay", "SubmenuDelay", "ToggleTimeout",
     "Confirm", "ReturnPointer", "RightClickMethod", "PsExes", "PacsExes",
-    "PacsViewerTitle", "ReturnDelay"]
+    "PacsViewerTitle", "ReturnDelay", "TapMs"]
 
 DefaultSettings() {
     d := Map()
@@ -96,6 +96,8 @@ DefaultSettings() {
     d["PacsExes"] := "IntelliSpacePACSRadiology.exe"
     d["PacsViewerTitle"] := "VirtualMonitor"
     d["ReturnDelay"] := 60           ; ms before focus goes back after PS/PACS
+    d["TapMs"] := 300                ; a press shorter than this, let go in
+                                     ;   the centre, is a TAP (normal click)
     return d
 }
 
@@ -199,9 +201,9 @@ Claims(m) {
 
 ProgramExes(p) {
     if (p = "PACS")
-        p := S["PacsExes"]
+        p := Conf["PacsExes"]
     else if (p = "PowerScribe")
-        p := S["PsExes"]
+        p := Conf["PsExes"]
     out := []
     for e in StrSplit(p, ",") {
         e := Trim(e)
@@ -275,8 +277,8 @@ IniGet(sec, key, def := "") {
 ToInt(v, def) => IsInteger(v) ? Integer(v) : def
 
 LoadConfig() {
-    global S, Menus
-    S := DefaultSettings()
+    global Conf, Menus
+    Conf := DefaultSettings()
     Menus := []
     if !FileExist(CFG_FILE) {
         Menus := SeedMenus()
@@ -284,10 +286,10 @@ LoadConfig() {
         return true                          ; first run
     }
     for k in SETTING_KEYS
-        S[k] := IniGet("Settings", k, S[k])
+        Conf[k] := IniGet("Settings", k, Conf[k])
     for k in ["ShowDelay", "SubmenuDelay", "ToggleTimeout", "Confirm",
-              "ReturnPointer", "ReturnDelay"]
-        S[k] := ToInt(S[k], DefaultSettings()[k])
+              "ReturnPointer", "ReturnDelay", "TapMs"]
+        Conf[k] := ToInt(Conf[k], DefaultSettings()[k])
     secs := ""
     try secs := IniRead(CFG_FILE)
     for sec in StrSplit(secs, "`n") {
@@ -338,7 +340,7 @@ SaveConfig() {
        . "; the tray icon). Values are in quotes; \n is a new line.`r`n`r`n"
        . "[Settings]`r`n"
     for k in SETTING_KEYS
-        t .= k "=" Q(S[k]) "`r`n"
+        t .= k "=" Q(Conf[k]) "`r`n"
     for m in Menus {
         t .= "`r`n[Menu " m.name "]`r`n"
            . "Trigger=" Q(m.trigger) "`r`n"
@@ -533,7 +535,7 @@ SlotAt(dx, dy, n) => Mod(Round(Bearing(dx, dy) / (360 / n)), n) + 1
 
 WheelScale() {
     static sizes := Map("Small", 0.85, "Medium", 1.0, "Large", 1.2)
-    k := sizes.Has(S["Size"]) ? sizes[S["Size"]] : 1.0
+    k := sizes.Has(Conf["Size"]) ? sizes[Conf["Size"]] : 1.0
     return k * A_ScreenDPI / 96
 }
 
@@ -595,20 +597,20 @@ GdipStart() {
     DllCall("gdiplus\GdiplusStartup", "ptr*", &token, "ptr", si, "ptr", 0)
 }
 
-GfxSetup(G) {
-    DllCall("gdiplus\GdipSetSmoothingMode", "ptr", G, "int", 4)
-    DllCall("gdiplus\GdipSetTextRenderingHint", "ptr", G, "int", 4)
+GfxSetup(gfx) {
+    DllCall("gdiplus\GdipSetSmoothingMode", "ptr", gfx, "int", 4)
+    DllCall("gdiplus\GdipSetTextRenderingHint", "ptr", gfx, "int", 4)
 }
 
 Scratch() {
-    static G := 0, bmp := 0
-    if !G {
+    static gfx := 0, bmp := 0
+    if !gfx {
         DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", 4, "int", 4, "int", 0,
             "int", 0xE200B, "ptr", 0, "ptr*", &bmp)
-        DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &G)
-        GfxSetup(G)
+        DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &gfx)
+        GfxSetup(gfx)
     }
-    return G
+    return gfx
 }
 
 GetFont(face, px, bold) {
@@ -662,44 +664,44 @@ MeasureW(str, px, bold := false, face := "Segoe UI") {
     return w
 }
 
-FillCircle(G, argb, cx, cy, r) {
+FillCircle(gfx, argb, cx, cy, r) {
     b := 0
     DllCall("gdiplus\GdipCreateSolidFill", "uint", argb, "ptr*", &b)
-    DllCall("gdiplus\GdipFillEllipse", "ptr", G, "ptr", b, "float", cx - r,
+    DllCall("gdiplus\GdipFillEllipse", "ptr", gfx, "ptr", b, "float", cx - r,
         "float", cy - r, "float", 2 * r, "float", 2 * r)
     DllCall("gdiplus\GdipDeleteBrush", "ptr", b)
 }
 
-RingCircle(G, argb, cx, cy, r, w := 1) {
+RingCircle(gfx, argb, cx, cy, r, w := 1) {
     p := 0
     DllCall("gdiplus\GdipCreatePen1", "uint", argb, "float", w, "int", 2, "ptr*", &p)
-    DllCall("gdiplus\GdipDrawEllipse", "ptr", G, "ptr", p, "float", cx - r,
+    DllCall("gdiplus\GdipDrawEllipse", "ptr", gfx, "ptr", p, "float", cx - r,
         "float", cy - r, "float", 2 * r, "float", 2 * r)
     DllCall("gdiplus\GdipDeletePen", "ptr", p)
 }
 
 ; Angles here are GDI+ angles: degrees clockwise from 3 o'clock.
-FillPieDeg(G, argb, cx, cy, r, start, sweep) {
+FillPieDeg(gfx, argb, cx, cy, r, start, sweep) {
     b := 0
     DllCall("gdiplus\GdipCreateSolidFill", "uint", argb, "ptr*", &b)
-    DllCall("gdiplus\GdipFillPie", "ptr", G, "ptr", b, "float", cx - r,
+    DllCall("gdiplus\GdipFillPie", "ptr", gfx, "ptr", b, "float", cx - r,
         "float", cy - r, "float", 2 * r, "float", 2 * r, "float", start,
         "float", sweep)
     DllCall("gdiplus\GdipDeleteBrush", "ptr", b)
 }
 
-ArcDeg(G, argb, cx, cy, r, start, sweep, w) {
+ArcDeg(gfx, argb, cx, cy, r, start, sweep, w) {
     p := 0
     DllCall("gdiplus\GdipCreatePen1", "uint", argb, "float", w, "int", 2, "ptr*", &p)
     DllCall("gdiplus\GdipSetPenStartCap", "ptr", p, "int", 2)
     DllCall("gdiplus\GdipSetPenEndCap", "ptr", p, "int", 2)
-    DllCall("gdiplus\GdipDrawArc", "ptr", G, "ptr", p, "float", cx - r,
+    DllCall("gdiplus\GdipDrawArc", "ptr", gfx, "ptr", p, "float", cx - r,
         "float", cy - r, "float", 2 * r, "float", 2 * r, "float", start,
         "float", sweep)
     DllCall("gdiplus\GdipDeletePen", "ptr", p)
 }
 
-Pill(G, argb, x, y, w, h) {
+Pill(gfx, argb, x, y, w, h) {
     w := Max(w, h)
     p := 0, b := 0
     DllCall("gdiplus\GdipCreatePath", "int", 0, "ptr*", &p)
@@ -709,19 +711,19 @@ Pill(G, argb, x, y, w, h) {
         "float", h, "float", h, "float", 270, "float", 180)
     DllCall("gdiplus\GdipClosePathFigure", "ptr", p)
     DllCall("gdiplus\GdipCreateSolidFill", "uint", argb, "ptr*", &b)
-    DllCall("gdiplus\GdipFillPath", "ptr", G, "ptr", b, "ptr", p)
+    DllCall("gdiplus\GdipFillPath", "ptr", gfx, "ptr", b, "ptr", p)
     DllCall("gdiplus\GdipDeleteBrush", "ptr", b)
     DllCall("gdiplus\GdipDeletePath", "ptr", p)
 }
 
-Text(G, str, x, y, w, h, argb, px, bold := false, align := 1, face := "Segoe UI") {
+Text(gfx, str, x, y, w, h, argb, px, bold := false, align := 1, face := "Segoe UI") {
     if (str = "")
         return
     rc := Buffer(16)
     NumPut("float", x, "float", y, "float", w, "float", h, rc)
     b := 0
     DllCall("gdiplus\GdipCreateSolidFill", "uint", argb, "ptr*", &b)
-    DllCall("gdiplus\GdipDrawString", "ptr", G, "wstr", str, "int", -1,
+    DllCall("gdiplus\GdipDrawString", "ptr", gfx, "wstr", str, "int", -1,
         "ptr", GetFont(face, px, bold), "ptr", rc, "ptr", GetFmt(align), "ptr", b)
     DllCall("gdiplus\GdipDeleteBrush", "ptr", b)
 }
@@ -737,7 +739,7 @@ ItemXY(g, cx, cy, i, radius) {
     return {x: cx + radius * Sin(a), y: cy - radius * Cos(a), sx: Sin(a), cy: Cos(a)}
 }
 
-DrawLabel(G, g, cx, cy, i, txt, sel, col) {
+DrawLabel(gfx, g, cx, cy, i, txt, sel, col) {
     s := g.s
     fs := 12 * s
     w := Min(g.labelMax, MeasureW(txt, fs, true) + 16 * s)
@@ -751,76 +753,76 @@ DrawLabel(G, g, cx, cy, i, txt, sel, col) {
         x := p.x - w / 2
         y := (p.cy > 0) ? p.y - h : p.y
     }
-    Pill(G, sel ? col : 0xE6161920, x, y, w, h)
-    Text(G, txt, x + 8 * s, y, w - 16 * s, h, sel ? 0xFFFFFFFF : 0xFFE6E8EB,
+    Pill(gfx, sel ? col : 0xE6161920, x, y, w, h)
+    Text(gfx, txt, x + 8 * s, y, w - 16 * s, h, sel ? 0xFFFFFFFF : 0xFFE6E8EB,
         fs, sel)
 }
 
-DrawItem(G, g, cx, cy, i, sl, sel, editor) {
+DrawItem(gfx, g, cx, cy, i, sl, sel, editor) {
     s := g.s
     p := ItemXY(g, cx, cy, i, g.r)
     if (sl.type = "none") {
         if editor {
-            RingCircle(G, sel ? 0xFFFFFFFF : 0x50FFFFFF, p.x, p.y, g.itemR * 0.8,
+            RingCircle(gfx, sel ? 0xFFFFFFFF : 0x50FFFFFF, p.x, p.y, g.itemR * 0.8,
                 sel ? 2 * s : 1)
-            Text(G, "+", p.x - g.itemR, p.y - g.itemR, 2 * g.itemR, 2 * g.itemR,
+            Text(gfx, "+", p.x - g.itemR, p.y - g.itemR, 2 * g.itemR, 2 * g.itemR,
                 0x80FFFFFF, 16 * s)
         } else if sel {
-            RingCircle(G, 0xB0FFFFFF, p.x, p.y, g.itemR * 0.6, 2 * s)
+            RingCircle(gfx, 0xB0FFFFFF, p.x, p.y, g.itemR * 0.6, 2 * s)
         } else
-            FillCircle(G, 0x40FFFFFF, p.x, p.y, 3 * s)
+            FillCircle(gfx, 0x40FFFFFF, p.x, p.y, 3 * s)
         return
     }
     col := SlotColor(sl)
     rr := g.itemR * (sel ? 1.15 : 1.0)
-    FillCircle(G, sel ? col : 0xFF252932, p.x, p.y, rr)
-    RingCircle(G, sel ? 0xFFFFFFFF : col, p.x, p.y, rr, 2 * s)
+    FillCircle(gfx, sel ? col : 0xFF252932, p.x, p.y, rr)
+    RingCircle(gfx, sel ? 0xFFFFFFFF : col, p.x, p.y, rr, 2 * s)
     ic := IconOf(sl)
     big := StrLen(ic) <= 2
-    Text(G, ic, p.x - rr, p.y - rr, 2 * rr, 2 * rr, 0xFFFFFFFF,
+    Text(gfx, ic, p.x - rr, p.y - rr, 2 * rr, 2 * rr, 0xFFFFFFFF,
         (big ? 17 : 10.5) * s * (sel ? 1.1 : 1), !big, 1,
         big ? "Segoe UI Symbol" : "Segoe UI")
     if (sl.type = "menu") {
         q := ItemXY(g, cx, cy, i, g.r + rr + 5 * s)
-        FillCircle(G, col, q.x, q.y, 3 * s)
+        FillCircle(gfx, col, q.x, q.y, 3 * s)
     }
-    DrawLabel(G, g, cx, cy, i, PillText(sl), sel, col)
+    DrawLabel(gfx, g, cx, cy, i, PillText(sl), sel, col)
 }
 
-DrawBase(G, cx, cy, g, m, editor := false) {
+DrawBase(gfx, cx, cy, g, m, editor := false) {
     s := g.s
-    FillCircle(G, 0xE6161920, cx, cy, g.bgR)
-    RingCircle(G, 0x40FFFFFF, cx, cy, g.bgR, 1)
-    FillCircle(G, 0xFF0F1115, cx, cy, g.hubR)
-    RingCircle(G, 0x50FFFFFF, cx, cy, g.hubR, 1)
+    FillCircle(gfx, 0xE6161920, cx, cy, g.bgR)
+    RingCircle(gfx, 0x40FFFFFF, cx, cy, g.bgR, 1)
+    FillCircle(gfx, 0xFF0F1115, cx, cy, g.hubR)
+    RingCircle(gfx, 0x50FFFFFF, cx, cy, g.hubR, 1)
     if editor
-        Text(G, "TAP", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
+        Text(gfx, "TAP", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
             0xC0FFFFFF, 11 * s, true)
     else
-        Text(G, "✕", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
+        Text(gfx, "✕", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
             0x80FFFFFF, 15 * s, false, 1, "Segoe UI Symbol")
     capW := 2 * (g.r - g.itemR) - 16 * s
-    Text(G, m.name, cx - capW / 2, cy + g.hubR + 3 * s, capW, 16 * s,
+    Text(gfx, m.name, cx - capW / 2, cy + g.hubR + 3 * s, capW, 16 * s,
         0xA0FFFFFF, 11 * s)
     loop g.n
-        DrawItem(G, g, cx, cy, A_Index, m.slots[A_Index], false, editor)
+        DrawItem(gfx, g, cx, cy, A_Index, m.slots[A_Index], false, editor)
 }
 
-DrawSel(G, cx, cy, g, m, i, editor := false) {
+DrawSel(gfx, cx, cy, g, m, i, editor := false) {
     s := g.s
     sl := m.slots[i]
     col := (sl.type = "none") ? 0xFF8B93A1 : SlotColor(sl)
     a := (i - 1) * g.step
-    FillPieDeg(G, (col & 0xFFFFFF) | 0x38000000, cx, cy, g.bgR - 1,
+    FillPieDeg(gfx, (col & 0xFFFFFF) | 0x38000000, cx, cy, g.bgR - 1,
         a - 90 - g.step / 2, g.step)
-    FillCircle(G, 0xFF0F1115, cx, cy, g.hubR)
-    RingCircle(G, 0x50FFFFFF, cx, cy, g.hubR, 1)
+    FillCircle(gfx, 0xFF0F1115, cx, cy, g.hubR)
+    RingCircle(gfx, 0x50FFFFFF, cx, cy, g.hubR, 1)
     if editor
-        Text(G, "TAP", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
+        Text(gfx, "TAP", cx - g.hubR, cy - g.hubR, 2 * g.hubR, 2 * g.hubR,
             0xC0FFFFFF, 11 * s, true)
     else
-        ArcDeg(G, col, cx, cy, g.hubR + 5 * s, a - 90 - 20, 40, 4 * s)
-    DrawItem(G, g, cx, cy, i, sl, true, editor)
+        ArcDeg(gfx, col, cx, cy, g.hubR + 5 * s, a - 90 - 20, 40, 4 * s)
+    DrawItem(gfx, g, cx, cy, i, sl, true, editor)
 }
 
 ; The per-ring cache. A bitmap per (menu, scale, config version).
@@ -832,14 +834,14 @@ class RingCache {
         if this.cache.Has(key)
             return this.cache[key]
         size := Ceil(g.half * 2)
-        bmp := 0, G := 0
+        bmp := 0, gfx := 0
         DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", size, "int", size,
             "int", 0, "int", 0xE200B, "ptr", 0, "ptr*", &bmp)
-        DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &G)
-        GfxSetup(G)
-        DllCall("gdiplus\GdipGraphicsClear", "ptr", G, "uint", 0)
-        DrawBase(G, size / 2, size / 2, g, m)
-        DllCall("gdiplus\GdipDeleteGraphics", "ptr", G)
+        DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &gfx)
+        GfxSetup(gfx)
+        DllCall("gdiplus\GdipGraphicsClear", "ptr", gfx, "uint", 0)
+        DrawBase(gfx, size / 2, size / 2, g, m)
+        DllCall("gdiplus\GdipDeleteGraphics", "ptr", gfx)
         this.cache[key] := bmp
         return bmp
     }
@@ -861,7 +863,7 @@ class Overlay {
     static hdc := 0
     static hbm := 0
     static obm := 0
-    static G := 0
+    static gfx := 0
     static visible := false
 
     static Init() {
@@ -886,36 +888,38 @@ class Overlay {
         this.hbm := DllCall("CreateDIBSection", "ptr", this.hdc, "ptr", bi,
             "uint", 0, "ptr*", &bits, "ptr", 0, "uint", 0, "ptr")
         this.obm := DllCall("SelectObject", "ptr", this.hdc, "ptr", this.hbm, "ptr")
-        G := 0
-        DllCall("gdiplus\GdipCreateFromHDC", "ptr", this.hdc, "ptr*", &G)
-        GfxSetup(G)
-        this.G := G, this.w := w, this.h := h
+        gfx := 0
+        DllCall("gdiplus\GdipCreateFromHDC", "ptr", this.hdc, "ptr*", &gfx)
+        GfxSetup(gfx)
+        this.gfx := gfx, this.w := w, this.h := h
     }
 
     static Free() {
-        if this.G
-            DllCall("gdiplus\GdipDeleteGraphics", "ptr", this.G)
+        if this.gfx
+            DllCall("gdiplus\GdipDeleteGraphics", "ptr", this.gfx)
         if this.hdc {
             DllCall("SelectObject", "ptr", this.hdc, "ptr", this.obm)
             DllCall("DeleteObject", "ptr", this.hbm)
             DllCall("DeleteDC", "ptr", this.hdc)
         }
-        this.G := 0, this.hdc := 0, this.hbm := 0, this.obm := 0
+        this.gfx := 0, this.hdc := 0, this.hbm := 0, this.obm := 0
         this.w := 0, this.h := 0
     }
 
     ; Show the top-left size x size of the surface at (x, y).
     static Update(x, y, size, alpha := 255) {
-        if !this.visible {
-            this.gui.Show("NA x" x " y" y " w" size " h" size)
-            this.visible := true
-        }
+        ; new pixels first, then show: showing first can flash the previous
+        ; wheel at the new place for a frame
         pt := Buffer(8), sz := Buffer(8), src := Buffer(8, 0)
         NumPut("int", x, "int", y, pt)
         NumPut("int", size, "int", size, sz)
         DllCall("UpdateLayeredWindow", "ptr", this.hwnd, "ptr", 0, "ptr", pt,
             "ptr", sz, "ptr", this.hdc, "ptr", src, "uint", 0,
             "uint*", (alpha << 16) | (1 << 24), "uint", 2)
+        if !this.visible {
+            this.gui.Show("NA x" x " y" y " w" size " h" size)
+            this.visible := true
+        }
     }
 
     static Hide() {
@@ -934,21 +938,21 @@ Paint() {
     g := R.g
     size := Ceil(g.half * 2)
     Overlay.Ensure(size, size)
-    G := Overlay.G
-    DllCall("gdiplus\GdipSetClipRectI", "ptr", G, "int", 0, "int", 0,
+    gfx := Overlay.gfx
+    DllCall("gdiplus\GdipSetClipRectI", "ptr", gfx, "int", 0, "int", 0,
         "int", size, "int", size, "int", 0)
-    DllCall("gdiplus\GdipGraphicsClear", "ptr", G, "uint", 0)
-    DllCall("gdiplus\GdipDrawImageRectI", "ptr", G, "ptr", RingCache.Get(R.menu, g),
+    DllCall("gdiplus\GdipGraphicsClear", "ptr", gfx, "uint", 0)
+    DllCall("gdiplus\GdipDrawImageRectI", "ptr", gfx, "ptr", RingCache.Get(R.menu, g),
         "int", 0, "int", 0, "int", size, "int", size)
     c := size / 2
     if (R.sel > 0)
-        DrawSel(G, c, c, g, R.menu, R.sel)
+        DrawSel(gfx, c, c, g, R.menu, R.sel)
     capW := 2 * (g.r - g.itemR) - 16 * g.s
     if R.practice
-        Text(G, "PRACTICE", c - capW / 2, c - g.hubR - 19 * g.s, capW, 16 * g.s,
+        Text(gfx, "PRACTICE", c - capW / 2, c - g.hubR - 19 * g.s, capW, 16 * g.s,
             0xFFF5B942, 11 * g.s, true)
     else if (R.mode = "toggle")
-        Text(G, "click to choose", c - capW / 2, c - g.hubR - 19 * g.s, capW,
+        Text(gfx, "click to choose", c - capW / 2, c - g.hubR - 19 * g.s, capW,
             16 * g.s, 0xA0FFFFFF, 10.5 * g.s)
     Overlay.Update(Round(R.ax - c), Round(R.ay - c), size, R.alpha)
 }
@@ -994,19 +998,34 @@ PidOf(hwnd) {
 ; The gate decides, per press, whether the button is ours right now. Anything
 ; it says no to stays completely native.
 TrigGate(hk) {
-    if Paused
-        return false
+    ; a release is checked BEFORE pause: a press that was blocked must never
+    ; have its release reach the program (a stray context menu, or "back")
     if RegExMatch(hk, "i) up$") {
         key := SubStr(hk, 2, -3)
         return Held.Has(key) || Swallow.Has(key)
     }
+    if Paused
+        return false
     trig := SubStr(hk, 2)
     key := KeyOf(trig)
+    ; While a wheel is open, left/right/middle belong to the wheel (choose,
+    ; back, cancel: ClickGate) unless this press is the open wheel's own
+    ; top-level trigger. Hotkey variants made earlier win, so this has to be
+    ; decided here rather than left to ClickGate.
+    if (IsObject(Cur) && IsClickKey(key))
+        return TrigOwnsClick(key)
     if (IsObject(Cur) && Cur.key = key)
         return true
     if Held.Has(key)
         return true
     return IsObject(MenuFor(trig))
+}
+
+IsClickKey(k) => (k = "LButton" || k = "RButton" || k = "MButton")
+
+TrigOwnsClick(key) {
+    R := Cur
+    return Held.Has(key) || (IsObject(R) && R.key = key && R.depth = 1)
 }
 
 RegisterHotkeys() {
@@ -1053,18 +1072,25 @@ TrigDown(hk) {
         }
         CloseMenu()
     }
-    if (Held.Has(key) && !IsMouseKey(key))
-        return                               ; keyboard auto-repeat
+    ; keyboard auto-repeat: repeats arrive every ~30 ms while held, so a
+    ; press after a quiet second is a new press (a lost release can't
+    ; leave the key dead)
+    if (Held.Has(key) && !IsMouseKey(key) && A_TickCount - Held[key].last < 1000) {
+        Held[key].last := A_TickCount
+        return
+    }
     if Swallow.Has(key)
         Swallow.Delete(key)
     win := 0
     m := MenuFor(trig, &win)
     if !IsObject(m) {
-        SendNative(key)                      ; the gate changed its mind
-        return
+        Swallow[key] := true                 ; the gate changed its mind: a
+        SendNative(key)                      ;   whole native click, and the
+        return                               ;   real release is swallowed
     }
     MouseGetPos(&x, &y)
-    Held[key] := {menu: m, trig: trig, x: x, y: y, win: win, pass: false}
+    Held[key] := {menu: m, trig: trig, x: x, y: y, win: win, pass: false,
+                  t0: A_TickCount, last: A_TickCount}
     if m.hold
         OpenMenu(m, "hold", key, false, win)
 }
@@ -1089,7 +1115,8 @@ ReleaseKey(key) {
     R := Cur
     if (IsObject(R) && R.key = key && R.mode = "hold") {
         if (R.sel = 0) {
-            tap := !R.shown && R.depth = 1
+            tap := R.depth = 1
+                && (!R.shown || A_TickCount - R.t0 < Conf["TapMs"])
             CloseMenu()
             if tap
                 DoTap(h, key)
@@ -1208,7 +1235,7 @@ Tick() {
             CloseMenu()
             return
         }
-    } else if (now - R.lastMove > S["ToggleTimeout"] * 1000) {
+    } else if (now - R.lastMove > Conf["ToggleTimeout"] * 1000) {
         CloseMenu()
         return
     }
@@ -1233,13 +1260,13 @@ Tick() {
         R.restAt := now
         dirty := true
     }
-    if (!R.shown && now - R.t0 >= S["ShowDelay"]) {
+    if (!R.shown && now - R.t0 >= Conf["ShowDelay"]) {
         R.shown := true
         dirty := true
     }
     ; a submenu opens when the hand crosses the ring on it, or rests on it
     if (R.mode = "hold" && sel > 0 && R.menu.slots[sel].type = "menu"
-        && (dist >= g.r + g.itemR || now - R.restAt >= S["SubmenuDelay"])) {
+        && (dist >= g.r + g.itemR || now - R.restAt >= Conf["SubmenuDelay"])) {
         EnterSub(R, sel, mx, my)
         return
     }
@@ -1312,7 +1339,7 @@ Choose(sel) {
         Toast("Practice: would run “" SlotTitle(sl) "”")
         return
     }
-    if (S["ReturnPointer"] && sl.type != "rclick")
+    if (Conf["ReturnPointer"] && sl.type != "rclick")
         DllCall("SetCursorPos", "int", R.rootX, "int", R.rootY)
     SetTimer(FireSlot.Bind(sl, R.win, R.rootX, R.rootY), -1)
 }
@@ -1357,10 +1384,9 @@ ClickGate(hk) {
     if RegExMatch(hk, "i) up$")
         return ClickSwallow.Has(SubStr(hk, 2, -3))
     b := SubStr(hk, 2)
-    R := Cur
-    if !IsObject(R)
+    if !IsObject(Cur)
         return false
-    return !(R.key = b || Held.Has(b))       ; the trigger handles itself
+    return !TrigOwnsClick(b)                 ; the trigger handles itself
 }
 
 OpenGate(*) => IsObject(Cur)
@@ -1473,7 +1499,7 @@ FireSlot(sl, win := 0, ax := 0, ay := 0, *) {
             default:
                 return
         }
-        if S["Confirm"]
+        if Conf["Confirm"]
             Toast("✓ " SlotTitle(sl), 900)
     } catch as e {
         Toast("Couldn't run “" SlotTitle(sl) "”: " e.Message, 3000)
@@ -1513,7 +1539,7 @@ Deliver(kind, keys, win) {
         case "ps":
             SendToApp(ProgramExes("PowerScribe"), "", keys, "PowerScribe")
         case "pacs":
-            SendToApp(ProgramExes("PACS"), S["PacsViewerTitle"], keys, "PACS")
+            SendToApp(ProgramExes("PACS"), Conf["PacsViewerTitle"], keys, "PACS")
         default:
             SendToApp(ProgramExes(kind), "", keys, kind)
     }
@@ -1563,7 +1589,7 @@ SendToApp(exes, prefer, keys, nice) {
     Sleep(40)
     SendAtomic(keys)
     if prev {
-        Sleep(S["ReturnDelay"])
+        Sleep(Conf["ReturnDelay"])
         try WinActivate("ahk_id " prev)
     }
 }
@@ -1681,7 +1707,7 @@ AccRect(acc, id) {
 }
 
 AccHit(it) {
-    if (S["RightClickMethod"] = "action") {
+    if (Conf["RightClickMethod"] = "action") {
         try {
             it.acc.accDoDefaultAction(it.id)
             return true
@@ -1787,7 +1813,7 @@ CtxRun(path, x, y, mode := "run") {
     } finally {
         HiRes(IsObject(Cur))
         if !keep {
-            if (mode = "list" || !S["ReturnPointer"])
+            if (mode = "list" || !Conf["ReturnPointer"])
                 DllCall("SetCursorPos", "int", ox, "int", oy)
             else
                 DllCall("SetCursorPos", "int", x, "int", y)
@@ -1847,18 +1873,26 @@ TogglePause(*) {
     global Paused
     Paused := !Paused
     CloseMenu()
-    Held.Clear()
-    Swallow.Clear()
+    DropHeld()
     try A_TrayMenu.ToggleCheck("Pause RadWheel")
     if IsObject(Ed)
         try Ed.btnPause.Text := Paused ? "Resume" : "Pause"
     Toast(Paused ? "RadWheel paused: every button is normal" : "RadWheel on")
 }
 
+; Forget every held trigger, but keep swallowing the release of any that is
+; still physically down: its press was blocked, so its release must be too.
+; A press that became a real drag keeps its native release.
+DropHeld() {
+    for key, h in Held.Clone()
+        if (!h.pass && GetKeyState(key, "P"))
+            Swallow[key] := true
+    Held.Clear()
+}
+
 Unstick(*) {
     CloseMenu()
-    Held.Clear()
-    Swallow.Clear()
+    DropHeld()
     ClickSwallow.Clear()
     ClicksOff()
     ; only what is logically down: a lone right-button or thumb-button UP
@@ -1886,7 +1920,7 @@ RecordKeys(prompt := "Press the shortcut now") {
     rg.Show()
     ih := InputHook("L0 T15")
     ih.KeyOpt("{All}", "ES")
-    ih.KeyOpt("{LCtrl}{RCtrl}{LShift}{RShift}{LAlt}{RAlt}{LWin}{RWin}", "-E")
+    ih.KeyOpt("{LCtrl}{RCtrl}{LShift}{RShift}{LAlt}{RAlt}{LWin}{RWin}", "-ES")
     ih.Start()
     ih.Wait()
     rg.Destroy()
@@ -1897,9 +1931,10 @@ RecordKeys(prompt := "Press the shortcut now") {
     if (key = "Escape" && !RegExMatch(mods, "[\^!+#]"))
         return ""
     out := ""
-    for sym in ["^", "!", "+", "#"]
-        if InStr(mods, sym)
-            out .= sym
+    for pair in [["^", "Ctrl"], ["!", "Alt"], ["+", "Shift"], ["#", "LWin"]]
+        if (InStr(mods, pair[1]) || GetKeyState(pair[2], "P")
+            || (pair[1] = "#" && GetKeyState("RWin", "P")))
+            out .= pair[1]
     if (StrLen(key) = 1 && !InStr("!#^+{}", key))
         out .= StrLower(key)
     else
@@ -2093,10 +2128,10 @@ EdFillMenus() {
 
 EdLoadSettings() {
     Ed.loading := true
-    Ed.ddSize.Value := (S["Size"] = "Small") ? 1 : (S["Size"] = "Large") ? 3 : 2
-    Ed.eDelay.Value := S["ShowDelay"]
-    Ed.cConfirm.Value := S["Confirm"] ? 1 : 0
-    Ed.cReturn.Value := S["ReturnPointer"] ? 1 : 0
+    Ed.ddSize.Value := (Conf["Size"] = "Small") ? 1 : (Conf["Size"] = "Large") ? 3 : 2
+    Ed.eDelay.Value := Conf["ShowDelay"]
+    Ed.cConfirm.Value := Conf["Confirm"] ? 1 : 0
+    Ed.cReturn.Value := Conf["ReturnPointer"] ? 1 : 0
     Ed.cStartup.Value := FileExist(A_Startup "\RadWheel.lnk") ? 1 : 0
     Ed.loading := false
 }
@@ -2133,18 +2168,18 @@ EdLoadMenu() {
     Ed.ddProg.Delete()
     Ed.ddProg.Add(progs)
     Ed.ddProg.Value := pidx
-    counts := [], ci := 0
+    cnts := [], ci := 0
     for i, c in COUNTS {
-        counts.Push(String(c))
+        cnts.Push(String(c))
         if (c = m.count)
             ci := i
     }
     if !ci {
-        counts.Push(String(m.count))         ; a hand-edited count
-        ci := counts.Length
+        cnts.Push(String(m.count))         ; a hand-edited count
+        ci := cnts.Length
     }
     Ed.ddCount.Delete()
-    Ed.ddCount.Add(counts)
+    Ed.ddCount.Add(cnts)
     Ed.ddCount.Value := ci
     Ed.loading := false
     if (Ed.slot > m.count)
@@ -2203,19 +2238,19 @@ EdPreview() {
     g1 := Geom(m, 1.0)
     s := Min(1.35, (Min(w, h) / 2 - 2) / g1.half)
     g := Geom(m, s)
-    bmp := 0, G := 0, hbm := 0
+    bmp := 0, gfx := 0, hbm := 0
     DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", w, "int", h, "int", 0,
         "int", 0x26200A, "ptr", 0, "ptr*", &bmp)
-    DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &G)
-    GfxSetup(G)
-    DllCall("gdiplus\GdipGraphicsClear", "ptr", G, "uint", 0xFF1F2128)
-    DrawBase(G, w / 2, h / 2, g, m, true)
+    DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &gfx)
+    GfxSetup(gfx)
+    DllCall("gdiplus\GdipGraphicsClear", "ptr", gfx, "uint", 0xFF1F2128)
+    DrawBase(gfx, w / 2, h / 2, g, m, true)
     if (Ed.slot > 0)
-        DrawSel(G, w / 2, h / 2, g, m, Ed.slot, true)
+        DrawSel(gfx, w / 2, h / 2, g, m, Ed.slot, true)
     else {
-        RingCircle(G, 0xFFFFFFFF, w / 2, h / 2, g.hubR, 2.5 * s)
+        RingCircle(gfx, 0xFFFFFFFF, w / 2, h / 2, g.hubR, 2.5 * s)
     }
-    DllCall("gdiplus\GdipDeleteGraphics", "ptr", G)
+    DllCall("gdiplus\GdipDeleteGraphics", "ptr", gfx)
     DllCall("gdiplus\GdipCreateHBITMAPFromBitmap", "ptr", bmp, "ptr*", &hbm,
         "uint", 0xFF1F2128)
     DllCall("gdiplus\GdipDisposeImage", "ptr", bmp)
@@ -2835,10 +2870,10 @@ EdClear(*) {
 EdSetting(*) {
     if Ed.loading
         return
-    S["Size"] := Ed.ddSize.Text
-    S["ShowDelay"] := ToInt(Ed.eDelay.Value, 180)
-    S["Confirm"] := Ed.cConfirm.Value
-    S["ReturnPointer"] := Ed.cReturn.Value
+    Conf["Size"] := Ed.ddSize.Text
+    Conf["ShowDelay"] := ToInt(Ed.eDelay.Value, 180)
+    Conf["Confirm"] := Ed.cConfirm.Value
+    Conf["ReturnPointer"] := Ed.cReturn.Value
     Changed()
 }
 
@@ -2858,12 +2893,12 @@ EdProgramsDlg(*) {
     pg.BackColor := "1F2128"
     pg.SetFont("s10 cE6E8EB", "Segoe UI")
     pg.Add("Text", "w460", "PowerScribe program(s), separated by commas:")
-    e1 := InField(pg.Add("Edit", "w460", S["PsExes"]))
+    e1 := InField(pg.Add("Edit", "w460", Conf["PsExes"]))
     pg.Add("Text", "w460", "PACS program(s):")
-    e2 := InField(pg.Add("Edit", "w460", S["PacsExes"]))
+    e2 := InField(pg.Add("Edit", "w460", Conf["PacsExes"]))
     pg.Add("Text", "w460", "PACS viewer window title contains (so keys go to the "
         . "viewer, not the worklist; blank = any PACS window):")
-    e3 := InField(pg.Add("Edit", "w460", S["PacsViewerTitle"]))
+    e3 := InField(pg.Add("Edit", "w460", Conf["PacsViewerTitle"]))
     pg.Add("Text", "w460 cA9B1BD", "Tip: hover a window and use the tray icon's "
         . "Window Spy to read its program (ahk_exe).")
     ok := pg.Add("Button", "w100 Default", "OK")
@@ -2871,9 +2906,9 @@ EdProgramsDlg(*) {
     pg.Add("Button", "x+10 w100", "Cancel").OnEvent("Click", (*) => pg.Destroy())
     pg.Show()
     Save(*) {
-        S["PsExes"] := Trim(e1.Value)
-        S["PacsExes"] := Trim(e2.Value)
-        S["PacsViewerTitle"] := Trim(e3.Value)
+        Conf["PsExes"] := Trim(e1.Value)
+        Conf["PacsExes"] := Trim(e2.Value)
+        Conf["PacsViewerTitle"] := Trim(e3.Value)
         pg.Destroy()
         Changed(true)
     }
@@ -2924,8 +2959,8 @@ PickProgram() {
     pg.SetFont("s10 cE6E8EB", "Segoe UI")
     pg.Add("Text", "w340", "Pick a running program, or type its .exe name:")
     lb := InField(pg.Add("ListBox", "w340 r12", list))
-    ed := InField(pg.Add("Edit", "w340"))
-    lb.OnEvent("Change", (*) => ed.Value := lb.Text)
+    edt := InField(pg.Add("Edit", "w340"))
+    lb.OnEvent("Change", (*) => edt.Value := lb.Text)
     lb.OnEvent("DoubleClick", Ok)
     pg.Add("Button", "w100 Default", "OK").OnEvent("Click", Ok)
     pg.Add("Button", "x+10 w100", "Cancel").OnEvent("Click", (*) => pg.Destroy())
@@ -2934,7 +2969,7 @@ PickProgram() {
     WinWaitClose("ahk_id " hwnd)
     return res.v
     Ok(*) {
-        res.v := Trim(ed.Value)
+        res.v := Trim(edt.Value)
         pg.Destroy()
     }
 }

@@ -24,7 +24,7 @@ checks* below.
 | Let go in the centre, press Esc, or click | Cancels. Nothing is sent. |
 | Rest on (or move across) a slot marked › | That wheel opens in its place. |
 | Let go on a slot marked › | That wheel stays open. Click a command in it. |
-| Quick tap | Does what the wheel's **Tap it** setting says (see below). |
+| Quick tap (under 300 ms, no movement) | Does what the wheel's **Tap it** setting says (see below). For PACS tools this is the normal right-click menu. |
 | Keys 1–9 while a wheel is open | Picks slot 1–9. |
 
 ## Shipped setup
@@ -109,6 +109,8 @@ the selected slot for real, after a countdown.
 | A right-click menu item isn't found | Use **Read menu…** to get the exact text, or a `#number` path |
 | Keys go to the PACS worklist instead of the viewer | Programs… › set the viewer's title text |
 | Menu items are hit in the wrong place | In the settings file, set `RightClickMethod="action"` |
+| A slow right-click cancels instead of opening the PACS menu | Raise `TapMs` in the settings file (default 300) |
+| A right-drag in PACS fires a command | Set **Moving at once** to *Drags as normal* on the PACS tools wheel |
 
 The settings live in `%APPDATA%\RadWheel\RadWheel.ini`, a plain UTF-16 INI
 file. You can edit it by hand, copy it to a colleague, or back it up.
@@ -135,5 +137,7 @@ python3 tests/check_source.py
 ```
 
 This checks the BOM, bracket balance, that every called function exists,
-that no v1 syntax slipped in, and that global assignments are declared. It
+that no v1 syntax slipped in, that global assignments are declared, and
+that no function spells one variable two ways (`G`/`g` are one name in
+AutoHotkey). It
 doesn't run AutoHotkey.

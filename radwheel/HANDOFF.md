@@ -27,6 +27,17 @@ Branch `claude/relaxed-hamilton-88wxwj`. Not yet run under AutoHotkey.
   presets on button 5 (hold + tap toggle), PACS more (door), PowerScribe
   on button 4 in PS.
 
+## Review round 1 (subagent, static)
+- Fixed: case-insensitive name clashes (G/g in all draw funcs, Ed/ed,
+  COUNTS/counts; global S renamed Conf); L/R/M-button ownership while a
+  wheel is open (TrigOwnsClick, shared by TrigGate and ClickGate); release
+  checked before pause, DropHeld keeps swallowing held triggers; keyboard
+  auto-repeat by timestamp; TapMs (300) tap window; RecordKeys reads
+  modifiers physically; overlay pixels before Show.
+- check_source.py now flags case clashes (proved on the old file).
+- Not changed: PACS tools seeded as flick (user asked for speed); HotIf
+  stall while MSAA calls block (short, rare).
+
 ## Next steps / risks to verify on Windows
 - Load errors (never executed). Run `README.md` "First run checks".
 - MSAA on IntelliSpace's context menu (WinForms?): names, HASPOPUP state,
