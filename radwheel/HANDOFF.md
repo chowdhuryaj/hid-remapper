@@ -38,6 +38,12 @@ Branch `claude/relaxed-hamilton-88wxwj`. Not yet run under AutoHotkey.
 - Not changed: PACS tools seeded as flick (user asked for speed); HotIf
   stall while MSAA calls block (short, rare).
 
+## User testing (round 1)
+- PR chowdhuryaj/hid-remapper#14 open; b8d7069 sent to the user.
+- Caps Lock turning on when the wheel opened = running RadMapper at the
+  same time (user confirmed). Offered, not built: warn at start if RadMapper
+  is running.
+
 ## Next steps / risks to verify on Windows
 - Load errors (never executed). Run `README.md` "First run checks".
 - MSAA on IntelliSpace's context menu (WinForms?): names, HASPOPUP state,
