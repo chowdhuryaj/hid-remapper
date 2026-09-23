@@ -1,4 +1,4 @@
-# RadMapper 0.6.1-preview
+# RadMapper 0.7.1
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
@@ -7,14 +7,19 @@ IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
 and by the portable checks below, but it has not yet run on a Windows
 workstation. Treat it as a candidate for testing.
 
+**0.7.1 starts fresh.** The first time 0.7.1 loads an existing config, it
+copies it aside as `RadMapperConfig.pre-reset-<date>.json` in the config
+folder (`%APPDATA%\RadMapper`) and starts from the shipped defaults. This
+happens once. To get the old setup back, use **Import config…** on that file.
+
 ## Try it in two minutes (Windows)
 
 1. Install **AutoHotkey v2** from https://www.autohotkey.com (the v2 installer, not v1).
 2. Double-click `RadMapper.ahk`. A tray icon appears and the settings window
    opens on **Home** the first time each version runs.
 3. On Home, pick what you want to do:
-   - **Change what a mouse button does** (a three-question wizard: which
-     button, tap or hold, what it should do; "All options" opens the full editor)
+   - **Change what a mouse button does** (opens the Mouse page: click a part
+     of the mouse, then Add new opens the binding editor)
    - **Change what a keyboard key does**
    - **Set up a radial menu** (commands around the pointer, picked by direction)
    - **Apply a starter pack** (one click sets up a common arrangement, such as
@@ -25,14 +30,32 @@ workstation. Treat it as a candidate for testing.
 To watch every button light up as you press it, use **Test my mouse and
 keyboard…** on the Diagnostics page.
 
-**Shipped defaults are active:** the backtick key toggles dictation, and the two
-thumb buttons jump the pointer between monitors. Review or remove these on the
-Mouse and Keyboard pages. Nothing else is remapped until you add it.
+**Shipped defaults are active:** a tap of CapsLock or the backtick key toggles
+dictation (CapsLock is seeded once into an existing config too), the two
+thumb buttons jump the pointer between monitors on a tap, and inside PACS a
+**hold** of button 4 opens the PACS wheel and a hold of button 5 the window
+presets. Review or remove these on the Mouse and Keyboard pages. Nothing else
+is remapped until you add it.
+
+**Layers are tabs.** The Mouse and Keyboard pages have a tab strip: **Base**,
+**Hold Button 4**, **Hold Button 5** and **Hold CapsLock** -- the only three
+layers. A tab shows what every part of the mouse does *while that button is
+held*, exactly like a keymap layer in QMK or ZMK. Click a part of the mouse
+and its two slots appear on the right, **Tap it** and **Hold it down**, each
+with Set/Change and Clear.
+
+**What a button can do (0.7):** a button has a **tap** and a **hold**, and
+nothing else. Left, right and middle click are always instant; a hold on them
+works only inside one program you name. Only the thumb buttons and CapsLock
+can hold a layer open; rows under any other layer are dropped on load and named
+in Diagnostics. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
+wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Menus, Settings and
 Diagnostics, with a short list of actions. The switch on Home, "Show advanced
-pages and every action", adds Layers, Macros, Apps, Windows and Pointer and the
-full action list. Nothing is lost either way.
+pages and every action", adds Macros, Apps, Windows and Pointer, the wheel
+decks ("Scroll wheel…" on the Mouse and Keyboard pages) and the full action
+list. Nothing is lost either way.
 
 Press **F1** in the settings window for quick help. Open the window at any time
 with **Ctrl+Alt+Shift+F9** or by double-clicking the tray icon.
@@ -45,14 +68,18 @@ Ruler (R), ROI (Shift+R), Magnify (Y), Delete, CLAHE (Shift+C), and
 tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA, 6 Infarct, 7 Liver,
 8 Lung, 9 Lung wide). Rename any of these on the Menus page to match your site.
 
-1. **Menus → select PACS → Assign a button.** The Hold trigger is prefilled;
-   pick the button, then save.
-2. **Hold** that button, **move** toward a command, **release**. Release in
+**In PACS it is already on the thumb buttons:** hold **button 4** for the
+PACS wheel, hold **button 5** for the window presets. A tap of either still
+hops the pointer between monitors.
+
+1. **Hold** the button, **move** toward a command, **release**. Release in
    the centre hub, or press Escape, and nothing fires.
-3. For a preset: hold, move to **Windowing**, pause a moment and the preset
-   ring appears under the cursor, move to the number, release.
-4. If the menu is bound to a **tap** instead, it stays open: rest on a command
-   to fire it, or **tap the button again to close it**.
+2. For a preset: hold button 5, move to the number, release. (From the PACS
+   wheel: hold 4, move to **Windowing**, pause, move to the number, release.)
+3. A menu only ever opens while a button is **held**; there is no tap-opened
+   menu, so letting go is always the way out.
+4. To put a menu on another button: **Menus → select the menu → Assign a
+   button**. The Hold trigger is the only one a menu accepts.
 5. **Practice safely** on the Menus page shows the wheel without sending anything.
 
 **Sending keys to PACS from anywhere:** the action **PACS: send keys** works
@@ -72,7 +99,7 @@ inside this one. Size 9 is the numbered ring for presets.
 |---|---|
 | A button or modifier seems stuck | Press **Ctrl+Alt+Q**, or **Unstick my buttons** at the bottom of the settings window |
 | I want everything native right now | **Ctrl+Alt+Shift+F11** pauses the whole engine; press again to resume. NumLock also pauses. |
-| The settings window will not open | Tray icon > *Settings (classic)…* opens the plain Windows version |
+| The settings window will not open | Tray icon > *Rendering self-test…* shows whether graphics draw on this machine; copy Diagnostics and send it. The engine keeps working either way. |
 | I lost my bindings after updating | You did not. Config lives in `%APPDATA%\RadMapper\RadMapperConfig.json`; the path is shown on Home. |
 | The header says "Not saved to disk" | A write to the settings folder failed. Your edits still work in memory; fix access to the folder and make any edit to retry. Details are on the Diagnostics page. |
 | A corrupt config was found on start | It was copied next to the original with a `.corrupt-` suffix and defaults were loaded. If that copy could not be made, saving is blocked until you move the file and restart. |
