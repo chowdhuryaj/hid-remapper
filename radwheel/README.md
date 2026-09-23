@@ -1,0 +1,139 @@
+# RadWheel 1.0
+
+Radial menus for the reading room: hold a button, move toward a command, let
+go. It's RadMapper's radial-menu feature as a separate, standalone
+AutoHotkey v2 script (`RadWheel.ahk`). It has no libraries and no installer.
+
+**Review build.** This version was checked by reading and by
+`tests/check_source.py`. It hasn't run on Windows yet. See *First run
+checks* below.
+
+## Start
+
+1. Install **AutoHotkey v2** (autohotkey.com).
+2. Double-click `RadWheel.ahk`. On the first run, the settings window opens.
+3. Later, open it by double-clicking the tray icon or pressing
+   **Ctrl+Alt+Shift+F10**.
+
+## Using a wheel
+
+| Do this | What happens |
+|---|---|
+| Hold the button, flick toward a command, let go | Runs the command. If you're quick, the wheel is never drawn. |
+| Hold still | The wheel fades in (after 180 ms) so you can read it. |
+| Let go in the centre, press Esc, or click | Cancels. Nothing is sent. |
+| Rest on (or move across) a slot marked › | That wheel opens in its place. |
+| Let go on a slot marked › | That wheel stays open. Click a command in it. |
+| Quick tap | Does what the wheel's **Tap it** setting says (see below). |
+| Keys 1–9 while a wheel is open | Picks slot 1–9. |
+
+## Shipped setup
+
+| In | Button | Wheel |
+|---|---|---|
+| PACS | **hold right-click** | **PACS tools**: Next series (up), Prev series (down), Ruler, ROI, Magnifying glass, Key image, Window presets ›, More › |
+| PACS | quick right-click | The normal PACS right-click menu, unchanged |
+| PACS | hold **or tap** button 5 | **Window presets** 1–9. A tap keeps the ring open until you click. |
+| PowerScribe | hold button 4 | Dictate (up), Next field (right), Prev field (left) |
+
+**More ›** holds Scout lines (F11), Localizer (F12), and six items taken
+straight from the PACS right-click menu: Measurements, Annotations,
+Flip/Rotate, Zoom presets, Unlink all, and *PowerScribe: Dictate this
+exam*. Check the shortcut letters against your site's PACS keyboard
+settings.
+
+## Setting up (the settings window)
+
+It works like Stream Deck: a picture of the wheel sits on the left. Click a
+slot to edit it, or click the centre (**TAP**) to set the quick tap. Every
+change saves immediately.
+
+**How it opens.** Each wheel has these settings:
+
+- **Button or key**: right, middle, button 4 or 5, Caps Lock, backtick,
+  F13–F20, or **Record key…** for any key or combination. Choose *None* for
+  a wheel that only opens from inside another wheel.
+- **Hold it**: opens the wheel (flick and let go), or does the same as a
+  tap.
+- **Tap it**: opens the wheel and keeps it open (click a command, or tap
+  again), does the button's normal job, does nothing, or runs any command.
+- **Moving at once**: *picks by direction* (fastest), or *drags as normal*.
+  With *drags as normal*, a drag that starts straight away stays a real
+  drag, and you hold still to open the wheel. Use it if your PACS relies on
+  right-button drags.
+- **Works in**: every program, PACS, PowerScribe, or any running program.
+  For a mouse button, this is the program **under the pointer**. For a
+  keyboard key, it's the program in front.
+
+**What a slot does:**
+
+- **Press a keyboard shortcut**: click Record and press the shortcut.
+- **Pick an item from the right-click menu**: RadWheel right-clicks where
+  the wheel opened and clicks the item by its text. Write submenus with
+  `>`, for example `Measurements > Ellipse`. A path that ends on a submenu
+  opens that submenu and leaves it open. **Read menu…** reads your PACS's
+  real menu and lets you pick an item from a tree. If a menu can't be read,
+  use positions instead, for example `#2 > #3` (count items down, skipping
+  separator lines).
+- **Type some text**, **Open another wheel**, or **Open a program, file or
+  web page**.
+- **Send to**: the program under the pointer (the default), PowerScribe,
+  or the PACS viewer. The last two bring that program forward, send the
+  keys, then return focus to where you were. They match programs by exe
+  (the PACS viewer by its "VirtualMonitor" title), set under Programs….
+
+**Practice ▶** shows the wheel and sends nothing. **Try it in 3 s** runs
+the selected slot for real, after a countdown.
+
+## Speed
+
+- A flick that ends before the show delay draws nothing. The command is
+  sent as soon as you let go.
+- Each wheel is drawn once into a cached image, and the cache is filled
+  just after start. After that, moving between slices only redraws the
+  highlighted slice.
+- Click, Esc, and 1–9 are only intercepted while a wheel is open. The rest
+  of the time, clicks don't go through the script at all.
+- The 1 ms Windows timer is switched on only while a wheel is open.
+- Keys go straight to the program under the pointer. Focus switches only
+  when a command targets another program.
+- To make wheels appear sooner, lower **Wheel appears after** at the bottom
+  of the window (0 draws it at once).
+
+## If something goes wrong
+
+| Problem | Fix |
+|---|---|
+| A button or key seems stuck | **Ctrl+Alt+Shift+F12**, or tray › *Release stuck keys* |
+| Everything should be normal right now | **Pause**, in the window or the tray |
+| A right-click menu item isn't found | Use **Read menu…** to get the exact text, or a `#number` path |
+| Keys go to the PACS worklist instead of the viewer | Programs… › set the viewer's title text |
+| Menu items are hit in the wrong place | In the settings file, set `RightClickMethod="action"` |
+
+The settings live in `%APPDATA%\RadWheel\RadWheel.ini`, a plain UTF-16 INI
+file. You can edit it by hand, copy it to a colleague, or back it up.
+
+Don't bind the same button in RadMapper and RadWheel at the same time.
+
+## First run checks (Windows)
+
+1. The script loads without an error and the settings window opens. The
+   wheel picture shows PACS tools.
+2. In PACS, a quick right-click opens the normal menu. Hold right-click and
+   flick up: next series. Hold still and the wheel appears. Let go in the
+   centre: nothing happens.
+3. Tap button 5 in PACS: the preset ring stays open. Click 3. Or press 3.
+4. Hold right-click › More › Measurements: the PACS Measurements submenu is
+   left open at the spot where you started.
+5. Read menu… on a Measurements slot lists the PACS menu as a tree.
+6. Right-drag in another program still works (the wheel is PACS-only).
+
+## Checks
+
+```
+python3 tests/check_source.py
+```
+
+This checks the BOM, bracket balance, that every called function exists,
+that no v1 syntax slipped in, and that global assignments are declared. It
+doesn't run AutoHotkey.
