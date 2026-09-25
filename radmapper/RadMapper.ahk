@@ -3071,8 +3071,10 @@ NormalizeCfg(imported := false) {
     ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
     ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
     ; as "can no longer hold a layer" instead of migrating it. Idempotent.
-    for row in c["bindings"]
-        MigrateRow(row)
+    for row in c["bindings"] {
+        if (row is Map && row.Has("button"))  ; a row with no input stays
+            MigrateRow(row)                   ; invalid and is dropped
+    }
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
     ValidateCfg()                            ; ...and the v0.7 host rules
@@ -3878,19 +3880,21 @@ global g_SwallowUp := Map()
 ; straight from the config: while paused, the index is still built but no
 ; other row may fire, so only this one type is looked for.
 PauseTglRowFor(btn) {
-    app := ""
+    ctx := 0
     for row in g_Cfg["bindings"] {
         if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl")
             continue
         if (CanonicalInputName(NormalizeInputName(MGet(row, "button", ""))) != btn)
             continue
-        ra := MGet(row, "app", "*")
-        if (ra != "*") {
-            if (app = "")
-                app := IsMouseInput(btn) ? AppNameAt(RM_WinAt()) : ActiveAppName()
-            if (ra != app)
-                continue
-        }
+        if (MGet(row, "event", "") = "turn")
+            continue
+        ; the engine's own matcher: program, layer and modifiers all count
+        ; (a "^!p" row must not resume on a bare P). While paused nothing is
+        ; held, so a row inside a layer simply never resumes -- the safe way.
+        if !IsObject(ctx)
+            ctx := CurCtx(btn)
+        if (MatchScore(row, ctx) < 0)
+            continue
         return row
     }
     return 0
@@ -3902,7 +3906,9 @@ PauseTglRowFor(btn) {
 CurCtx(btn := "") {
     held := []
     for name, st in g_BS {
-        if (st.down && !st.consumed)
+        ; only a press that was resolved AS a layer host holds a layer: a
+        ; plain passthrough of the same input must not satisfy layer rows
+        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost)
             held.Push(name)
     }
     app := !g_Idx.anyApp ? ""
@@ -3920,13 +3926,13 @@ HeldHas(ctx, btn) {
 }
 
 ; Specificity score of a binding row against a context, or -1 if it does not
-; apply. Each held-input layer component +16 (so a depth-2 nested layer
-; outscores depth-1 outscores Base -- deepest wins, and ANY held layer row
-; outscores a program's plain row, v0.6.6.6), app exact +8, each modifier +1.
+; apply. Each held-input layer component +64 (ANY held layer row outscores
+; everything else, v0.6.6.6), each modifier +9 (a modifier row beats a plain
+; program row, v0.7.2), app exact +8.
 ; checkLayer=false skips the held-path requirement AND its score: used by the
 ; layer-host probe, which asks "could this row apply if the path were held"
 ; while deciding what a press should arm.
-MatchScore(row, ctx, checkLayer := true) {
+MatchScore(row, ctx, checkLayer := true, checkMods := true) {
     sc := 0
     app := MGet(row, "app", "*")
     if (app != "*") {
@@ -3942,17 +3948,20 @@ MatchScore(row, ctx, checkLayer := true) {
                     continue
                 if !HeldHas(ctx, part)
                     return -1
-                sc += 16
+                sc += 64
             }
         }
     }
     mods := MGet(row, "mods", "")
-    if (mods != "") {
+    if (mods != "" && checkMods) {
         loop parse mods {
             if !InStr(ctx.mods, A_LoopField)
                 return -1
         }
-        sc += StrLen(mods)
+        ; R10: 9 per modifier, so a modifier row beats a plain program row
+        ; (9 > 8) -- a global Ctrl+X row was unreachable wherever a program
+        ; row for X existed. Layers stay on top (64 > 4*9 + 8).
+        sc += 9 * StrLen(mods)
     }
     return sc
 }
@@ -3987,7 +3996,9 @@ LayerHostExists(btn, ctx) {
     if !g_Idx.layerBind.Has(btn)
         return false
     for row in g_Idx.layerBind[btn] {
-        if (MatchScore(row, ctx, false) >= 0)
+        ; modifiers are judged when the layer row fires, not at the host's
+        ; press: a Ctrl row in the layer must still make this a host
+        if (MatchScore(row, ctx, false, false) >= 0)
             return true
     }
     return false
@@ -4097,7 +4108,9 @@ ClearBS(btn) {
     ; A switcher commits when its holder goes up. A holder dropped while
     ; still "down" (lost Up, re-press) left the switcher open, and the
     ; watchdog's sweeps off, until Escape.
-    if (IsObject(g_AppSw) && g_AppSw.holder = st) {
+    ; Only a holder still DOWN is a lost Up: a normal release has already set
+    ; down := false, and AppSwitchWatch reads exactly that as the commit.
+    if (IsObject(g_AppSw) && g_AppSw.holder = st && st.down) {
         st.down := false
         AppSwitchClose(false)
     }
@@ -4348,6 +4361,13 @@ OnPressHK(btn, *) {
     ; (lost selections / phantom clicks), and clicks returning to an inactive
     ; RadMouse window never activated it (title-bar close/minimize dead).
     isKey := IsKeyInput(btn)
+    ; The key that toggled pause is still held: these are its OS repeats,
+    ; not new presses. Without this a held pause key flipped the engine on
+    ; and off every ~30 ms.
+    if (isKey && g_SwallowUp.Has(btn) && InputHeldPhysical(btn))
+        return
+    if g_SwallowUp.Has(btn)                  ; a fresh press: any old claim
+        g_SwallowUp.Delete(btn)              ; on its release is stale
     fgOurs := OwnGuiActive()
     ; POSITIONAL ours-ness is a MOUSE question only: a keystroke goes to the
     ; foreground window, so for keys the cursor's location is irrelevant (and
@@ -4367,6 +4387,14 @@ OnPressHK(btn, *) {
         g_SwallowUp[btn] := 1
         SetTimer(ToggleEnabled, -1)
         return
+    }
+    ; Our window in front but the click aims at a FOREIGN window: hand that
+    ; window the foreground and resolve normally -- a bound thumb button
+    ; over PowerScribe must not go native just because Settings was last
+    ; focused.
+    if (g_Enabled && fgOurs && !ours && uw && !isKey) {
+        try WinActivate("ahk_id " uw)
+        fgOurs := false
     }
     if (!g_Enabled || fgOurs || ours) {
         if (ours && !fgOurs) {
@@ -4496,6 +4524,14 @@ OnPressHK(btn, *) {
     st.pressTick := now
     st.ctx := ctx
     st.spec := spec
+    ; Pressing an input whose row lives in a layer IS using that layer: mark
+    ; the holder now, not when the row fires, so releasing the host first
+    ; (ordinary rollover) cannot also fire the host's own tap. A no-op for
+    ; Base rows.
+    if IsObject(spec.tap)
+        MarkLayerUsed(spec.tap)
+    if IsObject(spec.hold)
+        MarkLayerUsed(spec.hold)
     RM_GetPos(&sx, &sy)
     st.sx := sx
     st.sy := sy
@@ -4587,7 +4623,9 @@ ArmTimers(st) {
 }
 
 StartPollIfNeeded(st) {
-    needs := false
+    ; left/right/middle withheld for a hold or as a layer host: watch for a
+    ; drag, which must reach the app (W/L, pan) rather than be swallowed
+    needs := IsPrimaryButton(st.btn) && st.mode = "pending"
     if (IsObject(st.spec.hold) && st.spec.hold["action"]["type"] = "dragmove")
         needs := true
     if (!needs && IsObject(st.holdBinding)
@@ -4702,9 +4740,27 @@ MovePoll(btn, pollId, *) {
     dy := cy - st.sy
     dist := Sqrt(dx * dx + dy * dy)
 
-    if (st.mode = "held" && IsObject(st.holdBinding) && !st.dragOn
-        && st.holdBinding["action"]["type"] = "dragmove"
-        && dist >= Cfg("dragThreshold")) {
+    if ((st.mode = "pending" || st.mode = "armedmod") && IsPrimaryButton(btn)) {
+        if (!st.usedAsMod && dist >= Cfg("dragThreshold")) {
+            st.gen += 1                      ; the hold timer stands down
+            st.mode := "passthru"            ; ...and the button goes out:
+            st.passBtn := btn                ; a drag is a drag
+            SendNativeDown(btn)
+            st.polling := false
+            SetTimer(, 0)
+        }
+        return
+    }
+    if !(st.mode = "held" && IsObject(st.holdBinding)
+        && st.holdBinding["action"]["type"] = "dragmove") {
+        if (st.mode = "pending" && IsObject(st.spec) && IsObject(st.spec.hold)
+            && st.spec.hold["action"]["type"] = "dragmove")
+            return                           ; its hold has not engaged yet
+        st.polling := false                  ; nothing left to decide
+        SetTimer(, 0)
+        return
+    }
+    if (!st.dragOn && dist >= Cfg("dragThreshold")) {
         st.dragOn := true
         v := MGet(st.holdBinding["action"], "value", "")
         st.passBtn := (v != "") ? v : btn
@@ -4760,7 +4816,17 @@ OnReleaseHK(btn, *) {
         return
     }
     if (mode = "held") {
+        ; A "native drag after move" hold engaged at PRESS (instantHold) on an
+        ; input whose tap is native: a quick click used to do nothing at all
+        ; (Back, the right-click menu lost). Released before the hold time
+        ; with nothing dragged, it is a click. Only dragmove: moddrag's own
+        ; tap already clicks, and sniper/boost/drag scroll TOGGLE on a tap.
+        t := IsObject(st.holdBinding) ? st.holdBinding["action"]["type"] : ""
+        quick := IsObject(st.spec) && st.spec.instantHold && (t = "dragmove")
+            && !st.dragOn && (A_TickCount - st.pressTick < HoldMs())
         ActionUp(st.holdBinding, st)
+        if quick
+            FireTap(st)
         ClearBS(btn)
         return
     }
@@ -4874,7 +4940,7 @@ OnWheelHK(wh, *) {
     ; lands the pointer in the middle of the next monitor -- under the
     ; settings window whenever it is open there (v0.6.6.3).
     tilt := (wh = "WheelLeft" || wh = "WheelRight")
-    if (!g_Enabled || (!tilt && (OwnGuiActive() || OwnWindowAt(RM_WinAt())))) {
+    if (!g_Enabled || (!tilt && OwnWindowAt(RM_WinAt()))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
     }
@@ -4902,9 +4968,12 @@ OnWheelHK(wh, *) {
             ; meaning; a wheel value redirects the notch.
             MarkLayerUsed(b)
             tgt := MGet(b["action"], "value", "")
-            if (tgt != "" && !IsWheel(tgt))
+            if (tgt != "" && !IsWheel(tgt)) {
+                ; a held tilt repeats: one click per guard window, not a burst
+                if !WheelAccept(wh, now, g_WheelAt, WheelLimitMs(wh))
+                    return
                 SendNativeClick(tgt)
-            else
+            } else
                 SendWheelRaw(tgt != "" ? tgt : wh, 1)
         } else {
             ; A BOUND wheel direction is rate-limited (v0.6.5). A tilt wheel
@@ -4921,6 +4990,7 @@ OnWheelHK(wh, *) {
             ; also a deck never turns the tail of a scroll into a command.
             if (IsObject(holder) && holder.deckLocked) {
                 if (sinceLast >= 0 && sinceLast < DeckSettleMs()) {
+                    holder.usedAsMod := true ; scrolling with it held is not a tap
                     SendWheelRaw(wh, 1)
                     LastEvent(wh " native — still turning when "
                         . InputLabel(holder.btn) " was pressed")
@@ -5298,9 +5368,13 @@ ActionFire(binding, st) {
         case "clicklock":
             ClickLockToggle(v, st)
         case "wldial":
-            DialStep(st, v)
+            ; the dial position lives on the layer HOLDER, so a tap row
+            ; walks the ring instead of restarting it every press
+            h := LayerHolderSt(binding)
+            DialStep(IsObject(h) ? h : st, v)
         case "appswitch":
-            AppSwitchStep(st, v)
+            h := LayerHolderSt(binding)      ; the host's release commits
+            AppSwitchStep(IsObject(h) ? h : st, v)
         case "layout":
             LayoutApply(v)
         case "winplace":
@@ -6318,11 +6392,11 @@ FocusSignal(x, y) {
 
 ; --- monitor teleport ---------------------------------------------------------
 DoTeleport(v) {
-    ; == on the signed forms: "1" = "+1" is a NUMERIC compare in v2, so
+    ; SameText on the signed forms: "1" = "+1" (and ==) are NUMERIC, so
     ; screen 1 used to mean "next screen".
-    if (v = "prev" || v == "-1" || v = "left" || v = "l")
+    if (v = "prev" || SameText(v, "-1") || v = "left" || v = "l")
         TeleportMonitor(-1)                  ; monitors are ordered by X, so
-    else if (v = "next" || v == "+1" || v = "right" || v = "r")
+    else if (v = "next" || SameText(v, "+1") || v = "right" || v = "r")
         TeleportMonitor(1)                   ; prev/next = left/right
     else if IsInteger(v)
         TeleportToIndex(Integer(v))
