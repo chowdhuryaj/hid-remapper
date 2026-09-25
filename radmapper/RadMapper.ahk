@@ -26131,7 +26131,9 @@ class TextLayout {
     static Prepare(shape) {
         local val, rawSegments, seg, strRaw, defaultClr, currentClr, currentStyle, baseStyle, baseFnt, runFont, pos, textLen, strInput, tagPos, chunk, closeBrace, tagContent, clrSpec, m, matchedClr, mTag, mClr, parts, part, foundAny
 
-        if (shape.__str == "" || shape.__str == 0) {
+        ; Only an EMPTY string is "no text". `== 0` compared numerically, so a
+        ; label that is exactly "0" (the 0 key, a zero count) drew blank.
+        if (shape.__str == "") {
             shape.__isRichText := false
             shape.__textRuns := []
             shape.__textLines := []
@@ -30189,7 +30191,10 @@ class Shape {
     str {
         get => this.__str
         set {
-            if (this.__str == value)
+            ; Exact match only: `==` is numeric between numeric strings, so
+            ; "0" -> "00" or "1" -> "1.0" would never repaint.
+            if (Type(this.__str) == Type(value) && (IsObject(value)
+                ? this.__str == value : StrCompare(this.__str, value, true) == 0))
                 return
             this.__str := value
             this.PrepareTextLayout()
@@ -32783,7 +32788,7 @@ Draw(lyr) {
     for v in lyr.drawSequence {
 
         ; Direct bypass for invisible dummy shapes without text or bitmap
-        if (v.shape == "Dummy" && (v.str == "" || v.str == 0) && (!v.Bitmap || !v.Bitmap.ptr))
+        if (v.shape == "Dummy" && v.str == "" && (!v.Bitmap || !v.Bitmap.ptr))
             continue
 
         ; Get reference to the shape's tool (Brush, Pen, or raw pointer)
