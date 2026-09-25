@@ -3216,9 +3216,14 @@ GateNative(btn) {
 ; to the engine, or it goes out native and the late handler arms a state
 ; nothing will ever release.
 global g_GateClaim := Map()
-global g_LateUp := Map()                 ; releases that beat their press
 
 ; An Up the engine has no claim on goes through untouched too.
+GateNativeClear(inp) {                   ; a Down going out natively owns no claim
+    if g_GateClaim.Has(inp)
+        g_GateClaim.Delete(inp)
+    return 0
+}
+
 UpClaimed(hk, inp) {
     return UpOwned(hk) || g_SwallowUp.Has(inp) || Warp.claimed.Has(inp)
         || ClickLockHolds(inp) || g_GateClaim.Has(inp)
@@ -3238,20 +3243,20 @@ HookActive(hk) {
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
-    if (IsObject(g_Bypass) && BypassFor(b := inp)
-        && !((s := BS(b)) && s.down))
-        return 0
-    ; a latched button (or its latching input) always reaches the engine:
-    ; its press is how the latch is released
+    ; a latched button (or its latching input) always reaches the engine,
+    ; pass-through or not: its press is how the latch is released
     if ClickLockOwns(inp) {
         g_GateClaim[inp] := 1
         return 1
     }
+    if (IsObject(g_Bypass) && BypassFor(inp)
+        && !((s := BS(inp)) && s.down))
+        return GateNativeClear(inp)
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
     if !ours {
         if GateNative(inp)
-            return 0
+            return GateNativeClear(inp)
         g_GateClaim[inp] := 1
         return 1
     }
@@ -3265,7 +3270,7 @@ HookActive(hk) {
         TiltNote("gate", WinClassOf(RM_WinAt()))
         return 1
     }
-    return 0
+    return GateNativeClear(inp)              ; over our own window: native
 }
 
 ; Diagnostics for a bound tilt that did NOT do its job, once per reason and
@@ -3300,18 +3305,25 @@ KbHookActive(hk) {
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
-    if (IsObject(g_Bypass) && BypassFor(b := inp)
-        && !((s := BS(b)) && s.down))
-        return 0
+    ; a key whose release teardown still owes a swallow (it was held when
+    ; the engine paused or its row changed): its repeats must not go out
+    ; natively while that release is swallowed -- it would stick down
+    if (g_SwallowUp.Has(inp) && InputHeldPhysical(inp)) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
     if ClickLockOwns(inp) {
         g_GateClaim[inp] := 1
         return 1
     }
+    if (IsObject(g_Bypass) && BypassFor(inp)
+        && !((s := BS(inp)) && s.down))
+        return GateNativeClear(inp)
     ; a key already held with a live state stays with the engine even if
     ; our window came to the front mid-hold (its repeats and release)
     try {
         if (!((s := BS(inp)) && s.down) && (OwnGuiActive() || GateNative(inp)))
-            return 0
+            return GateNativeClear(inp)
     }
     g_GateClaim[inp] := 1
     return 1
@@ -3321,14 +3333,6 @@ OnPressHK(btn, *) {
     Critical "On"
     if g_GateClaim.Has(btn)
         g_GateClaim.Delete(btn)
-    ; its release already arrived (this thread was queued behind a busy
-    ; one): handle the press, then the release, as one tap
-    if g_LateUp.Has(btn) {
-        d := A_TickCount - g_LateUp[btn]
-        g_LateUp.Delete(btn)
-        if (d >= 0 && d < 1000)              ; a stale one (its press was
-            SetTimer(OnReleaseHK.Bind(btn), -1)   ; dropped) is not replayed
-    }
     TestNotify(btn, 1)
     ; v0.6.2: while the keyboard pointer is up it owns every key. A bound key
     ; row is a hooked "*key" hotkey and would beat its InputHook to the key,
@@ -3393,7 +3397,7 @@ OnPressHK(btn, *) {
     ; using it made key remaps die whenever the pointer rested on our GUI).
     uw := (g_Enabled && !isKey) ? RM_WinAt() : 0
     ours := (uw != 0) && OwnWindowAt(uw)
-    if (ours)                                ; HotIf should have kept this native;
+    if (ours && !ClickLockOwns(btn))         ; HotIf should have kept this native;
         Problem("hookmiss", "hooked click over our own window ("
             . WinClassOf(uw) ") -- HotIf gate missed it")   ; if we got here it didn't
     ; Paused: the one thing a hooked input can still do is resume -- and the
@@ -3839,9 +3843,18 @@ OnReleaseHK(btn, *) {
         return                               ; press went to the keyboard pointer
     if (!st && ClickLockHolds(btn))
         return                               ; the latch's own release: keep it down
-    if (!st && gateOnly) {                   ; its press is still queued:
-        g_LateUp[btn] := A_TickCount         ; replay this release right
-        return                               ; after it (see OnPressHK)
+    if (!st && gateOnly) {
+        ; claimed at the gate but its press never ran: the gate timed out
+        ; (the Down went through natively) or the handler was dropped. If
+        ; the Down is out, its Up must be too -- else the input sticks.
+        down := false
+        for n in InputHookNames(btn) {
+            if GetKeyState(n)
+                down := true
+        }
+        if down
+            SendNativeUp(btn)
+        return
     }
     if (st && st.HasProp("pausedHost") && !g_Enabled) {
         ClearBS(btn)                         ; a host held for a resume row
@@ -8317,7 +8330,7 @@ HookFrontTick(*) {
         return
     static lastNot := 0                      ; a window already seen not PACS
     fg := FgHwnd()
-    if (fg = lastNot)                        ; an hwnd's exe never changes
+    if (fg && fg = lastNot)                  ; an hwnd's exe never changes
         return
     exe := ""
     try exe := WinGetProcessName("ahk_id " fg)
