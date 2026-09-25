@@ -5789,6 +5789,14 @@ ClickLockToggle(v, self := 0) {
     }
     held := src
     st := BS(src)
+    ; An UNHOOKED button's physical release reaches the OS and undoes the
+    ; latch at once, leaving g_ClickLock set with nothing held. The Settings
+    ; hotkey has no row to make SyncHooks hook the button, so refuse here.
+    if (IsMouseInput(src) && !g_HookState.Has(src)) {
+        HUD("Click lock: add a Click lock row for " InputLabel(src)
+            . " (Mouse page) so RadMapper can hold it", "warn")
+        return
+    }
     if (st && st.down && !st.consumed && st.mode = "passthru") {
         ; The engine already has a synthetic down out for this button -- latch
         ; THAT (following a remap through passBtn) and withhold its up.
@@ -5975,6 +5983,8 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
         return
     TeleportSignalStop()
     prev := LayerStack.ActiveLayer
+    edges := []
+    ring := 0
     try {
         t := 6
         w := mon.r - mon.l
@@ -5983,7 +5993,6 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
             ? [[mon.l, mon.t, w, t], [mon.l, mon.b - t, w, t],
                [mon.l, mon.t, t, h], [mon.r - t, mon.t, t, h]]
             : []                             ; ring only
-        edges := []
         for sp in specs {
             L := Layer(sp[1], sp[2], sp[3], sp[4], "RadTeleEdge")
             LayerStack.ActiveLayer := L
@@ -6011,6 +6020,16 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
         if IsObject(prev)
             LayerStack.ActiveLayer := prev
         Problem("tele-signal", "teleport signal failed: " e.Message)
+        if !IsObject(g_TeleSig) {            ; built part-way: nobody owns these
+            for L in edges {
+                try g_PassThru.Delete(L.hwnd)
+                try L.Dispose()
+            }
+            if IsObject(ring) {
+                try g_PassThru.Delete(ring.hwnd)
+                try ring.Dispose()
+            }
+        }
         TeleportSignalStop()
     }
 }
@@ -7795,7 +7814,7 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
                 ; window as a normal-state window and asked for that state
                 ; back, so restoring is the instruction, not a side effect.
                 WinRestore(id)
-                WinMove(sx, sy, sw, sh, id)
+                WinMoveSure(sx, sy, sw, sh, id)
                 moved += 1
                 continue
             }
@@ -7803,7 +7822,7 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             if (!enforce
                 || Abs(cx - sx) > LAYOUT_TOL || Abs(cy - sy) > LAYOUT_TOL
                 || Abs(cw - sw) > LAYOUT_TOL || Abs(ch - sh) > LAYOUT_TOL) {
-                WinMove(sx, sy, sw, sh, id)
+                WinMoveSure(sx, sy, sw, sh, id)
                 moved += 1
             }
         }
@@ -7830,6 +7849,7 @@ LayoutApply(name) {
         return
     }
     n := LayoutApplyRows(lay, false, false)
+    name := MGet(lay, "name", name)          ; the stored spelling keys the guard
     if MGet(lay, "guard", 0)
         LayoutGuardArm(name)
     HUD("Layout '" name "' — " n " window" (n = 1 ? "" : "s") " placed"
@@ -7859,6 +7879,19 @@ LayoutChoose() {
         items, LayoutApply)
 }
 
+; WinMove, then once more if the window did not land where asked. A
+; per-monitor-DPI app moved onto a screen with different scaling applies
+; Windows' suggested rectangle on WM_DPICHANGED (1.5x the size going from
+; 100% to 150%); the second move lands after that rescale.
+WinMoveSure(x, y, w, h, id) {
+    WinMove(x, y, w, h, id)
+    try {
+        WinGetPos(&ax, &ay, &aw, &ah, id)
+        if (Abs(ax - x) > 2 || Abs(ay - y) > 2 || Abs(aw - w) > 2 || Abs(ah - h) > 2)
+            WinMove(x, y, w, h, id)
+    }
+}
+
 LayoutGuardArm(name) {
     global g_LayoutGuard
     g_LayoutGuard := name
@@ -7867,7 +7900,7 @@ LayoutGuardArm(name) {
     ; candidate again. Without this, disarming and re-arming mode 2 did
     ; nothing at all until the windows were closed and reopened.
     g_LayoutPlaced[name] := Map()
-    SetTimer(LayoutGuardTick, Cfg("layoutGuardMs"))
+    SetTimer(LayoutGuardTick, ClampInt(Cfg("layoutGuardMs"), 250, 60000, 1500))
 }
 
 LayoutGuardDisarm() {
@@ -7927,7 +7960,7 @@ SyncLayoutGuard() {
     if (g_LayoutGuard != "") {
         lay := LayoutByName(g_LayoutGuard)
         if (IsObject(lay) && MGet(lay, "guard", 0)) {
-            SetTimer(LayoutGuardTick, Cfg("layoutGuardMs"))
+            SetTimer(LayoutGuardTick, ClampInt(Cfg("layoutGuardMs"), 250, 60000, 1500))
             return
         }
         LayoutGuardDisarm()
@@ -8261,7 +8294,7 @@ WinPlace(v) {
             ny := Min(Max(ny, m.wt), m.wb - nh)
             if (mm = -1)
                 WinRestore(id)
-            WinMove(nx, ny, nw, nh, id)
+            WinMoveSure(nx, ny, nw, nh, id)
             HUD("Window moved to screen " tgt, "cyan")
             return
         }
@@ -8271,7 +8304,7 @@ WinPlace(v) {
         ; restored window's, and the restore is what makes the measurement
         ; true. One DWM call per placement.
         r := WinTileRect(m, tile, WinFrameSlack(id))
-        WinMove(r.x, r.y, r.w, r.h, id)
+        WinMoveSure(r.x, r.y, r.w, r.h, id)
         HUD("Window: " tile " of screen " tgt, "cyan")
     } catch as e {
         Problem("winplace", "window placement failed: " e.Message)
@@ -9040,6 +9073,7 @@ KbHotkeyConflict(hk) {
     return g_HookState.Has(s) ? s : ""
 }
 
+global g_BadHkWarned := "|"
 RegisterKbHotkeys() {
     global g_KbRegistered
     if IsObject(g_RecHook)
@@ -9068,10 +9102,19 @@ RegisterKbHotkeys() {
     bad := ""
     mouse := ""
     clash := ""
+    dup := ""
+    seen := Map()
+    seen.CaseSense := "Off"
     for pair in pairs {
         hk := pair[1]
         if (hk = "")
             continue
+        ; the same combo twice: the later silently replaced the earlier
+        if seen.Has(hk) {
+            dup .= (dup = "" ? "" : ", ") hk
+            continue
+        }
+        seen[hk] := 1
         if IsMouseHotkey(hk) {
             mouse .= (mouse = "" ? "" : ", ") hk
             continue
@@ -9088,10 +9131,17 @@ RegisterKbHotkeys() {
             bad .= (bad = "" ? "" : ", ") hk
         }
     }
-    if (bad != "") {
-        Problem("bad-hotkey", "Invalid Settings hotkey(s): " bad)
-        TrayTip("Invalid hotkey(s): " bad, "RadMapper", "Iconx")
+    global g_BadHkWarned
+    if (bad dup != "" && bad "|" dup != g_BadHkWarned) {   ; once per set
+        if (bad != "")
+            Problem("bad-hotkey", "Invalid Settings hotkey(s): " bad)
+        if (dup != "")
+            Problem("dup-hotkey", "Settings hotkey used twice (first kept): " dup)
+        TrayTip((bad != "" ? "Invalid hotkey(s): " bad "`n" : "")
+            . (dup != "" ? "Used twice, second ignored: " dup : ""),
+            "RadMapper", "Iconx")
     }
+    g_BadHkWarned := bad "|" dup
     ; warn once per offending set -- RegisterKbHotkeys reruns on EVERY config
     ; change, and re-raising the tip on each unrelated edit would be noise
     global g_MouseHkWarned
@@ -9467,12 +9517,21 @@ PanicSnapshot() {
 }
 
 ToggleEnabled() {
-    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy
+    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy, g_SpeedSaved
     g_Enabled := !g_Enabled
     if !g_Enabled {
         g_MacroGen += 1                      ; a running macro stops too
         g_MacroBusy := false
         ForceReleaseActive()                 ; nothing may stay down once hooks drop
+        ; "input is native" must be true: a toggled sniper/boost speed and
+        ; the keyboard pointer's InputHook would otherwise outlive the pause
+        ; with their off switch unhooked.
+        try Warp.Close(true)
+        g_SpeedMods.Clear()
+        if (g_SpeedSaved != "") {
+            RM_SetSpeed(g_SpeedSaved)
+            g_SpeedSaved := ""
+        }
         g_PSQueue := []                      ; and nothing may still be on its
         g_PSGen += 1                         ; way into the study: queued
     }                                        ; deliveries die, the in-flight
@@ -18469,8 +18528,8 @@ class Shelf {
             ; -- and that went straight into the config file on disk. Empty
             ; the clipboard first: then only a copy that actually happened
             ; can satisfy the wait. The user's clipboard is put back.
-            before := A_Clipboard
-            A_Clipboard := ""
+            before := ClipboardAll()         ; every format: an image copied
+            A_Clipboard := ""                ; from PACS must survive a grab
             SafeSend("^c")
             if !ClipWait(1, 0) {
                 A_Clipboard := before
