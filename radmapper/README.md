@@ -12,6 +12,12 @@ copies it aside as `RadMapperConfig.pre-reset-<date>.json` in the config
 folder (`%APPDATA%\RadMapper`) and starts from the shipped defaults. This
 happens once. To get the old setup back, use **Import config…** on that file.
 
+**Running RadWheel too.** RadMapper writes `RadMapperHooks.txt` in its
+config folder: the buttons and keys it has hooked right now, empty while
+paused. RadWheel (`../radwheel`) reads it and never takes those inputs, so
+the two scripts never fight over a button. Pause RadMapper and RadWheel gets
+them back within 3 s.
+
 ## Try it in two minutes (Windows)
 
 1. Install **AutoHotkey v2** from https://www.autohotkey.com (the v2 installer, not v1).

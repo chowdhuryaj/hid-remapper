@@ -123,9 +123,11 @@ RadMapper also moves its hook back to the front every 10 s while PACS is in
 front. If both scripts owned one button, they would take turns winning it.
 
 So RadWheel steps aside on its own. Every 3 s it checks whether RadMapper is
-running. If it is, RadWheel reads RadMapper's settings file and leaves every
-button RadMapper has hooked alone. That covers any button with a real
-assignment and any button that holds a layer. A toast names the buttons it
+running. If it is, RadWheel reads `RadMapperHooks.txt`, the list of buttons
+and keys RadMapper has hooked right now (RadMapper writes it beside its
+settings), and leaves every one of them alone. An older RadMapper without
+that file is handled from its settings file instead: any button with a real
+assignment, and any button that holds a layer. A toast names the buttons it
 gave up, and the RadWheel window shows ⚠ on any wheel whose button is taken.
 When RadMapper exits, or frees the button, RadWheel takes it back.
 
@@ -138,8 +140,9 @@ programmable mouse), or clear those buttons in RadMapper.
 
 Details:
 
-- A paused RadMapper still counts as running. Exit it to give its buttons
-  back.
+- Pausing RadMapper gives its buttons to RadWheel within 3 s; resuming
+  takes them back. (With an older RadMapper, a paused one still counts as
+  running: exit it instead.)
 - The two scripts ignore each other's keystrokes and clicks, so a key that
   RadWheel sends never sets off a RadMapper shortcut, and a RadMapper click
   never opens a wheel.
@@ -160,8 +163,8 @@ Details:
 7. Start RadMapper as well. Within 3 s a toast says RadWheel leaves
    button 4 and button 5 to it. Hold button 5 in PACS: RadMapper's own
    wheel opens, not RadWheel's. Hold right-click in PACS: the RadWheel PACS
-   tools wheel still opens. Exit RadMapper: a toast says RadWheel has the
-   buttons back.
+   tools wheel still opens. Pause RadMapper, then exit it: each time a toast
+   says RadWheel has the buttons back.
 
 ## Checks
 

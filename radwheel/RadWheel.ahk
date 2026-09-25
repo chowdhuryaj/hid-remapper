@@ -82,7 +82,7 @@ global HiResOn := 0
 global EatRepeat := Map()        ; key -> tick: auto-repeats of a key press
                                  ;   that already did its job are eaten
 global RmOwned := Map()          ; inputs RadMapper has hooked right now
-global RmSeen := {running: false, cfg: "", mtime: "", readOk: false}
+global RmSeen := {running: false, cfg: "", hooks: "", mtime: "", readOk: false}
 
 Held.CaseSense := "Off"
 Swallow.CaseSense := "Off"
@@ -1972,9 +1972,11 @@ Cleanup(*) {
 ; RadMapper and RadWheel can run together, but never on the same button. Both
 ; hook the mouse, Windows asks the newest hook first, and RadMapper puts its
 ; hook back in front every 10 s while PACS is in front. Two scripts owning
-; one button would take turns winning it. So RadWheel reads RadMapper's
-; config and leaves every input RadMapper has hooked (the same set its
-; SyncHooks builds: every live row's button and layer host) to RadMapper.
+; one button would take turns winning it. So RadWheel leaves every input
+; RadMapper has hooked to RadMapper. RadMapper publishes that set itself in
+; RadMapperHooks.txt beside its config (empty while paused); for an older
+; RadMapper without it, the set is worked out from its config the way its
+; SyncHooks does (every live row's button and layer host).
 ; Neither script reacts to the other's Send: both stay at SendLevel 0.
 ; Setting YieldToRadMapper="0" in the settings file turns this off.
 
@@ -2023,14 +2025,18 @@ RmCheck() {
     if !RmSeen.running {
         RmSeen.running := true
         RmSeen.cfg := RadMapperCfgPath()
+        RmSeen.hooks := RegExReplace(RmSeen.cfg, "[^\\]*$", "RadMapperHooks.txt")
         RmSeen.mtime := ""
     }
-    mt := ""                                 ; time + size: a second save in
-    try mt := FileGetTime(RmSeen.cfg, "M") "/" FileGetSize(RmSeen.cfg)  ; the same second
-    if (mt != "" && mt = RmSeen.mtime)
+    ; time + size of both files (size catches a second save in the same second)
+    mt := RmStamp(RmSeen.hooks) "|" RmStamp(RmSeen.cfg)
+    if (mt = RmSeen.mtime)
         return
     try {
-        owned := RmReadOwned(RmSeen.cfg)
+        owned := ""
+        try owned := RmReadHooks(RmSeen.hooks)
+        if !IsObject(owned)
+            owned := RmReadOwned(RmSeen.cfg)
         RmSeen.mtime := mt
         RmSeen.readOk := true
     } catch {
@@ -2043,6 +2049,30 @@ RmCheck() {
             owned[k] := 1
     }
     RmSetOwned(owned)
+}
+
+RmStamp(f) {
+    try return FileGetTime(f, "M") "/" FileGetSize(f)
+    return ""
+}
+
+; RadMapperHooks.txt: comment lines, pid=, enabled=, then one input per line.
+; A file left behind by a RadMapper that is gone (a crash) is not trusted.
+RmReadHooks(path) {
+    owned := RmEmpty()
+    pid := 0
+    loop parse FileRead(path, "UTF-8"), "`n", "`r" {
+        ln := Trim(A_LoopField)
+        if (ln = "" || SubStr(ln, 1, 1) = ";" || SubStr(ln, 1, 8) = "enabled=")
+            continue
+        if (SubStr(ln, 1, 4) = "pid=")
+            pid := ToInt(SubStr(ln, 5), 0)
+        else
+            owned[ln] := 1
+    }
+    if !(pid && ProcessExist(pid))
+        throw Error("stale hooks file")
+    return owned
 }
 
 RmEmpty() {

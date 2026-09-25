@@ -55,8 +55,13 @@ Branch `claude/dazzling-mendel-pvayp0` (PR #14's branch merged in, then this).
 - §11b: `RmCheck` (3 s timer) -> `RmReadOwned` (small JSON reader) ->
   `RmOwned`; `TrigGate` returns false for an owned key, so the press stays
   with RadMapper. Toast on change; editor summary shows ⚠. INI
-  `YieldToRadMapper="0"` turns it off. Paused RadMapper still counts
-  (its pause is internal; not visible from outside).
+  `YieldToRadMapper="0"` turns it off.
+- RadMapper side (`PublishHooks`, end of SyncHooks; removed in Cleanup):
+  writes `RadMapperHooks.txt` beside its config with pid=, enabled=, and
+  g_HookState (keys under every InputHookNames twin), only when it changes;
+  skipped under the test rig (no g_InstanceMutex). RadWheel reads it first
+  (`RmReadHooks`, stale if the pid is gone) and falls back to parsing the
+  config for an older RadMapper. So pause is visible and numpad twins match.
 - SendMode Event + SetKeyDelay -1 (was Input; falls back to Event at 10 ms
   per key while RadMapper's keyboard hook exists).
 - `ExeOf`: exe name cached per hwnd (checked by pid) for the per-press gate.

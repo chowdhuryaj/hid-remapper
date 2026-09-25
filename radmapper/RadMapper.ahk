@@ -10463,6 +10463,49 @@ SyncHooks() {
     } finally {
         HotIf()                              ; clear context: later Hotkey() calls are global
     }
+    PublishHooks()
+}
+
+; RadWheel (the standalone radial-menu script) runs beside RadMapper and must
+; never hook an input RadMapper has hooked: Windows asks the newest hook
+; first and HookFrontTick keeps moving ours to the front, so two owners
+; would take turns winning the button. This file tells RadWheel exactly
+; which inputs are ours right now -- g_HookState itself, every name each
+; key arrives as, and nothing while paused -- so it need not re-derive the
+; set from the config. Written only when the set changes; removed on exit.
+PublishHooks(remove := false) {
+    static last := ""
+    if !g_InstanceMutex                      ; the test rig, or a second copy
+        return
+    path := CFG_DIR "\RadMapperHooks.txt"
+    if remove {                              ; only a file this copy wrote: a
+        if (last != "")                      ;   second copy exiting at start
+            try FileDelete(path)             ;   must not delete the first's
+        last := ""
+        return
+    }
+    names := ""
+    for name in g_HookState {
+        if IsKeyInput(name) {
+            for hk in InputHookNames(name)
+                names .= hk "`n"
+        } else
+            names .= name "`n"
+    }
+    body := "; Inputs RadMapper has hooked right now, for RadWheel. Written by`n"
+        . "; RadMapper on every hook change and removed on exit; do not edit.`n"
+        . "pid=" DllCall("GetCurrentProcessId", "uint") "`n"
+        . "enabled=" (g_Enabled ? 1 : 0) "`n" names
+    if (body == last)
+        return
+    try {
+        f := FileOpen(path ".tmp", "w", "UTF-8")
+        f.Write(body)
+        f.Close()
+        FileMove(path ".tmp", path, 1)
+        last := body
+    } catch as e
+        Problem("hook-publish", "could not write " path ": " e.Message)
 }
 
 
@@ -12156,6 +12199,7 @@ Cleanup(*) {
     SetTimer(Watchdog, 0)
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
+    PublishHooks(true)                       ; RadWheel may have our buttons
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     RadialClose(false)
