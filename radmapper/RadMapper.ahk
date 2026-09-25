@@ -8564,7 +8564,7 @@ AppDeliverNow(appName, keys) {
     ; The thread is interruptible across the waits above: a click back into
     ; the viewer in that moment must not receive the keys.
     Critical "On"
-    ok := (g_PSGen = gen) && WinActive(psWin)
+    ok := (g_PSGen = gen) && WinActive(win)
     if ok
         PSSendAtomic(keys)
     Critical "Off"
@@ -8574,7 +8574,7 @@ AppDeliverNow(appName, keys) {
     }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        if WinActive(psWin)                    ; not if the user has moved on
+        if WinActive(win)                      ; not if the user has moved on
             try WinActivate("ahk_id " prev)
     }
 }
@@ -8718,7 +8718,7 @@ PSDeliverNow(keys) {
     ; The thread is interruptible across the waits above: a click back into
     ; the viewer in that moment must not receive the keys.
     Critical "On"
-    ok := (g_PSGen = gen) && WinActive(win)
+    ok := (g_PSGen = gen) && WinActive(psWin)
     if ok
         PSSendAtomic(keys)
     Critical "Off"
@@ -8728,7 +8728,7 @@ PSDeliverNow(keys) {
     }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        if WinActive(win)                    ; not if the user has moved on
+        if WinActive(psWin)                  ; not if the user has moved on
             try WinActivate("ahk_id " prev)
     }
 }
