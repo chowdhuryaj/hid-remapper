@@ -2710,6 +2710,19 @@ PauseTglRowFor(btn) {
     return 0
 }
 
+; Is this input the layer host of some "Toggle engine pause" row?
+PauseTglHost(btn) {
+    for row in g_Cfg["bindings"] {
+        if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl")
+            continue
+        for part in LayerParts(row) {
+            if (CanonicalInputName(NormalizeInputName(part)) = btn)
+                return true
+        }
+    }
+    return false
+}
+
 ; Snapshot of everything a lookup needs. held = mapped buttons physically down.
 ; btn = the input being resolved: a MOUSE input (button or wheel) is scoped
 ; by the window under the pointer, a key by the foreground window (v0.7.2).
@@ -3167,7 +3180,9 @@ UpOwned(hk) {
 ; click re-sent. Same pure-spec lookup OnPressHK makes.
 GateNative(btn) {
     global g_WheelLast
-    if (!g_Enabled || g_Testing || Warp.active || ClickLockOwns(btn))
+    if !g_Enabled                            ; paused: native unless it resumes
+        return IsWheel(btn) || !(PauseTglRowFor(btn) || PauseTglHost(btn))
+    if (g_Testing || Warp.active || ClickLockOwns(btn))
         return false
     if ((s := BS(btn)) && s.down)            ; live state: repeats, stale Ups
         return false
@@ -3196,10 +3211,17 @@ GateNative(btn) {
     return false
 }
 
+; A Down the gate handed to the engine whose handler has not run yet (the
+; main thread busy, e.g. AimFg waiting on a window): its Up must still come
+; to the engine, or it goes out native and the late handler arms a state
+; nothing will ever release.
+global g_GateClaim := Map()
+global g_LateUp := Map()                 ; releases that beat their press
+
 ; An Up the engine has no claim on goes through untouched too.
 UpClaimed(hk, inp) {
     return UpOwned(hk) || g_SwallowUp.Has(inp) || Warp.claimed.Has(inp)
-        || ClickLockHolds(inp)
+        || ClickLockHolds(inp) || g_GateClaim.Has(inp)
 }
 
 ; A click lock latched this input: its physical release must be swallowed
@@ -3219,10 +3241,20 @@ HookActive(hk) {
     if (IsObject(g_Bypass) && BypassFor(b := inp)
         && !((s := BS(b)) && s.down))
         return 0
+    ; a latched button (or its latching input) always reaches the engine:
+    ; its press is how the latch is released
+    if ClickLockOwns(inp) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
-    if !ours
-        return GateNative(inp) ? 0 : 1
+    if !ours {
+        if GateNative(inp)
+            return 0
+        g_GateClaim[inp] := 1
+        return 1
+    }
     ; A TILT is never gated: nothing of ours scrolls sideways, and a tilt
     ; bound to a monitor hop must hop wherever the pointer is. OnWheelHK
     ; already exempted tilts from its own-window test, but this gate runs
@@ -3271,17 +3303,40 @@ KbHookActive(hk) {
     if (IsObject(g_Bypass) && BypassFor(b := inp)
         && !((s := BS(b)) && s.down))
         return 0
-    try return (OwnGuiActive() || GateNative(inp)) ? 0 : 1
+    if ClickLockOwns(inp) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
+    ; a key already held with a live state stays with the engine even if
+    ; our window came to the front mid-hold (its repeats and release)
+    try {
+        if (!((s := BS(inp)) && s.down) && (OwnGuiActive() || GateNative(inp)))
+            return 0
+    }
+    g_GateClaim[inp] := 1
     return 1
 }
 
 OnPressHK(btn, *) {
     Critical "On"
+    if g_GateClaim.Has(btn)
+        g_GateClaim.Delete(btn)
+    ; its release already arrived (this thread was queued behind a busy
+    ; one): handle the press, then the release, as one tap
+    if g_LateUp.Has(btn) {
+        d := A_TickCount - g_LateUp[btn]
+        g_LateUp.Delete(btn)
+        if (d >= 0 && d < 1000)              ; a stale one (its press was
+            SetTimer(OnReleaseHK.Bind(btn), -1)   ; dropped) is not replayed
+    }
     TestNotify(btn, 1)
     ; v0.6.2: while the keyboard pointer is up it owns every key. A bound key
     ; row is a hooked "*key" hotkey and would beat its InputHook to the key,
     ; so the row is bypassed here and the key handed over (and suppressed).
     if (Warp.active && IsKeyInput(btn)) {
+        ; the OS repeats of the key that OPENED the pointer are not letters
+        if ((p := BS(btn)) && p.down && !p.consumed)
+            return
         Warp.FromHook(btn)
         return
     }
@@ -3341,7 +3396,17 @@ OnPressHK(btn, *) {
     if (ours)                                ; HotIf should have kept this native;
         Problem("hookmiss", "hooked click over our own window ("
             . WinClassOf(uw) ") -- HotIf gate missed it")   ; if we got here it didn't
-    ; Paused: the one thing a hooked input can still do is resume.
+    ; Paused: the one thing a hooked input can still do is resume -- and the
+    ; LAYER HOST of a layered resume row is held for it, not sent to the app.
+    if (!g_Enabled && !PauseTglRowFor(btn) && PauseTglHost(btn)) {
+        ClearBS(btn)
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        st.pausedHost := true
+        return
+    }
     if (!g_Enabled && PauseTglRowFor(btn)) {
         ClearBS(btn)
         st := NewBS(btn)
@@ -3361,7 +3426,34 @@ OnPressHK(btn, *) {
             try WinActivate("ahk_id " uw)
         fgOurs := false
     }
-    if (!g_Enabled || fgOurs || ours || (BypassFor(btn) && !rep)) {
+    ; --- click lock (v0.3.1) --------------------------------------------------
+    ; While a button is latched, pressing it (or the input that latched it)
+    ; RELEASES the latch and does nothing else -- the Windows ClickLock rule,
+    ; and the escape hatch that means a latch can always be undone with the
+    ; mouse alone. The state is left down+consumed so the matching physical
+    ; release is inert.
+    if ClickLockOwns(btn) {
+        ClickLockRelease()
+        old := BS(btn)
+        if old {
+            ; same orphan as the not-ours branch above: this press consumes
+            ; the input, so the old state's release never arrives
+            if (old.down && !old.consumed) {
+                if (old.mode = "passthru")
+                    SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
+                else if (old.mode = "held")
+                    ActionUp(old.holdBinding, old)
+            }
+            ClearBS(btn)
+        }
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        return
+    }
+
+    if (!g_Enabled || ((fgOurs || ours || BypassFor(btn)) && !rep)) {
         if (ours && !fgOurs) {
             ; fallback: click on our own window while another app holds the
             ; foreground -- activate ourselves so the reinjected click lands
@@ -3399,33 +3491,6 @@ OnPressHK(btn, *) {
         return
     }
     now := A_TickCount
-
-    ; --- click lock (v0.3.1) --------------------------------------------------
-    ; While a button is latched, pressing it (or the input that latched it)
-    ; RELEASES the latch and does nothing else -- the Windows ClickLock rule,
-    ; and the escape hatch that means a latch can always be undone with the
-    ; mouse alone. The state is left down+consumed so the matching physical
-    ; release is inert.
-    if ClickLockOwns(btn) {
-        ClickLockRelease()
-        old := BS(btn)
-        if old {
-            ; same orphan as the not-ours branch above: this press consumes
-            ; the input, so the old state's release never arrives
-            if (old.down && !old.consumed) {
-                if (old.mode = "passthru")
-                    SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
-                else if (old.mode = "held")
-                    ActionUp(old.holdBinding, old)
-            }
-            ClearBS(btn)
-        }
-        st := NewBS(btn)
-        st.down := true
-        st.consumed := true
-        st.pressTick := now
-        return
-    }
 
     prev := BS(btn)
 
@@ -3747,10 +3812,15 @@ MovePoll(btn, pollId, *) {
 
 OnReleaseHK(btn, *) {
     Critical "On"
+    gateOnly := g_GateClaim.Has(btn)         ; claimed, its press not yet run
+    if gateOnly
+        g_GateClaim.Delete(btn)
     TestNotify(btn, 0)
-    if g_SwallowUp.Has(btn) {                ; the release of a pause toggle
+    if g_SwallowUp.Has(btn) {                ; a release teardown already owns
         g_SwallowUp.Delete(btn)
         ClearBS(btn)
+        if !g_Enabled                        ; paused: it was hooked only to
+            SetTimer(SyncHooks, -1)          ; swallow this; let it go native
         return
     }
     ; A key whose PRESS was handed to the keyboard pointer must not emit a
@@ -3769,6 +3839,15 @@ OnReleaseHK(btn, *) {
         return                               ; press went to the keyboard pointer
     if (!st && ClickLockHolds(btn))
         return                               ; the latch's own release: keep it down
+    if (!st && gateOnly) {                   ; its press is still queued:
+        g_LateUp[btn] := A_TickCount         ; replay this release right
+        return                               ; after it (see OnPressHK)
+    }
+    if (st && st.HasProp("pausedHost") && !g_Enabled) {
+        ClearBS(btn)                         ; a host held for a resume row
+        SendNativeClick(btn)                 ; that was not used: its click
+        return
+    }
     if (!st || !st.down) {
         SendNativeUp(btn)                    ; safety: never leave one stuck
         if st
@@ -4364,6 +4443,10 @@ ActionFire(binding, st, ctx := 0) {
         case "guiopen":
             ShowMain()
         case "bypass":
+            if IsWheel(MGet(binding, "button", "")) {
+                HUD("Pass-through belongs on a button or key, not the wheel", "warn")
+                return
+            }
             BypassToggle(IsObject(st) ? st.btn : "", LayerParts(binding))
         case "pausetgl":
             ; Pausing clears every state, so this press's release would find
@@ -4519,8 +4602,9 @@ ClickLockTarget(v, skip := "") {
     best := ""
     bestTick := -1
     for name, st in g_BS {
-        if (name = skip || !IsMouseInput(name) || !st.down || st.consumed)
-            continue
+        if (name = skip || !IsMouseInput(name) || !st.down || st.consumed
+            || (IsObject(st.spec) && st.spec.layerHost))   ; hosts hold layers,
+            continue                                        ; not drags
         if (st.pressTick >= bestTick) {
             bestTick := st.pressTick
             best := name
@@ -4529,7 +4613,8 @@ ClickLockTarget(v, skip := "") {
     if (best != "")
         return best
     for b in BUTTONS {
-        if (b != skip && RM_KeyHeld(b))
+        if (b != skip && RM_KeyHeld(b)
+            && !((s := BS(b)) && IsObject(s.spec) && s.spec.layerHost))
             return b
     }
     ; NOTHING is held. This used to fall through to "LButton", which latched
@@ -7395,6 +7480,7 @@ AppDeliverNow(appName, keys) {
     Critical "Off"
     if !ok {
         Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        HUD("Focus moved before the keys were sent — press it again", "warn")
         return
     }
     if prev {
@@ -7553,6 +7639,7 @@ PSDeliverNow(keys) {
     Critical "Off"
     if !ok {
         Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        HUD("Focus moved before the keys were sent — press it again", "warn")
         return
     }
     if prev {
@@ -7701,10 +7788,16 @@ SyncHooks() {
         ; v0.7.2: a "Toggle engine pause" row is a TOGGLE, so its input stays
         ; hooked while paused -- otherwise it could pause but never resume.
         for row in g_Cfg["bindings"] {
-            if (MGet(MGet(row, "action", Map()), "type", "") = "pausetgl")
-                needed[CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))] := 1
+            if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl"
+                || MGet(row, "event", "") = "turn")
+                continue
+            needed[CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))] := 1
+            for part in LayerParts(row)      ; its layer host, to reach it
+                needed[CanonicalInputName(NormalizeInputName(part))] := 1
         }
     }
+    for n in g_SwallowUp                     ; a release still owed a swallow
+        needed[n] := 1
     ; Each Hotkey toggle is wrapped: a throw mid-reconfigure must never leave an
     ; input SUPPRESSED with no live handler (a dead/frozen click, or a keyboard
     ; that eats a character). On failure we roll back to fully native and keep
@@ -8011,6 +8104,11 @@ ForceReleaseActive() {
             else if (st.mode = "held")
                 ActionUp(st.holdBinding, st)
         }
+        ; its physical release is still coming; with the state gone (and,
+        ; when pausing, the input maybe unhooked) a lone native Up would
+        ; reach the app -- Back on button 4, a menu on the right button
+        if st.down
+            g_SwallowUp[name] := 1
         st.down := false                     ; watchers holding a reference to
         ClearBS(name)                        ; this state see a release
     }
