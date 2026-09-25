@@ -6270,23 +6270,9 @@ MonitorWorkAt(px, py) {
 }
 
 _MonitorsByX() {
-    arr := []
-    loop MonitorGetCount() {
-        MonitorGet(A_Index, &l, &t, &r, &b)
-        arr.Push({l: l, t: t, r: r, b: b})
-    }
-    i := 2
-    while (i <= arr.Length) {
-        key := arr[i]
-        j := i - 1
-        while (j >= 1 && arr[j].l > key.l) {
-            arr[j + 1] := arr[j]
-            j -= 1
-        }
-        arr[j + 1] := key
-        i += 1
-    }
-    return arr
+    ; the same screens, in the same order, as every station feature
+    ; (winplace "2", the keyboard pointer): 0x0 panels dropped, left then top
+    return StationMons()
 }
 
 
@@ -7244,7 +7230,12 @@ LayoutSlotTarget(slot, lay, mons, reserved, exes := 0, key := "") {
     same := (key = MGet(lay, "station", ""))
     sx := MGet(slot, "x", 0), sy := MGet(slot, "y", 0)
     sw := MGet(slot, "w", 0), sh := MGet(slot, "h", 0)
-    if (same && slot.Has("x"))
+    ; Sizes alone make the key, so the same screens arranged differently
+    ; (primary changed, a twin station) match too: take the stored rect only
+    ; when its centre really lies on the screen it was chosen for.
+    if (same && slot.Has("x")
+        && sx + sw // 2 >= m.l && sx + sw // 2 < m.r
+        && sy + sh // 2 >= m.t && sy + sh // 2 < m.b)
         return {x: sx, y: sy, w: sw, h: sh, mon: m, adapted: false}
     ww := Max(m.wr - m.wl, 1)
     wh := Max(m.wb - m.wt, 1)
@@ -7490,6 +7481,10 @@ LayoutCapture(name) {
  * Find the window a slot means, claiming it so no later slot can take it.
  * See the four-step rule in the section header.
  */
+; A window class with its per-launch GUID removed:
+; "HwndWrapper[PS;;7cde...485]" -> "HwndWrapper[PS]".
+ClsKey(c) => RegExReplace(c, ";;[0-9A-Fa-f-]{36}\]$", "]")
+
 LayoutMatch(slot, wins, claimed) {
     exe := MGet(slot, "exe", "")
     title := MGet(slot, "title", "")
@@ -7501,14 +7496,22 @@ LayoutMatch(slot, wins, claimed) {
     ; class changes every launch, so a stored PS class simply never matches
     ; and those slots fall through to the old exe-only behaviour -- which is
     ; the right outcome, not a regression.
-    cls := MGet(slot, "cls", "")
+    ; WPF/WinForms classes carry a per-launch GUID; compare without it.
+    cls := ClsKey(MGet(slot, "cls", ""))
     ; 1. exe + exact title
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe && wnd.title = title)
             return wnd
     }
-    ; 2. exe + title prefix
+    ; 2. exe + title prefix -- same class first, so two windows of one exe
+    ;    whose titles share a prefix do not swap
     if (pref != "") {
+        for wnd in wins {
+            if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
+                && SubStr(wnd.title, 1, 12) = pref
+                && (cls = "" || ClsKey(wnd.cls) = cls))
+                return wnd
+        }
         for wnd in wins {
             if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
                 && SubStr(wnd.title, 1, 12) = pref)
@@ -7518,14 +7521,14 @@ LayoutMatch(slot, wins, claimed) {
     ; 3. exe + class + ordinal
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
-            && (cls = "" || wnd.cls = cls)
+            && (cls = "" || ClsKey(wnd.cls) = cls)
             && wnd.ord = MGet(slot, "ord", 0))
             return wnd
     }
     ; 4. exe + class, anything left
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
-            && (cls = "" || wnd.cls = cls))
+            && (cls = "" || ClsKey(wnd.cls) = cls))
             return wnd
     }
     return 0
@@ -7613,6 +7616,10 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             if IsPSExe(wnd.exe) {
                 if (mm = -1)
                     continue
+                ; the guard never restores a MAXIMISED PowerScribe (it runs
+                ; off a timer; un-maximising PS is the standing rule's case)
+                if (enforce && mm = 1)
+                    continue
                 psOwner := 0
                 try psOwner := DllCall("user32\GetWindow", "ptr", wnd.hwnd,
                     "uint", 4, "ptr")                      ; GW_OWNER
@@ -7665,8 +7672,18 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             if (!enforce
                 || Abs(cx - sx) > LAYOUT_TOL || Abs(cy - sy) > LAYOUT_TOL
                 || Abs(cw - sw) > LAYOUT_TOL || Abs(ch - sh) > LAYOUT_TOL) {
+                ; the guard already moved it and it landed exactly here: the
+                ; app refuses that rect (minimum size, DPI rounding). Moving
+                ; it again every 1.5 s is a fight, not a fix.
+                if (enforce && g_LayoutGot.Has(wnd.hwnd)
+                    && g_LayoutGot[wnd.hwnd] = cx "," cy "," cw "," ch)
+                    continue
                 WinMoveSure(sx, sy, sw, sh, id)
                 moved += 1
+                try {
+                    WinGetPos(&gx, &gy, &gw, &gh, id)
+                    g_LayoutGot[wnd.hwnd] := gx "," gy "," gw "," gh
+                }
             }
         }
     }
@@ -7735,7 +7752,11 @@ WinMoveSure(x, y, w, h, id) {
     }
 }
 
+; hwnd -> "x,y,w,h" where the guard last left a window (see LayoutApplyRows)
+global g_LayoutGot := Map()
+
 LayoutGuardArm(name) {
+    g_LayoutGot.Clear()
     global g_LayoutGuard
     g_LayoutGuard := name
     ; Arming is a fresh start: "new windows" means new SINCE YOU ARMED IT,
@@ -7760,11 +7781,21 @@ LayoutGuardTick() {
         SetTimer(LayoutGuardTick, 0)
         return
     }
-    ; Never fight a drag that is in progress, and never while our own window
-    ; is being resized by its grip.
-    if (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
+    ; Never fight a drag that is in progress -- a physical one, or one the
+    ; engine holds (moddrag, dragmove, the keyboard pointer's grab), nor the
+    ; switcher -- and never while our own window is being resized.
+    if (HandBusy() || IsObject(g_AppSw)
+        || (IsSet(Warp) && (Warp.active || Warp.grabbing)))
         return
     if Atlas.resizing
+        return
+    ; Nor while the monitor set is changing: until StationSettled has run,
+    ; the layout's screens are not all there and adapting would fold every
+    ; window onto the ones that are.
+    try {
+        if (StationKey() != g_StationKey)
+            return
+    } catch
         return
     lay := LayoutByName(g_LayoutGuard)
     if !IsObject(lay) {
@@ -7940,7 +7971,7 @@ StationSettled() {
     if IsObject(lay) {
         n := LayoutApplyRows(lay, false, false)
         if MGet(lay, "guard", 0)
-            LayoutGuardArm(name)
+            LayoutGuardArm(MGet(lay, "name", name))
         if (n > 0 || changed)
             HUD((changed ? "Screens changed: " : "") "'" name "' — " n
                 . " window" (n = 1 ? "" : "s") " placed"
@@ -8084,9 +8115,13 @@ WinPlace(v) {
         n := mons.Length
         if (n = 0)
             return
+        mm := WinGetMinMax(id)
+        if (mm = -1) {                       ; minimised: its rect is -32000
+            WinRestore(id)
+            mm := WinGetMinMax(id)
+        }
         WinGetPos(&x, &y, &w, &h, id)
         cur := MonIndexAt(mons, x + w // 2, y + h // 2)
-        mm := WinGetMinMax(id)
         switch p.screen {
             case "":     tgt := cur
             case "next": tgt := Mod(cur, n) + 1
