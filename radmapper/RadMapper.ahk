@@ -376,9 +376,8 @@ global DEFAULTS := Map(
     "followExcept", "",
     "hkPause", "NumLock",
     "hkPanic", "^!q",
-    ; Ctrl+Alt+C / Ctrl+Alt+N. Deliberately NOT ^!s or ^!l: Epic uses
-    ; Ctrl+Alt+S to secure the workstation and Ctrl+Alt+L to log out, and a
-    ; shelf that occasionally locks the station is worse than no shelf.
+    ; Never ^!s or ^!l for a default: Epic uses Ctrl+Alt+S to secure the
+    ; workstation and Ctrl+Alt+L to log out.
     ; The programmable click-lock button: one key that latches WHATEVER is
     ; being held, so a lock does not have to be bound per input. ^!b for
     ; "button lock"; as with the others, not ^!s or ^!l (Epic).
@@ -3433,11 +3432,9 @@ StartPollIfNeeded(st) {
 ; physical key would produce the same output again, and repeating that output
 ; is what the user asked for by holding the key. Names are ACT_CODES entries.
 ; Everything absent is a ONE-SHOT and must fire once per PRESS: ps_* and
-; pacs_keys queue a focus dance, macro/run/guiopen/layout/winplace/warp/radial
+; pacs_keys queue a focus dance, macro/run/guiopen/layout/winplace/warp
 ; open or launch something, tele_* teleports the pointer, and the toggles
-; (sniper, boost, scrollptr, zoomptr, clicklock, pausetgl) would flip on and
-; off at 30 Hz. wldial is in because a held dial SHOULD walk the ring, which
-; is the whole gesture.
+; (clicklock, bypass, pausetgl) would flip on and off at 30 Hz.
 RepeatSafeAct(t) {
     return (t = "keys" || t = "keysrepeat" || t = "text" || t = "native"
         || t = "stock")
@@ -3445,9 +3442,9 @@ RepeatSafeAct(t) {
 
 ; Hold-action types that ENGAGE state in ActionDown (ended by ActionUp)
 ; rather than firing one-shot -- exactly ActionDown's special cases. These
-; must never be deferred to a release-time ActionFire: the toggle types
-; would stick (sniper/boost), dragmove would mint a click that
-; never happened, and native/moddrag/keysrepeat would lose their hold phase.
+; must never be deferred to a release-time ActionFire: bypass would toggle
+; instead of holding, dragmove would mint a click that never happened, and
+; native/moddrag/keysrepeat would lose their hold phase.
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
         || t = "dragmove" || t = "bypass")
@@ -4105,8 +4102,8 @@ MarkLayerUsed(binding) {
 }
 
 ; The deepest currently-held holder of a layer-scoped binding's path, or 0 --
-; the state object a wheel turn passes to ActionFire so a W/L dial keeps its
-; per-holder ring position. Base rows have no holder and return 0.
+; the state object a wheel turn passes to ActionFire (the window switcher
+; hangs off it). Base rows have no holder and return 0.
 LayerHolderSt(binding) {
     st := 0
     for part in LayerParts(binding) {
@@ -5247,8 +5244,7 @@ AppSwitchClose(commit) {
         try sw.lyr.Dispose()
     ; A thumbnail of a reading station is a picture of a patient. They live
     ; in memory for as long as the panel is open and are freed the moment it
-    ; closes -- nothing here is ever written to disk. Same rule as the
-    ; clipboard shelf.
+    ; closes -- nothing here is ever written to disk.
     if IsObject(sw.shots) {
         for hw, bmp in sw.shots {
             if IsObject(bmp)
