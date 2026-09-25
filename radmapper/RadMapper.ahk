@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.7  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7.2 --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -19,6 +19,14 @@
 ;  An X-Mouse / SteerMouse replacement built for a PowerScribe + IntelliSpace
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
+;
+;  v0.7.2 -- RADIAL MENUS ARE THEIR OWN SCRIPT.
+;    * The radial menu engine, the Menus page, the menu editor, the
+;      "Radial menu" action and its settings are gone from RadMapper.
+;      On load, a row that opened a menu is dropped and named in
+;      Diagnostics, and the "menus" list leaves the config file.
+;    * A label that is exactly "0" (the 0 key, a zero count) drew blank:
+;      GpGFX tested text for emptiness with `== 0`, which is numeric.
 ;
 ;  v0.7 (later) -- CAPSLOCK DICTATES; THREE LAYERS, NO MORE.
 ;    * Layers are held open by button 4, button 5 or CapsLock only. Rows
@@ -1328,7 +1336,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.1"
+global RM_VERSION := "0.7.2"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1467,7 +1475,6 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "clipboard", "scratchpad",
     "layout",
     "winplace", "warp",
-    "radial",
     "macro", "run", "guiopen", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
@@ -1496,7 +1503,6 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Apply window layout",
     "Window: move / fill the active window",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
-    "Radial menu (hold and flick a direction)",
     "Run macro", "Run program",
     "Open RadMapper settings", "Toggle engine pause",
     "Block it (this button does nothing at all)"]
@@ -1544,9 +1550,6 @@ global ACT_HINTS := Map(
     "appswitch", "+1 or -1. Put it on the wheel inside a layer: the list "
                . "appears while the layer's input is held and stays up while "
                . "you scroll, and releasing switches to the highlighted window.",
-    "radial", "Menu name from the Menus page, or leave BLANK for the menu "
-            . "that matches the app in front. Put it on a HOLD: flick a "
-            . "direction and release. Hold still and the wheel appears.",
     "macro", "Macro name from the Macros page (turn on “Show advanced pages” on Home)",
     "run", "Program or document path / URL",
     "guiopen", "No value needed",
@@ -1558,6 +1561,9 @@ global ACT_HINTS := Map(
 ; stops carrying dead knobs.
 global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     "tapWindow", "radialRestMs",
+    ; v0.7.2: radial menus moved to their own script
+    "radialDwellMs", "radialDead", "radialRadius", "radialSubMs",
+    "radialAnim", "radialWedges",
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1657,23 +1663,11 @@ global DEFAULTS := Map(
     ; "button lock"; as with the others, not ^!s or ^!l (Epic).
     "hkClickLock", "^!b",
     "clickLockAutoRelease", 1, ; 1 = the next real keystroke drops the latch
-    ; Radial menus. The dwell is the novice/expert unification: move before
-    ; it elapses and the wheel is never drawn at all. The dead zone is what
-    ; makes releasing in the middle mean "cancel" rather than "whatever my
-    ; hand drifted towards".
-    "radialDwellMs", 250,
-    "radialDead", 26,
-    "radialRadius", 132,
-    "radialSubMs", 340,        ; rest this long on a slice that opens another
-                               ;   menu and that menu takes over, still held
     ; v0.7 -- WHEEL DECK SETTLE. A deck is "hold a button, turn the wheel".
     ; Pressed while the wheel is still turning (mid-way through a CT stack,
     ; say), the notches still arriving belong to the scroll, not the deck:
     ; they stay native until the wheel has been still this long. 0 = off.
     "deckSettleMs", 250,
-    ; v0.6.4. Both are about the PICTURE, never about what a direction does.
-    "radialAnim", 1,           ; 1 = grow what the pointer is near, fade in
-    "radialWedges", 1,         ; 1 = draw each slice as the arc it answers to
     "hkClipboard", "^!c",
     "hkScratch", "^!n",
     ; v0.6.2: stations, window placement, the keyboard pointer
@@ -2372,82 +2366,6 @@ NewBinding(app, layer, mods, button, event, type, value) {
     return b
 }
 
-/**
- * The menus that ship.
- *
- * Deliberately small, and built only from things that are certain to work
- * without knowing anything about your site. Slice 1 points north and they run
- * clockwise; an empty slice is a gap you can flick past safely.
- *
- * BROWSER is the one that can be proved on any machine with no site
- * information at all, which is exactly why it is the reference menu.
- *
- * POWERSCRIBE is four slices, all of them routed through PSFire by virtue of
- * being ps_* actions -- activate by exe, WinWaitActive, return focus. No
- * slice sends to PowerScribe directly.
- *
- * PACS ships as LABELLED BLANKS on purpose. IntelliSpace shortcuts are
- * user-configurable, so shipping guessed keys would ship wrong ones; the
- * labels are the commands worth having and the values are yours to fill in
- * from your own User Preferences table. syngo.via and Epic are not seeded at
- * all for the same reason, one step further: their tables are site-remapped.
- */
-SeedMenus() {
-    out := []
-
-    br := Map()
-    br["name"] := "Browser"
-    br["app"] := ""                          ; global: no browser profile ships
-    br["slices"] := [MenuSlice("New tab",     "keys", "^t"),
-                     MenuSlice("Forward",     "keys", "!{Right}"),
-                     MenuSlice("Close tab",   "keys", "^w"),
-                     MenuSlice("Back",        "keys", "!{Left}")]
-    out.Push(br)
-
-    ps := Map()
-    ps["name"] := "PowerScribe"
-    ps["app"] := "PowerScribe"
-    ps["slices"] := [MenuSlice("Dictate",     "ps_dictate", ""),
-                     MenuSlice("Next field",  "ps_next", ""),
-                     MenuSlice("Impression",  "ps_keys", "^+1"),
-                     MenuSlice("Prev field",  "ps_prev", "")]
-    out.Push(ps)
-
-    out.Push(SeedPacsMenu())
-    out.Push(SeedPresetMenu())
-    return out
-}
-
-; The PACS wheel. Up/down are next/previous series so the two most frequent
-; commands are the two easiest flicks; the measurement tools sit on the
-; right, image tools on the left, and "Windowing" is a DOOR: rest on it (or
-; release on it) and the numbered preset ring takes its place.
-SeedPacsMenu() {
-    pa := Map()
-    pa["name"] := "PACS"
-    pa["app"] := "PACS"
-    pa["slices"] := [MenuSlice("Next series",  "keys", "{F8}",      "next"),
-                     MenuSlice("Ruler",        "keys", "r",         "ruler"),
-                     MenuSlice("ROI",          "keys", "+r",        "roi"),
-                     MenuSlice("Magnify",      "keys", "y",         "magnify"),
-                     MenuSlice("Prev series",  "keys", "{F7}",      "prev"),
-                     MenuSlice("Delete",       "keys", "{Delete}",  "delete"),
-                     MenuSlice("Windowing",    "radial", "Window presets", "window"),
-                     MenuSlice("CLAHE",        "keys", "+c",        "clahe")]
-    return pa
-}
-
-; True when a menu is the shipped PACS wheel (or a rename of it): eight
-; slices, F8 up, F7 down, and a door to the preset ring on the left.
-MenuIsShippedPacs(m) {
-    sl := MGet(m, "slices", [])
-    if (sl.Length != 8)
-        return false
-    v := (i) => MGet(MGet(sl[i], "action", Map()), "value", "")
-    t := (i) => MGet(MGet(sl[i], "action", Map()), "type", "")
-    return (v(1) = "{F8}" && v(5) = "{F7}" && t(7) = "radial")
-}
-
 ; ── STARTER PACKS ────────────────────────────────────────────────────────
 ; A pack is a handful of ORDINARY bindings with a name. Applying one writes
 ; those rows through the same UpsertBinding the editor uses, so what you get
@@ -2460,15 +2378,8 @@ StarterPacks() {
          sub:  "button 4 = previous field, button 5 = next field, everywhere",
          rows: [["*", "*", "", "XButton1", "tap", "ps_prev", ""],
                 ["*", "*", "", "XButton2", "tap", "ps_next", ""]]},
-        {name: "PACS wheel on button 4",
-         sub:  "hold button 4 in PACS for the radial menu",
-         rows: [["PACS", "*", "", "XButton1", "hold", "radial", "PACS"]]},
-        {name: "Window presets on button 5",
-         sub:  "hold button 5 in PACS for the numbered preset ring",
-         rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
         {name: "PACS zoom and pan on the thumb buttons",
-         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)"
-              . " (replaces the PACS wheel / Window presets packs on those buttons)",
+         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)",
          ; The left button is deliberately NOT in this pack. A native row
          ; scoped to one app is not an INERT row (InertShape wants app "*"),
          ; so adding one would HOOK the left button inside PACS and turn
@@ -2509,10 +2420,6 @@ StarterPackApply(name) {
     replacing := []
     for r in pk.rows {
         b := NewBinding(r[1], r[2], r[3], r[4], r[5], r[6], r[7])
-        if (r[6] = "radial" && r[7] != "" && !MenuByName(r[7])) {
-            HUD("The menu " r[7] " is missing — add it on the Menus page first", "warn")
-            return
-        }
         for d in FindDupBinding(b) {
             old := g_Cfg["bindings"][d]
             if !IsInertRow(old)
@@ -2540,48 +2447,6 @@ StarterPackApply(name) {
             . (rows.Length = 1 ? "" : "s") " on the Mouse page", "jade")
     else
         HUD("Applied for now — not written to disk", "danger")
-}
-
-; Window presets 1-9: the slice NUMBER is the key it sends, and the label
-; is whatever the site calls that preset. Rename freely on the Menus tab.
-SeedPresetMenu() {
-    wp := Map()
-    wp["name"] := "Window presets"
-    wp["app"] := ""                          ; opened by name, never automatic
-    names := ["Soft tissue", "Bone", "Brain", "C-spine soft tissue", "CTA",
-              "Infarct", "Liver", "Lung", "Lung wide"]
-    sl := []
-    for i, nm in names
-        sl.Push(MenuSlice(nm, "keys", String(i)))
-    wp["slices"] := sl
-    return wp
-}
-
-/** One slice: a label and an ordinary {type, value} action. */
-MenuSlice(label, atype, value, icon := "") {
-    m := Map()
-    m["label"] := label
-    if (icon != "")
-        m["icon"] := icon
-    a := Map()
-    a["type"] := atype
-    a["value"] := value
-    m["action"] := a
-    return m
-}
-
-; Icon names a slice may carry (drawn as vector glyphs in the wheel by
-; RadialIcon). "" = no icon. Kept short: they sit in a 70 px dropdown.
-global RADIAL_ICONS := ["", "next", "prev", "delete", "ruler", "roi", "clahe",
-    "window", "magnify", "series", "menu", "zoom", "invert", "reset", "dictate"]
-
-/** One menu by name, or 0. */
-MenuByName(name) {
-    for m in MGet(g_Cfg, "menus", []) {
-        if (MGet(m, "name", "") = name)
-            return m
-    }
-    return 0
 }
 
 ; Default config is a clean slate (v0.3): nothing bound, every input fully
@@ -2631,7 +2496,6 @@ DefaultCfg() {
     macros["DictateThenNextField"] := demo
     c["macros"] := macros
     c["layouts"] := []
-    c["menus"] := SeedMenus()
     ; Scratchpad snippets. The clipboard HISTORY is deliberately not here --
     ; see the S14c header: it never touches disk.
     c["snippets"] := []
@@ -2675,7 +2539,6 @@ SeedDefaultBindings(cfg) {
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; Nothing on the keyboard beyond the backtick (v0.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
-    SeedPacsWheelRows(b, cfg["apps"])
 }
 
 ; CapsLock ships as dictation on a TAP. Its HOLD is its layer (the "Hold
@@ -2684,18 +2547,6 @@ SeedDefaultBindings(cfg) {
 ; Hooking CapsLock suppresses its native toggle, so Caps Lock stays off.
 CapsLockDictateRow() {
     return NewBinding("*", "*", "", "CapsLock", "tap", "ps_dictate", "")
-}
-
-; The radial menus, one gesture away in the viewer (v0.7): in PACS, HOLD
-; button 4 for the PACS wheel and HOLD button 5 for the numbered window
-; presets -- no door to go through for a preset. The taps still hop the
-; pointer between monitors; a hold on a thumb button waits for the
-; threshold, a tap fires on release. Scoped to PACS so nothing changes in
-; PowerScribe or anywhere else.
-SeedPacsWheelRows(b, apps := 0) {
-    app := PacsAppName(apps)
-    b.Push(NewBinding(app, "*", "", "XButton1", "hold", "radial", "PACS"))
-    b.Push(NewBinding(app, "*", "", "XButton2", "hold", "radial", "Window presets"))
 }
 
 ; The name of the profile that matches the IntelliSpace exe -- "PACS" as
@@ -2780,91 +2631,6 @@ MigrateCfg() {
             a["match"] := ["syngo.Common.Container.exe"]
             g_Cfg["apps"].Push(a)
         }
-    }
-    ; v0.5.0: the shipped radial menus, seeded once into an existing config
-    ; so an upgrade gets them without hand-editing. Guarded by a flag rather
-    ; than by absence, so deleting a menu keeps it deleted -- same rule as
-    ; the syngo.via profile above.
-    if (IsObject(s) && !s.Has("seedMenus")) {
-        s["seedMenus"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        for m in SeedMenus() {
-            if !MenuByName(MGet(m, "name", ""))
-                g_Cfg["menus"].Push(m)
-        }
-    }
-    ; v0.6.1: the PACS menu used to ship as eight labelled BLANKS. If it is
-    ; still exactly that -- nothing filled in -- it is replaced by the real
-    ; one, and the Window presets ring is added if there is no menu of that
-    ; name. A PACS menu the user has touched is left alone. Flag-guarded so
-    ; deleting either afterwards keeps it deleted.
-    if (IsObject(s) && !s.Has("seedPacs061")) {
-        s["seedPacs061"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        for i, m in g_Cfg["menus"] {
-            if (MGet(m, "name", "") != "PACS")
-                continue
-            untouched := true
-            for sl in MGet(m, "slices", []) {
-                if (MGet(MGet(sl, "action", Map()), "type", "none") != "none")
-                    untouched := false
-            }
-            if untouched
-                g_Cfg["menus"][i] := SeedPacsMenu()
-        }
-        if !MenuByName("PACS")
-            g_Cfg["menus"].Push(SeedPacsMenu())
-        if !MenuByName("Window presets")
-            g_Cfg["menus"].Push(SeedPresetMenu())
-    }
-    ; v0.6.1b: the gentle version above only replaced an UNTOUCHED template,
-    ; and a PACS menu that had been edited kept its old blanks -- which is
-    ; not what "ship the new default" meant. Now: whatever is called "PACS"
-    ; and is not already the shipped menu is kept under "PACS (previous)",
-    ; opened only by that name, and the shipped PACS menu takes its place.
-    ; Bindings that open "PACS" by name therefore open the new one.
-    if (IsObject(s) && !s.Has("seedPacs061b")) {
-        s["seedPacs061b"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        old := MenuByName("PACS")
-        if (IsObject(old) && !MenuIsShippedPacs(old)) {
-            nm := "PACS (previous)"
-            k := 2
-            while MenuByName(nm) {
-                nm := "PACS (previous " k ")"
-                k += 1
-            }
-            old["name"] := nm
-            old["app"] := ""                 ; by name only, never automatic
-        }
-        if !MenuByName("PACS")
-            g_Cfg["menus"].Push(SeedPacsMenu())
-        if !MenuByName("Window presets")
-            g_Cfg["menus"].Push(SeedPresetMenu())
-    }
-    ; v0.7: the PACS wheel and the Window presets ring on the thumb
-    ; buttons in PACS, seeded ONCE into a config that has no radial row and
-    ; nothing held on either thumb button in PACS. Flag-guarded, so deleting
-    ; the rows keeps them deleted.
-    if (IsObject(s) && !s.Has("seedPacsWheel067")) {
-        s["seedPacsWheel067"] := 1
-        free := true
-        pacs := PacsAppName()
-        for row in g_Cfg["bindings"] {
-            if (MGet(MGet(row, "action", Map()), "type", "") = "radial")
-                free := false
-            if ((MGet(row, "button", "") = "XButton1" || MGet(row, "button", "") = "XButton2")
-                && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = pacs)
-                free := false
-        }
-        ; ...and only when both menus are actually there to open. The
-        ; 0.6.1b block above seeds them ONCE, so a config that has deleted
-        ; one since must not gain a thumb hold that opens nothing (v0.7).
-        if (free && MenuByName("PACS") && MenuByName("Window presets"))
-            SeedPacsWheelRows(g_Cfg["bindings"])
     }
     ; v0.7: CapsLock = dictate on tap, seeded ONCE into a config with no
     ; CapsLock row at all. Flag-guarded, so deleting it keeps it deleted.
@@ -3228,8 +2994,10 @@ NormalizeCfg(imported := false) {
         c["layouts"] := []
     if !c.Has("stations")
         c["stations"] := []
-    if !c.Has("menus")
-        c["menus"] := []
+    ; v0.7.2: radial menus live in their own script now. Their list goes
+    ; with them; the rows that opened one are dropped by ValidateCfg.
+    if c.Has("menus")
+        c.Delete("menus")
     if !c.Has("snippets")
         c["snippets"] := []
     if !c.Has("macros")
@@ -3249,7 +3017,7 @@ NormalizeCfg(imported := false) {
 ValidateCfgShape(c) {
     if !(c is Map) || !(MGet(c, "bindings", 0) is Array)
         throw Error("Expected a settings object with a bindings list")
-    for key in ["apps", "layers", "layouts", "menus", "snippets", "psExes",
+    for key in ["apps", "layers", "layouts", "snippets", "psExes",
                 "stations"] {
         if (c.Has(key) && !(c[key] is Array))
             throw Error(key " must be a list")
@@ -3258,34 +3026,11 @@ ValidateCfgShape(c) {
         if (c.Has(key) && !(c[key] is Map))
             throw Error(key " must be an object")
     }
-    ; Menus and slices are NOT hard failures: a single malformed row must
-    ; never send the whole file to a backup or to defaults. ValidateCfg()
-    ; drops them, the same way it drops malformed bindings and apps.
 }
 
 ; Drop malformed rows from a hand-edited config file so one bad row cannot
 ; raise an error on every mouse event or break a GUI refresh.
 ValidateCfg() {
-    ; v0.7: the tap -> hold radial conversion below must not create a
-    ; SECOND hold row for a key a hand-authored hold row already owns.
-    ; RowKeyTaken only sees what has been kept SO FAR, so a rival later in
-    ; the list survived as well and FindBindingFor's later-wins tie-break
-    ; shadowed one of them with nothing in Diagnostics to say so. Scan the
-    ; whole list first, counting only the hold rows that will survive this
-    ; same pass (the two drops below).
-    rowKey(r) => MGet(r, "button", "") "|" MGet(r, "event", "") "|"
-        . MGet(r, "app", "*") "|" MGet(r, "layer", "*") "|" MGet(r, "mods", "")
-    holdKeys := Map()
-    holdKeys.CaseSense := "Off"
-    for row in g_Cfg["bindings"] {
-        if (!(row is Map) || MGet(row, "event", "") != "hold")
-            continue
-        if !LayerPathAllowed(MGet(row, "layer", "*"))
-            continue
-        if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "app", "*") = "*")
-            continue
-        holdKeys[rowKey(row)] := 1
-    }
     kept := []
     for row in g_Cfg["bindings"] {
         if !(row is Map && row.Has("button") && row.Has("event")
@@ -3299,24 +3044,13 @@ ValidateCfg() {
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
         }
-        ; v0.7: a radial menu opens on hold only. A tap row that opened one
-        ; becomes a hold row; a wheel row that did cannot, and is dropped.
-        if (MGet(MGet(row, "action", Map()), "type", "") = "radial"
-            && MGet(row, "event", "") != "hold") {
-            if (MGet(row, "event", "") = "tap") {
-                row["event"] := "hold"
-                if (RowKeyTaken(kept, row) || holdKeys.Has(rowKey(row))) {
-                    Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
-                        . "radial menu dropped: that button already has a hold row here")
-                    continue
-                }
-                Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
-                    . "radial menu is now a HOLD: menus open while the button is held")
-            } else {
-                Problem("retired", InputLabel(MGet(row, "button", "")) " "
-                    . MGet(row, "event", "") " → radial menu row dropped: menus open on hold only")
-                continue
-            }
+        ; v0.7.2: radial menus moved to their own script. A row that
+        ; opened one has nothing left to run it: dropped, and named.
+        if (MGet(MGet(row, "action", Map()), "type", "") = "radial") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → radial menu row dropped: radial "
+                . "menus are a separate script now")
+            continue
         }
         ; v0.7: a layer is held open by a thumb button or CapsLock, one at
         ; a time; and left / right / middle hold only inside a program.
@@ -3357,17 +3091,7 @@ ValidateCfg() {
         kept.Push(app)
     }
     g_Cfg["apps"] := kept
-    ; The two v0.6.4 wheel flags are read from the RADIAL TIMER, where a
-    ; hand-edited "yes" or an object would throw once a frame with nothing on
-    ; screen to say so. Anything that is not plainly 0 means 1 (the default).
     if (g_Cfg.Has("settings") && g_Cfg["settings"] is Map) {
-        for k in ["radialAnim", "radialWedges"] {
-            if g_Cfg["settings"].Has(k) {
-                v := g_Cfg["settings"][k]
-                g_Cfg["settings"][k] := (!IsObject(v) && (v = 0 || v = "0"
-                    || v = false)) ? 0 : 1
-            }
-        }
         ; The two wheel repeat guards are read from the WHEEL HOOK, once per
         ; notch, where a hand-edited "fast" or an object would throw inside a
         ; Critical thread. Clamped to 0..1000 ms here; anything unusable
@@ -3379,21 +3103,6 @@ ValidateCfg() {
                     0, 1000, DEFAULTS[k])
             }
         }
-    }
-    if (g_Cfg.Has("menus") && g_Cfg["menus"] is Array) {
-        kept := []
-        for menu in g_Cfg["menus"] {
-            if (!(menu is Map) || !(MGet(menu, "slices", 0) is Array)
-                || String(MGet(menu, "name", "")) = "")
-                continue
-            menu["name"] := String(menu["name"])
-            for i, sl in menu["slices"] {
-                if (!(sl is Map) || !(MGet(sl, "action", 0) is Map))
-                    menu["slices"][i] := MenuSlice("", "none", "")
-            }
-            kept.Push(menu)
-        }
-        g_Cfg["menus"] := kept
     }
     ValidateLayouts()
 }
@@ -4464,47 +4173,6 @@ OnPressHK(btn, *) {
         st.pressTick := A_TickCount
         return
     }
-    ; v0.6.2a: a live menu is MODAL, but its overlay is NoActivate and
-    ; click-through, so a mouse click during one used to fall straight into
-    ; the study underneath WITH THE WHEEL STILL UP -- a stray window/level or
-    ; a scroll through the series you were about to pick a preset for. A
-    ; click is the universal "not this" gesture: cancel, fire nothing, and
-    ; swallow the click. The holder's own button is exempt (its release is
-    ; the commit) and wheels are exempt (a notch is not a click). PRACTICE
-    ; is NOT exempt any more (v0.6.4a): a practice wheel that a click could
-    ; not dismiss was the one window in RadMapper you had to wait out, and
-    ; cancelling is as much a part of the gesture as the flick is -- so it
-    ; is a thing to practise, not a thing to suppress. A cancelled trial
-    ; goes back to the settings window through RadialClose's trial branch,
-    ; exactly as Escape already did. RadialBindCancel hooks the three mouse
-    ; buttons the config does not, so this is reached even when LButton is
-    ; otherwise fully native.
-    if (IsObject(g_Radial) && IsMouseInput(btn)
-        && !IsWheel(btn)
-        && !(IsObject(g_Radial.holder) && g_Radial.holder.btn = btn)) {
-        RadialClose(false)
-        HUD("Menu cancelled", "mute")
-        ; A still-down state here owns a synthetic down that NewBS is about
-        ; to orphan out of g_BS, where not even the watchdog can find it.
-        ; Release it first, exactly as the not-ours branch below does.
-        prev := BS(btn)
-        if prev {
-            if (prev.down && !prev.consumed) {
-                if (prev.mode = "passthru")
-                    SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
-                else if (prev.mode = "held")
-                    ActionUp(prev.holdBinding, prev)
-            }
-            ClearBS(btn)
-        }
-        ; down+consumed, like the click-lock escape below: the matching
-        ; physical release must be inert, not a native Up with no Down.
-        st := NewBS(btn)
-        st.down := true
-        st.consumed := true
-        st.pressTick := A_TickCount
-        return
-    }
     ; A reinjected click can never change which window is the foreground one
     ; (Windows' foreground lock), so the engine must manage activation itself
     ; around its own windows. Ours-ness is POSITIONAL (window under the
@@ -4767,7 +4435,7 @@ RepeatSafeAct(t) {
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
         || t = "dragmove" || t = "sniper" || t = "boost" || t = "scrollptr"
-        || t = "zoomptr" || t = "radial")
+        || t = "zoomptr")
 }
 
 HoldTimer(st, gen, *) {
@@ -5017,23 +4685,6 @@ OnWheelHK(wh, *) {
     tilt := (wh = "WheelLeft" || wh = "WheelRight")
     if (!g_Enabled || (!tilt && (OwnGuiActive() || OwnWindowAt(RM_WinAt())))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
-        return
-    }
-    ; A radial menu is up: the hand is mid-gesture on its holder, and that
-    ; holder is also a layer host. A notch now must not drive a deck, the
-    ; switcher or a dial invisibly behind the wheel (v0.7).
-    if (IsObject(g_Radial) && !g_Radial.trial) {
-        ; A VERTICAL notch still scrolls the study: the reader turned the
-        ; wheel and can see what it did. A TILT is dropped. On a trackball
-        ; the rocker sits under the same thumb that is holding the ring
-        ; open, it repeats while it is held over, and a sideways notch into
-        ; the viewer is input the reader never asked for and cannot see.
-        ; The status line, not the HUD: the menu owns the screen.
-        if tilt {
-            LastEvent(wh " dropped — the " g_Radial.name " menu is open")
-            return
-        }
-        SendWheelRaw(wh, 1)
         return
     }
     ; no turn binding exists for this wheel in ANY context -> nothing to
@@ -5338,45 +4989,6 @@ ConflictReport(focus := "") {
         out.Push({kind: "info", text: txt ". While held it is silent; its own "
             . "tap or hold fires on release only if nothing in the layer "
             . "was used."})
-        ; A host that also OPENS A MENU on hold is a trap for the layer's
-        ; MOUSE rows: once the menu is up, OnPressHK reads any other mouse
-        ; button as "not this", cancels the menu and fires nothing. Key
-        ; rows in the layer are unaffected, so this is a warning, not a
-        ; refusal.
-        mouseRow := false
-        for r in hrows {
-            if IsMouseInput(MGet(r, "button", ""))
-                mouseRow := true
-        }
-        if mouseRow {
-            for r in rows {
-                if (MGet(r, "button", "") != host || MGet(r, "event", "") != "hold"
-                    || MGet(MGet(r, "action", Map()), "type", "") != "radial")
-                    continue
-                out.Push({kind: "warn", text: InputLabel(host) " hosts a layer AND "
-                    . "opens " DescribeAction(r["action"]) " on hold "
-                    . ConflictScope(r) ": once the menu is up, pressing another "
-                    . "mouse button cancels the menu instead of firing its layer "
-                    . "row. Put the layer and the menu on different buttons."})
-                break
-            }
-        }
-    }
-    ; 5. radial rows pointing at nothing
-    for row in rows {
-        a := MGet(row, "action", 0)
-        if (!IsObject(a) || MGet(a, "type", "") != "radial")
-            continue
-        if (focus != "" && MGet(row, "button", "") != focus)
-            continue
-        v := MGet(a, "value", "")
-        if (v != "" && !MenuByName(v))
-            out.Push({kind: "warn", text: ConflictRowText(row) " ("
-                . ConflictScope(row) "): there is no menu called “" v "”."})
-        else if (v = "" && MGet(row, "app", "*") = "*")
-            out.Push({kind: "info", text: ConflictRowText(row) " everywhere: "
-                . "opens whichever menu names the program in front, and nothing "
-                . "where no menu does."})
     }
     ; 6. the same PowerScribe / pointer action from several places
     ess := Map("ps_dictate", "Dictate", "ps_next", "Next field",
@@ -5504,12 +5116,6 @@ ActionFire(binding, st) {
             WinPlace(v)
         case "warp":
             Warp.Toggle()
-        case "radial":
-            ; A menu opens on HOLD only (v0.7): there is no tap-opened,
-            ; rest-to-fire menu any more. Reached from a tap row, a macro
-            ; step or a wheel notch, say why instead of doing nothing.
-            HUD("Radial menus open while a button is HELD — set the trigger "
-                . "to “Hold it down”", "warn")
         case "clipboard":
             Shelf.Toggle("clip")
         case "scratchpad":
@@ -5564,14 +5170,6 @@ ActionDown(binding, st, instant) {
             ScrollPtrStart(true)             ; momentary: watchdog-recoverable
         case "zoomptr":
             ScrollPtrStart(true, true)
-        case "radial":
-            ; Pressing the button again while a menu is still up (a preset
-            ; ring left open, say) closes it rather than stacking another.
-            if IsObject(g_Radial) {
-                RadialClose(false)           ; ActionUp's RadialClose(true) is
-                return                       ; then a no-op: nothing is open
-            }
-            RadialOpen(v, IsObject(st) ? st : 0)
         default:
             ActionFire(binding, st)          ; instant action bound on hold
     }
@@ -5612,11 +5210,6 @@ ActionUp(binding, st) {
             SpeedMod("boost", false)
         case "scrollptr", "zoomptr":
             ScrollPtrStop()
-        case "radial":
-            ; release IS the commit gesture -- unless this press was the one
-            ; that cancelled a lingering menu, in which case there is
-            ; nothing to commit and RadialClose is a no-op anyway
-            RadialClose(true)
     }
 }
 
@@ -6360,11 +5953,11 @@ FollowTick(*) {
     if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr))
         return
     ; 2b. ... and a gesture whose holder is a KEY is invisible to the loop
-    ;     above. A radial menu and the switcher CHOOSE BY POINTER POSITION,
+    ;     above. The switcher CHOOSES BY POINTER POSITION,
     ;     the keyboard pointer may be holding LButton itself, and a moddrag
     ;     holds it synthetically (which reads as up under "P"). Warping now
-    ;     commits the wrong slice or throws the drag across the study.
-    if (IsObject(g_Radial) || IsObject(g_AppSw))
+    ;     picks the wrong window or throws the drag across the study.
+    if IsObject(g_AppSw)
         return
     if (IsSet(Warp) && Warp.active)
         return
@@ -8215,7 +7808,7 @@ StationSettled() {
         busy := true
     if (!busy && Warp.active)
         busy := true
-    if (!busy && (IsObject(g_Radial) || IsObject(g_AppSw)))
+    if (!busy && IsObject(g_AppSw))
         busy := true
     mons := []
     nMon := -1
@@ -8476,1318 +8069,6 @@ WinPlace(v) {
     } catch as e {
         Problem("winplace", "window placement failed: " e.Message)
         HUD("Could not move that window", "warn")
-    }
-}
-
-
-; ── §7d  RADIAL MENUS (marking menus) ───────────────────────────────────────
-;
-; A radial menu solves POINTER TRAVEL, which is a measured problem on a
-; reading station rather than a theoretical one. With items arranged around
-; the cursor, every item is the same short distance away and the DIRECTION is
-; constant -- which is what makes it learnable as a gesture, and a gesture
-; costs no travel at all.
-;
-; The design is not open. Kurtenbach and Buxton measured marking-menu error
-; rates staying under 10% at a breadth of 8 and a depth of 2, and rising
-; sharply past either. For a reading room 10% is already too high -- a
-; mis-fired window/level preset is recoverable, a mis-fired "mark as read" is
-; not. So: EIGHT SLICES, ONE LEVEL. Nesting is deliberately not built.
-;
-; Three rules from that literature are load-bearing here:
-;
-;  1. NOVICE AND EXPERT ARE THE SAME GESTURE. The menu is not drawn on press.
-;     Hold and move straight away and it fires on direction alone, with
-;     nothing ever drawn; hold still past the dwell and it fades in so you can
-;     look. Because both paths are one physical action, using the slow form
-;     teaches the fast one. Most implementations get this wrong by always
-;     drawing, which is what turns a marking menu back into a toolbar.
-;  2. IT IS ALWAYS ABORTABLE. Releasing inside the dead zone fires nothing,
-;     and Escape cancels. A gesture that cannot be called off mid-flight will
-;     eventually fire the wrong thing into a report.
-;  3. AT THE CURSOR -- and this is the one deliberate exception to the v0.4.0
-;     rule that moved every HUD off the pointer. That rule is about PASSIVE
-;     notifications sitting over a finding. This is modal, it exists for a few
-;     hundred milliseconds, it is there because you asked for it, and putting
-;     it anywhere else would destroy the only reason to build it.
-;
-; A slice is an ordinary {type, value} action, so the whole existing action
-; table is available with no new executor cases -- and PowerScribe slices
-; route through PSFire automatically, because ps_* actions already do.
-
-global g_Radial := 0       ; live menu {menu, slices, ax, ay, holder, latched,
-                           ;   sel, lyr, t0, drawn, restAt, name}
-; Every wheel layer this process has created and not yet disposed.
-;
-; g_Radial.lyr is the ONE the live menu draws on, and the ordinary paths
-; (RadialRing, RadialClose) dispose it themselves. This list is the floor
-; under them: Layer() creates a window and therefore pumps messages, so a
-; hotkey thread can close or replace the menu while a paint is still inside
-; the constructor, and the layer it hands back would belong to nobody --
-; a click-through wheel left on top of the study with no timer and no
-; reference to tear it down. RadialClose, PanicRelease and Cleanup sweep it.
-global g_RadialLayers := []
-
-; Slice 1 points NORTH and they run clockwise, for 4 and for 8 alike, so the
-; same menu keeps its directions if it grows.
-global RADIAL_DIR4 := ["Up", "Right", "Down", "Left"]
-global RADIAL_DIR8 := ["Up", "Up-right", "Right", "Down-right",
-                       "Down", "Down-left", "Left", "Up-left"]
-; The 9-way ring exists for ONE job: numbered window presets 1-9, clockwise
-; from the top, so the slice number IS the key it sends. 40 degrees a slice
-; is past the 8-way comfort limit, which is why it is the exception and not
-; the default; a preset ring is read (the numbers are printed large), not
-; flicked blind.
-global RADIAL_DIR9 := ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-global RADIAL_MAXDEPTH := 2   ; a menu inside a menu, and no deeper
-
-/** Degrees clockwise from north, 0..360, for a screen-space delta. */
-RadialAngle(dx, dy) {
-    static DEG := 57.29577951308232
-    static PI  := 3.141592653589793
-    x := -dy                                 ; screen y grows downward, so
-    y := dx                                  ;   north is +x in this frame
-    if (x > 0)
-        r := ATan(y / x)
-    else if (x < 0)
-        r := ATan(y / x) + PI
-    else
-        r := (y >= 0) ? (PI / 2) : (-PI / 2)
-    a := r * DEG
-    while (a < 0)
-        a += 360
-    while (a >= 360)
-        a -= 360
-    return a
-}
-
-/** Preserve compass positions when changing between four and eight slots. */
-ResizeMenuSlices(slices, count) {
-    out := []
-    for source in MenuKeepMap(RadialCountFor(slices.Length), count)
-        out.Push(source && slices.Has(source) ? slices[source]
-            : MenuSlice("", "none", ""))
-    return out
-}
-
-; For each slot of a NEW size, which slot of the OLD size feeds it (0 = a
-; fresh blank). Up/Right/Down/Left keep their direction across 4 <-> 8:
-; 4-way slot i sits at 8-way slot 2i-1. The 9-way numbered ring has no
-; compass meaning, so it is filled in order and truncated in order.
-MenuKeepMap(oldCount, newCount) {
-    map := []
-    loop newCount {
-        i := A_Index
-        if (oldCount = newCount)
-            src := i
-        else if (oldCount = 4 && newCount = 8)
-            src := Mod(i, 2) ? (i + 1) // 2 : 0
-        else if (oldCount = 8 && newCount = 4)
-            src := i * 2 - 1
-        else if (oldCount = 4 && newCount = 9)
-            src := (i <= 7 && Mod(i, 2)) ? (i + 1) // 2 : 0
-        else if (oldCount = 9 && newCount = 4)
-            src := i * 2 - 1
-        else
-            src := i <= oldCount ? i : 0          ; 8 <-> 9: in order
-        map.Push(src)
-    }
-    return map
-}
-
-RenameMenuBindings(oldName, newName) {
-    for row in g_Cfg["bindings"] {
-        action := MGet(row, "action", 0)
-        if (MGet(action, "type", "") = "radial"
-            && MGet(action, "value", "") = oldName)
-            action["value"] := newName
-    }
-    ; A radial menu may itself open another menu.
-    for menu in MGet(g_Cfg, "menus", []) {
-        for slice in MGet(menu, "slices", []) {
-            action := MGet(slice, "action", 0)
-            if (MGet(action, "type", "") = "radial"
-                && MGet(action, "value", "") = oldName)
-                action["value"] := newName
-        }
-    }
-}
-
-/** Menu by name; blank name = the best menu for the app in front. */
-RadialFind(name) {
-    menus := MGet(g_Cfg, "menus", [])
-    if (name != "") {
-        for m in menus {
-            if (MGet(m, "name", "") = name)
-                return m
-        }
-        return 0
-    }
-    app := ActiveAppName()
-    fallback := 0
-    for m in menus {
-        ma := MGet(m, "app", "")
-        if (ma != "" && ma = app)
-            return m                         ; an app match always wins
-        if (ma = "" && !IsObject(fallback))
-            fallback := m                    ; first global menu, in order
-    }
-    return fallback
-}
-
-/** The slices that are actually usable, in slice order, with their index. */
-RadialSlices(mn) {
-    out := []
-    raw := MGet(mn, "slices", [])
-    ; The editor writes 4 or 8. Normalize hand-edited/old config to the same
-    ; contract so corrupted input cannot create an unresearched 5- or 12-way
-    ; menu. Missing rows are inert gaps; extra rows never execute.
-    count := RadialCountFor(raw.Length)
-    loop count {
-        sl := raw.Has(A_Index) ? raw[A_Index] : 0
-        act := MGet(sl, "action", 0)
-        live := IsObject(act) && MGet(act, "type", "none") != "none"
-        ; a slice whose action opens another menu: the wheel shows it as a
-        ; door, and resting on it -- or turning a corner on it -- walks
-        ; through. `kids` is how many commands wait behind that door, drawn
-        ; as dots on its rim; `sc` is its live hover scale (v0.6.4).
-        sub := live && MGet(act, "type", "") = "radial"
-               ? String(MGet(act, "value", "")) : ""
-        out.Push({label: MGet(sl, "label", ""),
-                  icon: MGet(sl, "icon", ""),
-                  act: IsObject(act) ? act : 0,
-                  live: live,
-                  sub: sub,
-                  kids: (sub != "") ? RadialKidCount(sub) : 0,
-                  sc: 1.0})
-    }
-    return out
-}
-
-/** 4, 8 or 9 slices, never anything else (see RADIAL_DIR9). */
-RadialCountFor(n) {
-    return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
-}
-
-; ── WEDGES: which directions belong to which slice (v0.6.4a) ─────────────
-;
-; Selection used to be "the nearest slice centre". v0.6.4 replaced it with
-; Kando's scaleWedge(.., 0.5) EVERYWHERE -- an item owning only the inner
-; half of the gap to each neighbour -- and that was one step too far. Dead
-; space is only worth having where a bearing that lands in it MEANS
-; something, and the only ring where it does is a child ring, where it
-; means back.
-;
-;   * A ROOT ring: every slice owns its whole sector. A flick 30 degrees
-;     off north in a 4-way ring is unambiguously north, and 46 degrees is
-;     unambiguously east. There is nothing else it could be: the root has
-;     no way back, so a leftover bearing would fire nothing and read as a
-;     dropped button press. Release in the HUB, or press Escape, or click:
-;     those are the ways to cancel, and they are deliberate acts.
-;   * A CHILD ring: half the gap, as v0.6.4 made it. What is left over --
-;     including the whole direction the ring was entered from -- is BACK,
-;     which commits nothing. "I did not mean to walk in here" lands
-;     somewhere harmless.
-;   * A NUMBERED child ring (the 9-way preset ring): full sectors again,
-;     because there the slot IS the number and all nine have to be
-;     reachable. It keeps a zero-span `back` marker so the parent node and
-;     its connector are still drawn, but no bearing selects it.
-;
-; Slice DIRECTIONS do not move in any of this: a root ring is the same
-; fixed compass it has always been.
-
-/** True when a bearing (degrees from north) lies in the arc start..end. */
-RadialAngleIn(a, start, end) {
-    span := Mod(Mod(end - start, 360) + 360, 360)
-    if (span <= 0.0001)
-        return false
-    d := Mod(Mod(a - start, 360) + 360, 360)
-    return d <= span
-}
-
-/**
- * Where slice i points, in degrees clockwise from north.
- *
- * A root ring is the fixed compass (slice 1 north, then clockwise) that the
- * whole feature's muscle memory is built on. A CHILD ring is spaced
- * 360/(n+1) starting one step past the direction it was entered from, so
- * the way back keeps a slot of its own and no command is ever stacked on
- * top of it (Kando computeItemAngles). A numbered preset ring is exempt:
- * there the slot IS the number, and a preset that moves is a preset nobody
- * can learn.
- */
-RadialSliceAngles(n, parentAngle := -1, numbered := false) {
-    out := []
-    if (parentAngle < 0 || numbered) {
-        step := 360.0 / n
-        loop n
-            out.Push(Mod((A_Index - 1) * step, 360))
-        return out
-    }
-    step := 360.0 / (n + 1)
-    loop n
-        out.Push(Mod(Mod(parentAngle + A_Index * step, 360) + 360, 360))
-    return out
-}
-
-/**
- * The arc each slice answers to, plus the "back" arc.
- *
- * Returns {slices: [{center, start, end}, ...], back: 0 | {center, start,
- * end}}.
- *
- * A FULL ring -- the root, and the numbered preset ring at any depth --
- * gives every slice its WHOLE sector, gap/2 to each side. There is nothing
- * to be gained by leaving dead space there: the root has no way back for a
- * leftover bearing to mean, so a flick 30 degrees off north would simply do
- * nothing and read as a dropped press, and the preset ring is nine numbers
- * that must each be reachable. A CHILD ring is the one that keeps dead
- * space: a wedge is the slice's own direction plus a quarter of the gap to
- * each neighbour -- half the gap in total -- and everything left over,
- * including the parent's own slot, is `back`, which commits nothing. That
- * is where "I did not mean to walk in here" needs somewhere harmless to
- * land.
- *
- * A numbered CHILD ring is the exception to the exception: its slices are
- * full sectors, so nothing is left over, and `back` is a zero-span marker
- * at the parent direction. It exists only so the parent node and its
- * connector are still drawn -- RadialPickIn never returns -1 there.
- */
-RadialWedges(n, parentAngle := -1, numbered := false) {
-    angles := RadialSliceAngles(n, parentAngle, numbered)
-    full := (parentAngle < 0 || numbered)
-    gap := full ? (360.0 / n) : (360.0 / (n + 1))
-    half := full ? (gap / 2) : (gap / 4)
-    out := {slices: [], back: 0}
-    for a in angles
-        out.slices.Push({center: a, start: Mod(a - half + 360, 360),
-                         end: Mod(a + half, 360)})
-    ; A full ring's wedges MEET, so a bearing exactly on a shared edge is in
-    ; both: RadialPickIn scans in order, so it goes to the lower-numbered
-    ; slice. Deliberate -- a boundary has to belong to somebody.
-    if full {
-        if (numbered && parentAngle >= 0) {
-            pa := Mod(Mod(parentAngle, 360) + 360, 360)
-            out.back := {center: pa, start: pa, end: pa}
-        }
-        return out
-    }
-    pa := Mod(Mod(parentAngle, 360) + 360, 360)
-    bs := pa, be := pa, bd := 400.0, ad := 400.0
-    for w in out.slices {
-        d := Mod(Mod(pa - w.end, 360) + 360, 360)
-        if (d < bd) {
-            bd := d
-            bs := w.end
-        }
-        d := Mod(Mod(w.start - pa, 360) + 360, 360)
-        if (d < ad) {
-            ad := d
-            be := w.start
-        }
-    }
-    out.back := {center: pa, start: bs, end: be}
-    return out
-}
-
-/** Slice index for a bearing: 0 = no slice (cancel), -1 = back. */
-RadialPickIn(wedges, angle) {
-    for i, w in wedges.slices {
-        if RadialAngleIn(angle, w.start, w.end)
-            return i
-    }
-    return IsObject(wedges.back) ? -1 : 0
-}
-
-/**
- * Kando's GestureDetector, as a pure function over a list of {x, y}.
- *
- * A corner is the end of a straight run at least `minLen` long followed by
- * a step of at least `jitter` that turns by more than `minAngle` degrees.
- * Returns the INDEX of the point where the hand turned, or 0 while the
- * stroke is still straight. That point, not the current one, is where the
- * decision was made, so it is where the next ring belongs.
- */
-RadialCornerAt(pts, minLen := 90, minAngle := 20, jitter := 10) {
-    static DEG := 57.29577951308232
-    if (!IsObject(pts) || pts.Length < 3)
-        return 0
-    s := pts[1]
-    i := 2
-    while (i < pts.Length) {
-        e := pts[i]
-        m := pts[i + 1]
-        ax := e.x - s.x
-        ay := e.y - s.y
-        bx := m.x - e.x
-        by := m.y - e.y
-        la := Sqrt(ax * ax + ay * ay)
-        lb := Sqrt(bx * bx + by * by)
-        if (la >= minLen && lb >= jitter) {
-            c := (ax * bx + ay * by) / (la * lb)
-            c := (c > 1) ? 1 : ((c < -1) ? -1 : c)
-            if (ACos(c) * DEG > minAngle)
-                return i
-        }
-        i += 1
-    }
-    return 0
-}
-
-/** Distance from a {x, y} point to a screen position. */
-RadialDist(p, x, y) {
-    return Sqrt((p.x - x) * (p.x - x) + (p.y - y) * (p.y - y))
-}
-
-/** One frame of an ease-out toward `target`; ms is the whole transit. */
-RadialEaseTo(cur, target, dt, ms := 250) {
-    if (ms <= 0 || dt >= ms)
-        return target
-    k := (dt * 3.0) / ms                     ; ~95% of the way in `ms`
-    if (k >= 1)
-        return target
-    v := cur + (target - cur) * k
-    return (Abs(target - v) < 0.002) ? target : v
-}
-
-/**
- * Kando's pointer-reactive scale: 1.15 under the pointer, easing to 1.0 at
- * the opposite side of the ring. The hovered slice is a flat 1.15 so the
- * thing being chosen is never the second biggest.
- */
-RadialHoverScale(center, ptrAngle, hovered := false) {
-    if hovered
-        return 1.15
-    if (ptrAngle < 0)
-        return 1.0
-    d := Mod(Mod(center - ptrAngle, 360) + 360, 360)
-    if (d > 180)
-        d := 360 - d
-    return 1.15 - (d / 180) ** 0.25 * 0.15
-}
-
-/**
- * Keep a ring's centre on screen (Kando clampToMonitor, margin 160 for a
- * 12-item ring; 120 here, where eight slices sit inside a smaller radius).
- * Only a CHILD ring is clamped: a root ring must agree with the cursor that
- * opened it, so it is still allowed to run off the edge.
- */
-RadialClampAnchor(x, y, margin := 120) {
-    m := MonitorAt(x, y)
-    mw := Min(margin, (m.r - m.l) // 2 - 1)
-    mh := Min(margin, (m.b - m.t) // 2 - 1)
-    return {x: Min(Max(x, m.l + mw), m.r - mw),
-            y: Min(Max(y, m.t + mh), m.b - mh)}
-}
-
-/** How many live slices a menu has -- the grandchild dots on its door. */
-RadialKidCount(name) {
-    mn := RadialFind(name)
-    if !IsObject(mn)
-        return 0
-    n := 0
-    for sl in MGet(mn, "slices", []) {
-        act := MGet(sl, "action", 0)
-        if (IsObject(act) && MGet(act, "type", "none") != "none")
-            n += 1
-    }
-    return Min(n, 9)
-}
-
-/** What the hub prints under a slice's name: its keys, or what it does. */
-RadialShortcut(sl) {
-    act := IsObject(sl) ? sl.act : 0
-    if !IsObject(act)
-        return ""
-    t := String(MGet(act, "type", ""))
-    v := String(MGet(act, "value", ""))
-    switch t {
-        case "keys", "keysrepeat", "ps_keys", "pacs_keys":
-            return v
-        case "radial":
-            return "opens " (v = "" ? "another menu" : v)
-        case "text":
-            return "types text"
-    }
-    return ActLabelOf(t)
-}
-
-/** Ease every slice toward its hover scale. True when anything moved. */
-RadialAnimStep(R, now) {
-    dt := now - R.animAt
-    R.animAt := now
-    on := Cfg("radialAnim") ? true : false
-    moved := false
-    i := 1
-    for sl in R.slices {
-        t := RadialHoverScale(R.wedges.slices[i].center, R.ptrAngle, i = R.sel)
-        v := on ? RadialEaseTo(sl.sc, t, dt, 250) : t
-        if (Abs(v - sl.sc) > 0.0015)
-            moved := true
-        sl.sc := v
-        i += 1
-    }
-    return moved
-}
-
-/**
- * Point the live menu at a ring: the slices, where it is centred, and which
- * way its parent lies (-1 at the root). Shared by open, walk-in and back,
- * so a ring is described in exactly one place.
- */
-RadialRing(R, mn, slices, ax, ay, parentAngle) {
-    global g_PassThru
-    ; Uninterruptible: this swaps the layer AND the geometry that the paint
-    ; reads. A hotkey thread landing between the two paints the new ring
-    ; with the old wedges, or draws onto a layer that has just been
-    ; disposed.
-    Critical "On"
-    if IsObject(R.lyr) {                     ; the old wheel sat at the old
-        try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
-        try R.lyr.Dispose()                  ; fresh where the hand is
-        R.lyr := 0
-    }
-    ; Nothing is live between here and the paint that follows, so the whole
-    ; register is stale: take the disposed layer out of it (and anything an
-    ; interrupted paint left behind) rather than letting it grow one entry
-    ; per ring for the length of the gesture.
-    RadialSweepLayers()
-    for sl in slices
-        sl.sc := 1.0
-    R.menu := mn
-    R.name := MGet(mn, "name", "menu")
-    R.slices := slices
-    R.ax := ax
-    R.ay := ay
-    R.parentAngle := parentAngle
-    R.wedges := RadialWedges(slices.Length, parentAngle, slices.Length > 8)
-    R.sel := 0
-    R.lastSel := -1
-    R.ptrAngle := -1
-    R.pts := []
-    R.t0 := A_TickCount
-    R.restAt := A_TickCount
-    R.moveAt := A_TickCount
-    R.animAt := A_TickCount
-    R.fadeAt := 0
-}
-
-; ── clicking out of a live menu ──────────────────────────────────────────
-;
-; The wheel is drawn on a NoActivate, click-through layer, so a mouse button
-; the config does not hook stays fully native and its click goes THROUGH the
-; menu into the study. OnPressHK cancels the menu for every button the engine
-; already hooks; these hotkeys cover the rest -- LButton, RButton and MButton
-; when nothing references them -- and exist only while a non-trial menu is
-; open, so the three buttons are byte-for-byte native at every other moment.
-; Practice menus included (v0.6.4a): the trial exemption meant a practice
-; wheel could only be closed by Escape or by waiting out its 20 s floor.
-; Registered on open, removed on close: nothing outlives the menu.
-global g_RadialCancelKeys := []   ; buttons hooked for the current menu
-
-RadialCancelActive(*) {
-    return IsObject(g_Radial) ? 1 : 0
-}
-
-RadialCancelHit(btn, *) {
-    Critical "On"
-    if !IsObject(g_Radial)
-        return
-    RadialClose(false)                       ; cancel: a menu never commits
-    HUD("Menu cancelled", "mute")            ; on a click
-}
-
-RadialBindCancel() {
-    global g_RadialCancelKeys
-    RadialUnbindCancel()
-    ; try/finally, not try alone: a throw inside must never leave OUR context
-    ; installed, or the next plain Hotkey() call in the process silently
-    ; inherits it (the engine's own hooks are registered that way).
-    try {
-        HotIf(RadialCancelActive)
-        HookChanged()
-        for b in ["LButton", "RButton", "MButton"] {
-            if g_HookState.Has(b)            ; already ours: OnPressHK cancels
-                continue
-            try {
-                Hotkey("*" b, RadialCancelHit.Bind(b), "On")
-                g_RadialCancelKeys.Push(b)
-            }
-        }
-    } catch {
-        ; a menu that could not hook the spare buttons still works; the
-        ; unhooked ones simply stay native, as they were before v0.6.2a
-    } finally {
-        HotIf()
-    }
-}
-
-RadialUnbindCancel() {
-    global g_RadialCancelKeys
-    if (g_RadialCancelKeys.Length = 0)
-        return
-    try {
-        HotIf(RadialCancelActive)            ; Off must run under the SAME
-        HookChanged()
-        for b in g_RadialCancelKeys          ; context the hotkey was made in
-            try Hotkey("*" b, "Off")
-    } catch {
-    } finally {
-        HotIf()
-    }
-    g_RadialCancelKeys := []
-}
-
-/**
- * Open a menu.
- *
- * holder = the input state holding it open: release commits, release in the
- * hub or Escape cancels. A menu is only ever opened by a HOLD (v0.7): the
- * tap-opened "latched" menu that fired by resting in a slice is gone, so a
- * hand on the mouse always has a way out. Practice (trial) draws at once and
- * fires nothing.
- */
-RadialOpen(name, holder := 0, trial := false) {
-    global g_Radial
-    if IsObject(g_Radial)
-        RadialClose(false)
-    mn := RadialFind(name)
-    if !IsObject(mn) {
-        HUD(name = "" ? "No radial menu for this app"
-                      : ("No radial menu named " name), "warn")
-        return
-    }
-    slices := RadialSlices(mn)
-    if (slices.Length < 2) {
-        HUD("That menu has nothing in it", "warn")
-        return
-    }
-    RM_GetPos(&ax, &ay)
-    now := A_TickCount
-    ; v0.6.4 adds, to the state that was always here: which ring these slices
-    ; belong to (parentAngle, wedges, stack), the stroke that is choosing one
-    ; of them (pts, ptrAngle, moveAt) and the animation clock (animAt, fadeAt).
-    g_Radial := {menu: mn,
-                 name: MGet(mn, "name", "menu"),
-                 slices: slices,
-                 ax: ax, ay: ay,
-                 holder: IsObject(holder) ? holder : 0,
-                 latched: trial ? true : false,
-                 sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
-                 targetPid: RadialPidOf(FgHwnd()),
-                 lyr: 0, drawn: false, depth: 1,
-                 ; t0 is the PER-RING clock (the dwell before a ring is
-                 ; drawn, and RadialRing restarts it on every walk-in and
-                 ; walk-back). openedAt is the whole menu's age, and it is
-                 ; what the safety floors below measure, so a gesture that
-                 ; walks in and out of three rings cannot keep resetting the
-                 ; timer that is meant to be a ceiling on the whole thing.
-                 t0: now, openedAt: now, restAt: now,
-                 parentAngle: -1,
-                 wedges: RadialWedges(slices.Length, -1, slices.Length > 8),
-                 stack: [], pts: [], ptrAngle: -1,
-                 moveAt: now, animAt: now, fadeAt: 0}
-    ; ALWAYS, practice included. A practice wheel that a click could not
-    ; dismiss was the one window in RadMapper you had to wait out, and the
-    ; cancel keys are the thing being practised as much as the flick is.
-    RadialBindCancel()                       ; a click anywhere cancels
-    SetTimer(RadialTick, 16)
-    RadialTick()
-}
-
-/**
- * 16 ms is a frame. It costs one cursor read, and a repaint only when the
- * picture would actually differ: the highlighted slice changed, the stroke
- * grew, or an animation is still running. With "Animate the wheel" off the
- * tick repaints on selection changes alone, exactly as it did before v0.6.4.
- */
-RadialTick(*) {
-    global g_Radial
-    if !IsObject(g_Radial) {
-        SetTimer(RadialTick, 0)
-        return
-    }
-    R := g_Radial
-    now := A_TickCount
-    if ((!g_Enabled && !R.trial) || GetKeyState("Escape", "P")
-        || (!R.trial && RadialFocusLost(R.target, R.targetPid))) {
-        RadialClose(false)
-        return
-    }
-    ; A held menu whose holder never reports a release is a stuck menu over
-    ; the image. ActionUp is the real commit; this is the floor under it.
-    ; Measured from openedAt, not t0: t0 restarts on every ring change, so
-    ; a gesture that kept walking in and out of submenus never aged.
-    ; A hand that is STILL holding is not stuck: after 15 s the menu closes
-    ; only when its holder is gone or reads physically up (a physical
-    ; reading is trusted only for a press that read as physical); a genuine
-    ; long hold gets a 60 s ceiling instead of a vanishing menu.
-    if (!R.latched && (now - R.openedAt > 15000)) {
-        h := R.holder
-        gone := !IsObject(h) || !h.down
-            || (h.physSeen && !InputHeldPhysical(h.btn))
-        if (gone || now - R.openedAt > 60000) {
-            RadialClose(false)
-            return
-        }
-    }
-    ; Practice is a thing you look at: 20 s, then it goes away by itself.
-    if (R.trial && (now - R.openedAt > 20000)) {
-        RadialClose(false)
-        return
-    }
-    RM_GetPos(&mx, &my)
-    dx := mx - R.ax
-    dy := my - R.ay
-    dead := Max(Cfg("radialDead"), 8)
-    ; The hub is the dead zone AND the abort: inside it nothing is selected,
-    ; whatever the hand is pointing at.
-    sel := 0
-    ang := -1
-    if (dx * dx + dy * dy >= dead * dead) {
-        ang := RadialAngle(dx, dy)
-        sel := RadialPickIn(R.wedges, ang)    ; 0 = nothing, -1 = back
-    }
-    R.ptrAngle := ang
-    if (sel != R.sel) {
-        R.sel := sel
-        R.restAt := now
-    }
-    ; The stroke: kept only while the hand actually moves, so a stationary
-    ; pointer cannot fill the buffer with copies of itself -- "paused" has
-    ; to stay measurable, and the trace has to stay a line.
-    moved := false
-    if (R.pts.Length = 0 || RadialDist(R.pts[R.pts.Length], mx, my) >= 4) {
-        R.pts.Push({x: mx, y: my})
-        if (R.pts.Length > 64)
-            R.pts.RemoveAt(1)
-        moved := true
-        R.moveAt := now
-    }
-    ; The dwell is measured from the PRESS, not from the last movement: move
-    ; fast enough and the menu is never drawn at all, which is the whole
-    ; novice/expert unification. Once drawn it stays drawn.
-    want := R.drawn || R.latched || (now - R.t0 >= Max(Cfg("radialDwellMs"), 0))
-    if want {
-        paint := !R.drawn || (R.sel != R.lastSel)
-        if RadialAnimStep(R, now)
-            paint := true
-        if (moved && R.drawn && !R.latched)
-            paint := true                    ; the trace grew
-        if (R.fadeAt && (now - R.fadeAt < 75))
-            paint := true                    ; still fading in
-        if paint {
-            R.drawn := true
-            R.lastSel := R.sel
-            RadialPaint()
-        }
-    }
-    ; ── walking through a door without stopping (Kando's marking mode) ──
-    ;
-    ; A sharp turn, or a pause at the end of a long enough stroke, means the
-    ; hand has finished one leg of a gesture and started the next: open the
-    ; door it turned at, re-centred ON THE CORNER, and keep going. Only
-    ; DOORS open this way. A leaf still fires on release and on release only
-    ; (Kando's eSubmenuOnly), because a gesture that can fire a command
-    ; mid-flight is a gesture that will fire one into a report.
-    if (!R.latched && R.pts.Length > 1) {
-        corner := RadialCornerAt(R.pts, 90, 20, 10)
-        paused := (RadialDist(R.pts[1], mx, my) >= 90 && (now - R.moveAt >= 100))
-        if (corner || paused) {
-            px := corner ? R.pts[corner].x : mx
-            py := corner ? R.pts[corner].y : my
-            ; A corner INSIDE THE HUB has no bearing worth reading: over a
-            ; few pixels a direction is noise, which is what the dead zone
-            ; says everywhere else. A flick that curls back through the
-            ; centre on its way out would otherwise open whichever door
-            ; happened to lie that way -- or walk back out of the ring. 0 is
-            ; "nothing", the same answer the selection gives in the hub, and
-            ; it falls through to the fresh-stroke reset below.
-            cs := (RadialDist({x: R.ax, y: R.ay}, px, py) < dead) ? 0
-                : RadialPickIn(R.wedges, RadialAngle(px - R.ax, py - R.ay))
-            ; a deliberate TURN into the back arc walks out; a pause does
-            ; not, or a hand resting anywhere but on a slice would leave the
-            ; ring after 100 ms
-            if (corner && cs = -1 && R.stack.Length > 0) {
-                RadialBack()
-                return
-            }
-            if (cs > 0 && R.slices[cs].sub != "" && R.depth < RADIAL_MAXDEPTH) {
-                RadialEnter(R.slices[cs].sub, px, py, R.wedges.slices[cs].center)
-                return
-            }
-            ; not a door: start a fresh stroke at the corner, so the next leg
-            ; is measured on its own rather than against the whole journey
-            if corner
-                R.pts := [{x: px, y: py}, {x: mx, y: my}]
-        }
-    }
-    ; A slice that opens another menu is a DOOR. Rest on it and that menu
-    ; takes the wheel's place, re-centred under the cursor, still held: hold,
-    ; go to "Windowing", pause, go to "3", release -- one gesture, depth two,
-    ; which is as deep as marking menus stay accurate. Releasing ON the door
-    ; instead opens the same menu latched (the ordinary fire path), so both
-    ; habits work.
-    if (R.sel > 0 && R.slices[R.sel].sub != "" && R.depth < RADIAL_MAXDEPTH
-        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
-        RadialEnter(R.slices[R.sel].sub, , , R.wedges.slices[R.sel].center)
-        return
-    }
-    ; Resting in the back arc walks out of a nested ring the same way.
-    if (R.sel = -1 && R.stack.Length > 0
-        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
-        RadialBack()
-        return
-    }
-}
-
-/**
- * Swap the live wheel for a nested menu.
- *
- * The child ring is centred where the decision was made -- the cursor, or
- * the corner the gesture turned at -- and then clamped onto the monitor
- * (Kando openSubmenu + clampToMonitor), which is what makes a second ring
- * usable near a screen edge. The cursor is deliberately NOT warped to
- * follow the clamp: the button is physically down, and moving the pointer
- * under a held button is how you drag something in the study underneath.
- */
-RadialEnter(name, px := "", py := "", doorAngle := -1) {
-    global g_Radial
-    R := g_Radial
-    if !IsObject(R)
-        return
-    mn := RadialFind(name)
-    if !IsObject(mn) {
-        HUD("No radial menu named " name, "warn")
-        return
-    }
-    slices := RadialSlices(mn)
-    if (slices.Length < 2)
-        return
-    if (px = "" || py = "")
-        RM_GetPos(&px, &py)                  ; not 0: a monitor may start there
-    ; the way back, remembered exactly where it was (Kando keeps the parent's
-    ; own offset when walking back out)
-    R.stack.Push({menu: R.menu, name: R.name, slices: R.slices,
-                  ax: R.ax, ay: R.ay, parentAngle: R.parentAngle})
-    at := RadialClampAnchor(px, py, 120)
-    ; which way the ring we came from now lies. Far enough away and it is
-    ; simply the bearing back to it; on top of us (a tap-opened door, or a
-    ; hard clamp) fall back to the opposite of the door we walked through.
-    pa := (RadialDist({x: R.ax, y: R.ay}, at.x, at.y) >= 16)
-        ? RadialAngle(R.ax - at.x, R.ay - at.y)
-        : Mod((doorAngle >= 0 ? doorAngle : 0) + 180, 360)
-    RadialRing(R, mn, slices, at.x, at.y, pa)
-    R.depth += 1
-    R.drawn := true                          ; a nested menu is always shown:
-    RadialPaint()                            ; you asked for it by walking in
-}
-
-/**
- * Dispose every wheel layer except the one the live menu is using.
- *
- * `keep` is that layer (0 when no menu is open). Anything else in the list
- * is an orphan -- disposed already, or created by a paint that lost its
- * menu mid-constructor -- and Dispose is wrapped in try for exactly that
- * reason. The pass-thru registration goes with it: a stale hwnd in
- * g_PassThru would gate the engine's own input handling on a window that
- * no longer exists (Windows recycles handles).
- */
-RadialSweepLayers(keep := 0) {
-    global g_RadialLayers, g_PassThru
-    kept := []
-    for lyr in g_RadialLayers {
-        if (IsObject(keep) && IsObject(lyr) && ObjPtr(lyr) = ObjPtr(keep)) {
-            kept.Push(lyr)
-            continue
-        }
-        try g_PassThru.Delete(lyr.hwnd)
-        try lyr.Dispose()
-    }
-    g_RadialLayers := kept
-}
-
-/** Walk back out to the ring this one was opened from. Commits nothing. */
-RadialBack() {
-    global g_Radial
-    R := g_Radial
-    if (!IsObject(R) || R.stack.Length = 0)
-        return
-    p := R.stack.Pop()
-    RadialRing(R, p.menu, p.slices, p.ax, p.ay, p.parentAngle)
-    R.depth := Max(1, R.depth - 1)
-    R.drawn := true
-    RadialPaint()
-}
-
-/** Close, and fire the highlighted slice if this was a commit. */
-RadialClose(commit) {
-    global g_Radial
-    SetTimer(RadialTick, 0)
-    RadialUnbindCancel()                     ; the three buttons go native
-    R := g_Radial
-    g_Radial := 0
-    if !IsObject(R)
-        return
-    if IsObject(R.lyr) {
-        try g_PassThru.Delete(R.lyr.hwnd)
-        try R.lyr.Dispose()
-    }
-    RadialSweepLayers()                      ; nothing is live now: take any
-                                             ; orphan with it
-    if (R.trial) {
-        ; A menu opened from "Try it now" NEVER fires. It is being looked at,
-        ; over whatever happens to be underneath, and "close tab" or a W/L
-        ; preset going into a study because you paused on a slice is not an
-        ; acceptable cost of previewing a layout.
-        if (commit && R.sel >= 1 && R.sel <= R.slices.Length) {
-            sl := R.slices[R.sel]
-            HUD(sl.live ? "Would run: " sl.label : "Empty direction — no command", "cyan")
-        }
-        Atlas.MenuReturnAfter(-1)
-        return
-    }
-    if (!commit || R.sel < 1 || R.sel > R.slices.Length)
-        return                               ; released in the dead zone, or
-    sl := R.slices[R.sel]                    ;   Escape: fires nothing
-    if !sl.live
-        return
-    ; Released ON a door: nothing to hold the next ring open with, so
-    ; nothing fires. Say how the door works instead (v0.7).
-    if (sl.sub != "") {
-        HUD("Keep holding: pause on “" sl.label "” and its ring opens", "mute")
-        return
-    }
-    ; Deferred out of the timer thread: an action can activate a window, send
-    ; a blocking key sequence or open a shelf, and none of that belongs
-    ; inside the tick that is still tearing the menu down.
-    SetTimer(RadialFireSlice.Bind(sl.act, sl.label, R.target, R.targetPid), -1)
-}
-
-RadialPidOf(hwnd) {
-    pid := 0
-    if hwnd
-        try pid := WinGetPID("ahk_id " hwnd)
-    return pid
-}
-
-; True when the foreground has moved to a DIFFERENT APPLICATION since the
-; menu opened. Same window, or another window of the same process, is not a
-; loss: syngo.via, PACS viewers and browsers hand the foreground between
-; their own top-level windows on their own (the v0.4.9 follow-focus lesson),
-; and cancelling a gesture over that would make the menu unusable exactly
-; where it is wanted. Our own layers never take the foreground (NoActivate).
-RadialFocusLost(target, targetPid) {
-    fg := FgHwnd()
-    if (fg = target || !target)
-        return false
-    fgPid := RadialPidOf(fg)
-    if (fgPid = DllCall("GetCurrentProcessId", "uint"))   ; any layer of ours
-        return false
-    return fgPid != targetPid
-}
-
-RadialFireSlice(act, label, target, targetPid := 0, *) {
-    if (!g_Enabled || RadialFocusLost(target, targetPid))
-        return
-    try {
-        b := Map()
-        b["action"] := act
-        ActionFire(b, 0)                     ; ordinary action, ordinary path;
-        if Cfg("hud")                        ;   ps_* still routes via PSFire
-            HUD(label, "jade")
-    } catch as e {
-        Problem("radial", "slice '" label "' failed: " e.Message)
-        HUD("Slice failed: " e.Message, "danger")
-    }
-}
-
-/**
- * A small vector glyph, 22 px across, centred on (x, y), in one colour.
- * Every icon is built from the same six primitives the wheel already uses
- * (line, rectangle, ellipse, triangle, pie, polygon) -- no images, so they
- * scale with the ring and recolour with the state.
- *
- * `sc` scales the whole glyph about its centre. Every case below is written
- * on the same 22 px grid and goes through X/Y/S, so the hover animation
- * costs one multiply per coordinate rather than a second copy of the table.
- */
-RadialIcon(name, x, y, col, sc := 1.0) {
-    gX(d) => Round(x + d * sc)
-    gY(d) => Round(y + d * sc)
-    gS(d) => Max(1, Round(d * sc))
-    try {
-        switch name {
-            case "next":                     ; play triangle + end bar
-                FilledTriangle(gX(-8), gY(-8), gX(3), gY(0), gX(-8), gY(8), col)
-                Rectangle(gX(5), gY(-8), gS(3), gS(16), col, true)
-            case "prev":
-                FilledTriangle(gX(8), gY(-8), gX(-3), gY(0), gX(8), gY(8), col)
-                Rectangle(gX(-8), gY(-8), gS(3), gS(16), col, true)
-            case "delete":                   ; a lidded bin
-                Rectangle(gX(-6), gY(-4), gS(12), gS(12), col, false)
-                Rectangle(gX(-8), gY(-7), gS(16), gS(2), col, true)
-                Rectangle(gX(-2), gY(-10), gS(4), gS(2), col, true)
-                Line(gX(-2), gY(-1), gX(-2), gY(5), col, 1)
-                Line(gX(2), gY(-1), gX(2), gY(5), col, 1)
-            case "ruler":                    ; a rule with graduations
-                Rectangle(gX(-11), gY(-4), gS(22), gS(9), col, false)
-                for k in [-7, -3, 1, 5]
-                    Line(gX(k), gY(-4), gX(k), gY(-1), col, 1)
-                Line(gX(9), gY(-4), gX(9), gY(1), col, 1)
-            case "roi":                      ; dashed frame around a blob
-                for k in [-9, -3, 3]
-                    Line(gX(k), gY(-8), gX(k + 3), gY(-8), col, 1)
-                for k in [-9, -3, 3]
-                    Line(gX(k), gY(8), gX(k + 3), gY(8), col, 1)
-                for k in [-8, -2, 4]
-                    Line(gX(-9), gY(k), gX(-9), gY(k + 3), col, 1)
-                for k in [-8, -2, 4]
-                    Line(gX(9), gY(k), gX(9), gY(k + 3), col, 1)
-                Ellipse(gX(-5), gY(-3), gS(10), gS(7), col, true)
-            case "clahe":                    ; half-filled disc: contrast
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                FilledPie(gX(-9), gY(-9), gS(18), gS(18), 90.0, 180.0, col)
-            case "window":                   ; a window pane: W/L
-                Rectangle(gX(-9), gY(-8), gS(18), gS(16), col, false)
-                Line(gX(0), gY(-8), gX(0), gY(8), col, 1)
-                Line(gX(-9), gY(0), gX(9), gY(0), col, 1)
-            case "magnify":                  ; lens and handle
-                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
-                Ellipse(gX(-9), gY(-9), gS(12), gS(12), col, false)
-                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
-            case "series":                   ; a stack of slices
-                Rectangle(gX(-9), gY(-3), gS(12), gS(10), col, false)
-                Rectangle(gX(-6), gY(-6), gS(12), gS(10), col, false)
-                Rectangle(gX(-3), gY(-9), gS(12), gS(10), col, false)
-            case "menu":                     ; a ring with a hub: another wheel
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
-                Line(gX(0), gY(-9), gX(0), gY(-5), col, 1)
-                Line(gX(0), gY(5), gX(0), gY(9), col, 1)
-                Line(gX(-9), gY(0), gX(-5), gY(0), col, 1)
-                Line(gX(5), gY(0), gX(9), gY(0), col, 1)
-            case "zoom":                     ; lens with a plus
-                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
-                Line(gX(-3), gY(-6), gX(-3), gY(0), col, 1)
-                Line(gX(-6), gY(-3), gX(0), gY(-3), col, 1)
-                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
-            case "invert":                   ; two half discs swapped
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                FilledPie(gX(-9), gY(-9), gS(18), gS(18), -90.0, 180.0, col)
-            case "reset":                    ; a counter-clockwise arrow
-                Arc(gX(-8), gY(-8), gS(16), gS(16), col, 2, -60.0, 300.0)
-                FilledTriangle(gX(-2), gY(-12), gX(-2), gY(-4), gX(-9), gY(-8), col)
-            case "dictate":                  ; a microphone
-                Rectangle(gX(-3), gY(-10), gS(6), gS(11), col, true)
-                Arc(gX(-6), gY(-6), gS(12), gS(12), col, 1, 0.0, 180.0)
-                Line(gX(0), gY(6), gX(0), gY(9), col, 1)
-                Line(gX(-4), gY(9), gX(4), gY(9), col, 1)
-            default:
-                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
-        }
-    } catch as e {
-        Problem("radial", "icon '" name "' failed: " e.Message)
-    }
-}
-
-/**
- * Draw the wheel, centred on the anchor.
- *
- * A ROOT ring is deliberately NOT clamped to the monitor. The geometry has
- * to agree with the cursor -- the direction you push is the slice you get
- * -- so a menu opened near an edge is allowed to run off it rather than
- * shift under your hand and change what every direction means. A CHILD ring
- * is clamped, because it is re-centred on the corner of a gesture and its
- * directions are being read, not remembered (RadialEnter).
- *
- * Everything here is arithmetic over R plus GDI+ calls: the tick decides
- * WHEN to paint, this decides only what the frame looks like.
- */
-RadialPaint() {
-    global g_Radial, g_PassThru, g_RadialLayers
-    ; Uninterruptible: Layer() creates a window and Draw() blits one, and
-    ; both pump messages. A hotkey thread that closes the menu in the middle
-    ; of either would leave this one drawing onto a disposed layer.
-    Critical "On"
-    if (!IsObject(g_Radial) || !IsSet(Lumi) || !IsSet(Layer))
-        return
-    R := g_Radial
-    ro := ClampInt(Cfg("radialRadius"), 90, 260, 132)
-    ri := Max(38, ro // 3)
-    ; The layer is wider than the ring by a whole label: words sit OUTSIDE
-    ; their icon now (Kando draws the name past the item), and the gesture
-    ; trace needs somewhere to live.
-    pad := 46
-    size := ro * 2 + pad * 2
-    wedgy := Cfg("radialWedges") ? true : false
-    ; GDI+ measures from 3 o'clock; our bearings are from north. Kept FLOAT
-    ; deliberately: GpGFX's Pie constructor decides which overload it was
-    ; handed by asking isColourParam() about the start angle, and that returns
-    ; TRUE for any negative INTEGER -- so an integer -135 would be read as a
-    ; colour and the wedge drawn as something else entirely. The `+ 0.0` says
-    ; so out loud.
-    gd(a) => (a - 90) + 0.0
-    arcOf(w) => Mod(Mod(w.end - w.start, 360) + 360, 360) + 0.0
-    rad(a) => (a - 90) * 0.017453292519943295
-    prev := LayerStack.ActiveLayer
-    try {
-        if !IsObject(R.lyr) {
-            lyr := Layer(R.ax - ro - pad, R.ay - ro - pad, size, size,
-                "RadMapperRadial")
-            ; Creating a window pumps messages even under Critical, so the
-            ; menu we started painting may be gone -- or replaced -- by the
-            ; time the constructor returns. Its layer would then be an
-            ; orphan: click-through, top-most, over the study, with nothing
-            ; holding a reference to it.
-            if (!IsObject(g_Radial) || !Lumi.Same(g_Radial, R)) {
-                try g_PassThru.Delete(lyr.hwnd)
-                try lyr.Dispose()
-                return
-            }
-            g_RadialLayers.Push(lyr)         ; the sweep's safety net
-            R.lyr := lyr
-            ; Click-through and sitting under the cursor by design, so the
-            ; engine must never claim it positionally -- that would gate the
-            ; native input underneath and eat the very click it is watching.
-            g_PassThru[lyr.hwnd] := 1
-            ; Window STYLES are set here, ONCE. They used to be re-applied on
-            ; every repaint (each slice change), and SetWindowLongPtr on a
-            ; visible layered window plus a SetWindowPos re-insert is
-            ; exactly what makes one blink -- "the menu flashes in and out
-            ; while I hold the button" (0.6.1 report).
-            lyr.ClickThrough := true
-            lyr.NoActivate()
-            lyr.TopMost(true)
-            lyr.alwaysFullErase := true      ; text may outgrow its box
-            R.fadeAt := A_TickCount          ; fade in over 75 ms
-        }
-        lyr := R.lyr
-        LayerStack.ActiveLayer := lyr
-        lyr.Clear()
-        cx := ro + pad
-        cy := ro + pad
-        n := R.slices.Length
-        step := 360.0 / n
-        WD := R.wedges
-        ; The way back, under everything: it is the largest target on the
-        ; ring and it must never look like a command. A numbered child ring
-        ; has a zero-span `back` -- a marker for the node below, with no arc
-        ; to fill.
-        if (IsObject(WD.back) && arcOf(WD.back) > 0.01)
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(WD.back.start),
-                arcOf(WD.back), (R.sel = -1)
-                    ? Lumi.Mix(Lumi.C["surface"], Lumi.C["cyan"], 0.30)
-                    : Lumi.C["raised"])
-        i := 1
-        for sl in R.slices {
-            w := WD.slices[i]
-            ; With wedges on, the slice is DRAWN as the arc it answers to,
-            ; so what you see is exactly what you can hit; with them off it
-            ; fills its whole share of the circle, as it did before v0.6.4.
-            start := wedgy ? gd(w.start) : (gd(w.center) - step / 2)
-            sweep := wedgy ? arcOf(w) : (step - 1.4)
-            active := (i = R.sel)
-            col := !sl.live ? Lumi.C["raised"]
-                 : active   ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.55)
-                            : Lumi.C["raised2"]
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, start, sweep, col)
-            i += 1
-        }
-        ; Kando's selection wedge: a translucent sector over the hovered
-        ; slice, which is the one thing a solid ring cannot say -- WHICH
-        ; directions still count as this slice.
-        if (wedgy && R.sel > 0) {
-            w := WD.slices[R.sel]
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(w.start), arcOf(w),
-                Lumi.Alpha(Lumi.C["magenta"], 0x38))
-        }
-        ; The hub, punched over the wedges: it is also the dead zone, so it
-        ; has to look like the place where nothing happens.
-        FilledCircle(cx, cy, ri, Lumi.C["surface"])
-        Circle(cx, cy, ri, Lumi.C["hair"], false)
-        Circle(cx, cy, ro, Lumi.C["hair"], false)
-        ; A hairline at every wedge boundary, ONCE. On a full ring the
-        ; wedges meet, so every boundary is one slice's end and the next
-        ; one's start; drawing the list raw painted each of them twice, and
-        ; a 1 px anti-aliased line drawn twice is a 2 px line. Deduped on
-        ; the angle rounded to a hundredth of a degree, which is finer than
-        ; any ring this code can build.
-        if wedgy {
-            raw := []
-            for w in WD.slices {
-                raw.Push(w.start)
-                raw.Push(w.end)
-            }
-            ; a zero-span back (the numbered child ring) is a marker for the
-            ; parent node, not an arc: it has no edges of its own
-            if (IsObject(WD.back) && arcOf(WD.back) > 0.01) {
-                raw.Push(WD.back.start)
-                raw.Push(WD.back.end)
-            }
-            edges := []
-            seen := Map()
-            for a in raw {
-                k := String(Round(Mod(Mod(a, 360) + 360, 360), 2))
-                if seen.Has(k)
-                    continue
-                seen[k] := 1
-                edges.Push(a)
-            }
-            for a in edges {
-                t := rad(a)
-                Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)),
-                     Round(cx + ro * Cos(t)), Round(cy + ro * Sin(t)),
-                     Lumi.C["hairSoft"], 1)
-            }
-        }
-        ; The parent ring, as a node in the direction it actually lies in,
-        ; with the line that leads back to it (Kando's connector).
-        if IsObject(WD.back) {
-            t := rad(WD.back.center)
-            bx := Round(cx + (ro - 24) * Cos(t))
-            by := Round(cy + (ro - 24) * Sin(t))
-            bcol := (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["hair"]
-            Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)), bx, by,
-                bcol, 2)
-            FilledCircle(bx, by, 13, Lumi.C["raised"])
-            Circle(bx, by, 13, bcol, false)
-            RadialIcon("prev", bx, by,
-                (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["inkDim"], 0.62)
-        }
-        ; ── the slices themselves ───────────────────────────────────────
-        i := 1
-        numbered := (n > 8)                  ; the preset ring: numbers first
-        ; The disc, then the word outside it, then the rim of the ring: at
-        ; the smallest allowed radius (90) the annulus is 52 px wide, so the
-        ; disc is sized from the annulus rather than fixed at 19.
-        disc := Min(19, (ro - ri) * 0.28)
-        ; a numbered ring has no disc: the number itself is the target, and
-        ; it keeps the mid-annulus place it has always had
-        micon := numbered ? ((ri + ro) / 2) : (ri + disc + 6)
-        for sl in R.slices {
-            w := WD.slices[i]
-            t := rad(w.center)
-            lx := cx + micon * Cos(t)
-            ly := cy + micon * Sin(t)
-            active := (i = R.sel)
-            sc := (sl.sc > 0.2) ? sl.sc : 1.0
-            txt := (sl.label != "") ? sl.label : (sl.live ? "?" : "—")
-            inkCol := !sl.live ? Lumi.C["inkMute"]
-                    : active   ? Lumi.C["ink"] : Lumi.C["inkDim"]
-            if numbered {
-                ; the number is what the hand is choosing; the name is the
-                ; reminder of what it means
-                Text(Round(lx - 30), Round(ly - 24), 60, 26, String(i),
-                    active ? Lumi.C["ink"] : Lumi.C["cyanSoft"],
-                    Round(Lumi.Size["hero"] * sc), Lumi.Face, "Bold")
-                    .TextAlign("center", "middle")
-                Text(Round(lx - 52), Round(ly + 2), 104, 18, txt, inkCol,
-                    Lumi.Size["small"], Lumi.Face).TextAlign("center", "middle")
-            } else {
-                ; A glyph in a disc, the word outside it on the ring: the
-                ; disc is what the eye lands on and what the hover grows.
-                rr := Round(disc * sc)
-                FilledCircle(Round(lx), Round(ly), rr,
-                    sl.live ? Lumi.C["raised"] : Lumi.C["surface"])
-                Circle(Round(lx), Round(ly), rr,
-                    active ? Lumi.C["magenta"] : Lumi.C["hair"], false)
-                RadialIcon(sl.icon != "" ? sl.icon
-                    : (sl.sub != "" ? "menu" : "dot"), Round(lx), Round(ly),
-                    !sl.live ? Lumi.C["inkMute"]
-                    : active ? Lumi.C["ink"] : Lumi.C["cyan"], sc * 0.8)
-                ; Grandchild dots: one per command in the ring behind this
-                ; door, so a door LOOKS like a door before you open it.
-                if (sl.kids > 0) {
-                    k := sl.kids
-                    j := 1
-                    loop k {
-                        dt := rad(w.center + (j - (k + 1) / 2) * 6.5)
-                        FilledCircle(Round(lx + (rr + 7) * Cos(dt)),
-                            Round(ly + (rr + 7) * Sin(dt)), 2,
-                            active ? Lumi.C["cyanSoft"] : Lumi.C["inkMute"])
-                        j += 1
-                    }
-                }
-                tx := cx + (ro - 11) * Cos(t)
-                ty := cy + (ro - 11) * Sin(t)
-                Text(Round(tx - 58), Round(ty - 10), 116, 20,
-                    txt (sl.sub != "" ? " ›" : ""), inkCol,
-                    Round(Lumi.Size["small"] * sc), Lumi.Face)
-                    .TextAlign("center", "middle")
-            }
-            i += 1
-        }
-        ; ── the stroke that is choosing ─────────────────────────────────
-        ; The gesture drawn back at you, fading toward the tail: it is the
-        ; only feedback a marking menu can give about the SHAPE you made,
-        ; and in practice mode it is the whole lesson.
-        if (!R.latched && R.pts.Length > 1) {
-            first := Max(1, R.pts.Length - 11)
-            span := R.pts.Length - first
-            j := first
-            while (j < R.pts.Length) {
-                a := R.pts[j]
-                b := R.pts[j + 1]
-                f := (j - first + 1) / span
-                Line(Round(a.x - R.ax + cx), Round(a.y - R.ay + cy),
-                     Round(b.x - R.ax + cx), Round(b.y - R.ay + cy),
-                     Lumi.Alpha(Lumi.C["cyan"], Round(40 + 170 * f)), 3)
-                j += 1
-            }
-        }
-        ; ── the hub says what is armed ──────────────────────────────────
-        ; A glance answers "what happens if I let go now" without reading
-        ; the ring: the hovered command, and under it the keys it sends.
-        inner := ri * 2 - 8
-        pick := (R.sel > 0) ? R.slices[R.sel] : 0
-        if IsObject(pick) {
-            Lumi.Label(cx - ri + 4, cy - 26, inner,
-                Lumi.Elide(pick.live ? (pick.label != "" ? pick.label : "?")
-                                     : "—", inner, "body"),
-                pick.live ? "accent" : "mute", "center", 20)
-            hint := pick.live ? RadialShortcut(pick) : "nothing here"
-            if (hint != "")
-                Lumi.Label(cx - ri + 4, cy - 4, inner,
-                    Lumi.Elide(hint, inner, "small"), "mute", "center", 18)
-        } else if (R.sel = -1) {
-            Lumi.Label(cx - ri + 4, cy - 26, inner, "back", "accent",
-                "center", 20)
-            Lumi.Label(cx - ri + 4, cy - 4, inner,
-                Lumi.Elide(R.stack.Length > 0
-                    ? R.stack[R.stack.Length].name : "", inner, "small"),
-                "mute", "center", 18)
-        } else {
-            Lumi.Label(cx - ri + 4, cy - 26, inner,
-                Lumi.Elide(R.name, inner, "body"), "section", "center", 20)
-            Lumi.Label(cx - ri + 4, cy - 4, inner, "cancel", "mute",
-                "center", 18)
-        }
-        ; Practice looks exactly like the real thing, which is the point --
-        ; so the hub has to say, on the wheel itself, that it is not.
-        if R.trial
-            Text(cx - ri + 4, cy + 16, inner, 16,
-                "practice — nothing is sent", Lumi.C["warn"],
-                Lumi.Size["small"], Lumi.Face)
-                .TextAlign("center", "middle")
-        ; Kando fades a menu in over 75 ms. There is no matching fade OUT:
-        ; a closing wheel may not leave a timer behind it, and a blocking
-        ; fade would sit between the release and the command.
-        if R.fadeAt {
-            el := A_TickCount - R.fadeAt
-            if (!Cfg("radialAnim") || el >= 75) {
-                lyr.alpha := 255
-                R.fadeAt := 0
-            } else
-                lyr.alpha := Max(40, Round(255 * el / 75))
-        }
-        lyr.Draw()
-    } catch as e {
-        Problem("radial", "menu paint failed: " e.Message
-            . (e.HasProp("Line") ? " (line " e.Line ")" : ""))
-    } finally {
-        if IsObject(prev)
-            LayerStack.ActiveLayer := prev
     }
 }
 
@@ -10599,13 +8880,9 @@ RegisterKbHotkeys() {
 ; before any path that can unregister an Up hotkey (disable, config change)
 ; or the release event is lost and the synthetic input stays down forever.
 ForceReleaseActive() {
-    ; BEFORE the g_BS sweep: a held radial menu commits on ActionUp, and
-    ; teardown is not a commit. Pausing the engine, changing a binding or
-    ; exiting with a wheel up used to fire whichever slice the pointer
-    ; happened to be resting in -- a W/L preset or "mark as read" into the
-    ; open study. RadialClose(false) is a no-op when no menu is open.
-    RadialClose(false)
-    AppSwitchClose(false)                    ; same rule: teardown never commits
+    ; BEFORE the g_BS sweep: a held switcher commits on release, and
+    ; teardown is not a commit.
+    AppSwitchClose(false)
     ClickLockRelease()                       ; a latch must never outlive the
     ScrollPtrStop()                          ; hooks that can release it
     for name, st in g_BS.Clone() {
@@ -10710,11 +8987,8 @@ Watchdog() {
             continue
         }
         ; Recovery is a TEARDOWN, and teardown never commits (same rule as
-        ; ForceReleaseActive). Close first: ActionUp's RadialClose(true) is
-        ; then a no-op, and AppSwitchWatch never sees this holder go up and
-        ; read it as the commit gesture.
-        if (IsObject(g_Radial) && IsObject(g_Radial.holder) && g_Radial.holder = st)
-            RadialClose(false)
+        ; ForceReleaseActive). Close first: AppSwitchWatch must never see
+        ; this holder go up and read it as the commit gesture.
         if (IsObject(g_AppSw) && IsObject(g_AppSw.holder) && g_AppSw.holder = st)
             AppSwitchClose(false)
         if (st.mode = "passthru")
@@ -10820,7 +9094,7 @@ WatchdogSweepSafe() {
             return false
     }
     if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr)
-        || IsObject(g_Radial) || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
+        || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
         return false
     try {
         if (Warp.active || Warp.grabbing)
@@ -10872,7 +9146,7 @@ HookFrontTick(*) {
         if GetKeyState(k)
             return
     }
-    if (IsObject(g_Radial) || IsObject(g_AppSw) || IsObject(g_ClickLock)
+    if (IsObject(g_AppSw) || IsObject(g_ClickLock)
         || IsObject(g_ScrollPtr) || IsObject(g_RecHook))
         return
     try {
@@ -10923,8 +9197,6 @@ PanicSnapshot() {
         live .= " clicklock"
     if IsObject(g_ScrollPtr)
         live .= " dragscroll"
-    if IsObject(g_Radial)
-        live .= " menu"
     if IsObject(g_AppSw)
         live .= " switcher"
     try {
@@ -11003,11 +9275,6 @@ PanicRelease() {
     ClickLockWatchStop()                     ; and its watcher must not outlive it
     ScrollPtrStop()
     try Warp.Close(true)                     ; the keyboard comes back, too
-    RadialClose(false)                       ; a menu over the image, firing
-                                             ; nothing: panic never commits
-    RadialSweepLayers()                      ; and any wheel layer that lost
-                                             ; its menu (this is what panic
-                                             ; is for)
     if (g_SpeedSaved != "") {
         RM_SetSpeed(g_SpeedSaved)
         g_SpeedSaved := ""
@@ -11828,14 +10095,6 @@ ValidateActionValue(owner, atype, raw, &ok) {
             "RadMapper", "Icon! Owner" hwnd)
         return ""
     }
-    if (atype = "radial" && Trim(raw) != "" && !MenuByName(Trim(raw))) {
-        ok := false
-        MsgBox("No menu named '" Trim(raw) "'. Choose a name from Menus, or leave "
-            . "Details empty for the automatic menu.", "RadMapper", "Icon! Owner" hwnd)
-        return ""
-    }
-    if (atype = "radial")
-        return Trim(raw)
     if (atype = "native" || atype = "dblclick" || atype = "dragmove"
         || atype = "clicklock") {
         v := ResolveInputValue(raw)
@@ -11863,19 +10122,6 @@ ValidateActionValue(owner, atype, raw, &ok) {
         return m
     }
     return raw
-}
-
-; Does `rows` already hold a row for the same button, trigger and scope?
-RowKeyTaken(rows, row) {
-    for r in rows {
-        if (MGet(r, "button", "") = MGet(row, "button", "")
-            && MGet(r, "event", "") = MGet(row, "event", "")
-            && MGet(r, "app", "*") = MGet(row, "app", "*")
-            && MGet(r, "layer", "*") = MGet(row, "layer", "*")
-            && MGet(r, "mods", "") = MGet(row, "mods", ""))
-            return true
-    }
-    return false
 }
 
 IsRetiredEvent(ev) {
@@ -12158,8 +10404,6 @@ Cleanup(*) {
     SetTimer(FollowTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
-    RadialClose(false)
-    RadialSweepLayers()                      ; no wheel layer outlives us
     TeleportSignalStop()
     try ScrollPtrStop()                      ; restores a hidden pointer too
     try SysCursorShow()
@@ -14358,14 +12602,14 @@ class Atlas {
     ; (pan) are two of the most-used PACS gestures and the wizard offers
     ; them as tiles, so Simple mode has to be able to show the action they
     ; actually save.
-    ; v0.7: shorter again. Simple mode shows the eleven things a reading
+    ; v0.7: shorter again. Simple mode shows the ten things a reading
     ; room binds; text, native, double-click, click lock, drag zoom, window
     ; placement, the keyboard pointer and "open settings" are Advanced.
     ; ActView still keeps a row's own action, so nothing bound is hidden.
     static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
-        "radial", "none"]
+        "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -14402,7 +12646,7 @@ class Atlas {
     }
 
     static PANELS := ["Home", "Mouse", "Keyboard", "Macros", "Apps",
-                      "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
+                      "Windows", "Pointer", "Settings", "Diagnostics"]
 
     ; ── WINDOW ──────────────────────────────────────────────────────────────
 
@@ -14661,7 +12905,6 @@ class Atlas {
             return
         switch Atlas.PanelName() {
             case "Mouse", "Keyboard": Atlas.DeleteSel()
-            case "Menus":  Atlas.MenuDelete()
             case "Macros": Atlas.MacroStepDelete()
         }
     }
@@ -14684,9 +12927,6 @@ class Atlas {
             case "key":
                 m.Add("Edit…", (*) => Atlas.EditRow(i, true))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
-            case "menu":
-                m.Add("Edit commands…", (*) => Atlas.MenuEditSel())
-                m.Add("Delete", (*) => Atlas.MenuDelete())
             case "step":
                 m.Add("Edit…", (*) => Atlas.MacroStepEditSel())
                 m.Add("Delete", (*) => Atlas.MacroStepDelete())
@@ -15264,7 +13504,6 @@ class Atlas {
                 case "Macros":      Atlas.PanelMacros(px, py, pw, ph)
                 case "Apps":        Atlas.PanelApps(px, py, pw, ph)
                 case "Windows":     Atlas.PanelWindows(px, py, pw, ph)
-                case "Menus":       Atlas.PanelMenus(px, py, pw, ph)
                 case "Pointer":     Atlas.PanelPointer(px, py, pw, ph)
                 case "Settings":    Atlas.PanelSettings(px, py, pw, ph)
                 case "Diagnostics": Atlas.PanelDiag(px, py, pw, ph)
@@ -15532,12 +13771,12 @@ class Atlas {
             . "monitor -- each with whatever "
             . "fires it today, a Set button that asks three questions, and a "
             . "Clear button that puts it back to normal.`n`n"
-            . "It offers four jobs -- change what a mouse button does, "
-            . "change what a keyboard key does, set up a radial menu, apply "
-            . "a starter pack -- and every one of them is a button. Start "
+            . "It offers three jobs -- change what a mouse button does, "
+            . "change what a keyboard key does, apply a starter pack -- and "
+            . "every one of them is a button. Start "
             . "there and you never have to guess which page you want.`n`n"
             . "The switch at the bottom of Home is Simple or Advanced. "
-            . "Simple shows Mouse, Keyboard, Menus, Settings and Diagnostics, "
+            . "Simple shows Mouse, Keyboard, Settings and Diagnostics, "
             . "and a short list of actions. Advanced adds Macros, "
             . "Apps, Windows and Pointer. Nothing is lost either way -- the "
             . "switch changes what is SHOWN, never what is set up.`n`n"
@@ -15551,29 +13790,6 @@ class Atlas {
             . "choose one without AutoHotkey syntax. Left, right and middle "
             . "are always instant clicks; a hold on them only works inside "
             . "one program.`n`n"
-            . "Radial menus`n"
-            . "Edit commands, Assign a button, then Practice safely. Choose "
-            . "Send keys for PACS shortcuts and record the keys shown in "
-            . "your viewer settings.`n`n"
-            . "Every direction on the first wheel belongs to a command: "
-            . "each one owns its whole slice of the circle, so being a bit "
-            . "off centre still picks the one you aimed at. The numbered "
-            . "preset ring works the same way — all nine numbers are "
-            . "reachable. To fire nothing, let go in the middle, press "
-            . "Escape, or click.`n`n"
-            . "A command that opens a SECOND ring opens it when you turn a "
-            . "corner on it or pause on it. That second ring is the one "
-            . "place with gaps: the direction you came from, and the space "
-            . "either side of it, mean back — turn or pause there and the "
-            . "first wheel returns, having sent nothing. A preset ring has "
-            . "no gaps, so leave it with Escape or a click.`n`n"
-            . "A click cancels a live menu wherever you are, practice "
-            . "included, and sends nothing. The middle of the wheel says "
-            . "what is armed and which keys it will send. Two switches on "
-            . "the Menus page — Animate the wheel and Show wedges — turn "
-            . "the movement and the drawn arcs off; neither changes what a "
-            . "direction does. A disabled direction does nothing, and "
-            . "practice never sends a command.`n`n"
             . "Getting around`n"
             . "Use the list on the left, or set the whole thing up from the "
             . "keyboard: Tab and Shift+Tab move between controls and ring "
@@ -15775,11 +13991,10 @@ class Atlas {
      * THE READING ROOM ESSENTIALS (v0.6.5).
      *
      * Five functions this program exists for, one row each:
-     *   label, action type, action value (radial menus only), hotkey setting.
+     *   label, action type, action value (unused), hotkey setting.
      * A function is "set" when ANY binding fires it, or when its Settings
      * hotkey is filled in -- which is why the row reads both and says so in
-     * one sentence. The value is compared only for "radial", where the menu
-     * name is what tells the PACS wheel from the preset ring.
+     * one sentence.
      */
     static ESSENTIALS := [
         ["Dictate on / off",         "ps_dictate", "",               "hkDictate"],
@@ -15794,8 +14009,6 @@ class Atlas {
         for row in MGet(g_Cfg, "bindings", []) {
             a := MGet(row, "action", 0)
             if (!IsObject(a) || MGet(a, "type", "") != act)
-                continue
-            if (act = "radial" && MGet(a, "value", "") != value)
                 continue
             one := InputLabel(MGet(row, "button", ""))
             ev := EventLabelOf(MGet(row, "event", ""))
@@ -15822,11 +14035,8 @@ class Atlas {
         if (i < 1 || i > Atlas.ESSENTIALS.Length)
             return
         e := Atlas.ESSENTIALS[i]
-        ; A radial menu is a HOLD: flick a direction and release. Everything
-        ; else here is a tap.
         btn := IsMouseInput(Atlas.sel) ? Atlas.sel : "XButton1"
-        seed := NewBinding("*", "*", "", btn,
-            (e[2] = "radial") ? "hold" : "tap", e[2], e[3])
+        seed := NewBinding("*", "*", "", btn, "tap", e[2], e[3])
         Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
     }
 
@@ -15846,8 +14056,6 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             drop := IsObject(a) && (MGet(a, "type", "") = e[2])
-            if (drop && e[2] = "radial" && MGet(a, "value", "") != e[3])
-                drop := false
             if !drop
                 kept.Push(row)
         }
@@ -15912,7 +14120,7 @@ class Atlas {
             "Use the switch at the bottom of the list on the left to turn it "
             . "on or off.", "mute", "left", 20)
 
-        ; ── the four jobs ───────────────────────────────────────────────
+        ; ── the three jobs ───────────────────────────────────────────────
         jy := sy + 56
         Lumi.Label(x, jy, 420, "What do you want to do?", "section")
         bw := Min(380, (w - 16) // 2)
@@ -15922,9 +14130,7 @@ class Atlas {
         Lumi.Btn(x + bw + 16, jy + 22, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
-        Lumi.Btn(x, jy + 70, bw, bh, "Set up a radial menu",
-            (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
-        Lumi.Btn(x + bw + 16, jy + 70, bw, bh, "Apply a starter pack",
+        Lumi.Btn(x, jy + 70, bw, bh, "Apply a starter pack",
             (*) => Atlas.PackChoose(), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
@@ -17142,104 +15348,6 @@ class Atlas {
     static layoutRefs := []        ; list row -> g_Cfg["layouts"] index
     static layoutName := 0         ; the "new name" field
 
-    ; ── PANEL: MENUS (radial) ───────────────────────────────────────────────
-
-    static menuRefs := []          ; list row -> g_Cfg["menus"] index
-    static menuReturnTimer := 0
-    static menuName := 0           ; the "new menu" name field
-
-    static PanelMenus(x, y, w, h) {
-        Lumi.Label(x, y, 400, "Radial menus", "title")
-        Lumi.Para(x, y + 28, w, 56,
-            "1. Edit commands.   2. Assign a button.   3. Practice safely. "
-            . "Hold the assigned button, move toward a command, then release. "
-            . "Each command answers to its own arc; between two of them "
-            . "nothing is chosen. Release in the center or press Escape to "
-            . "cancel.", "mute")
-
-        rows := []
-        Atlas.menuRefs := []
-        for i, m in MGet(g_Cfg, "menus", []) {
-            nm := MGet(m, "name", "")
-            sl := MGet(m, "slices", [])
-            live := 0
-            for one in sl {
-                act := MGet(one, "action", 0)
-                if (IsObject(act) && MGet(act, "type", "none") != "none")
-                    live += 1
-            }
-            app := MGet(m, "app", "")
-            rows.Push({cells: [nm, app = "" ? "any program" : AppDisp(app),
-                sl.Length " slice" (sl.Length = 1 ? "" : "s"),
-                live " filled", Atlas.MenuBoundTo(nm)]})
-            Atlas.menuRefs.Push(i)
-        }
-        Atlas.list := Lumi.List(x, y + 96, w, h - 248, rows,
-            [{w: 210}, {w: 150, kind: "mute"}, {w: 110, kind: "mono"},
-             {w: 110, kind: "mono"}, {w: w - 620, kind: "mono"}],
-            Atlas.Picker("menu"), 30,
-            ["Menu", "Program", "Size", "Filled in", "Opened by"])
-        if (rows.Length = 0)
-            Lumi.Label(x + 12, y + 122, w - 24,
-                "No menus yet — type a name below and click Add.", "mute",
-                "left", 30)
-
-        ; How the wheel LOOKS, never what a direction does. Both are on by
-        ; default; both are here rather than on Settings because they are
-        ; about this page's one object.
-        ty := y + h - 140
-        Lumi.Toggle(x, ty, "Animate the wheel", Cfg("radialAnim"),
-            (v) => Atlas.SetCfg("radialAnim", v ? 1 : 0))
-        Lumi.Toggle(x + 300, ty, "Show wedges", Cfg("radialWedges"),
-            (v) => Atlas.SetCfg("radialWedges", v ? 1 : 0))
-
-        by := y + h - 96
-        Lumi.Label(x, by, 90, "New menu", "dim", "left", 30)
-        Atlas.menuName := Lumi.Field(x + 96, by, 230, 30, "", 0,
-            "e.g. Viewer", true)
-        Lumi.Btn(x + 334, by, 130, 30, "Add",
-            (*) => Atlas.MenuAddNew(), "primary")
-        Lumi.Label(x + 476, by, w - 476,
-            "4 or 8 directions, or 9 numbered slots for window presets.",
-            "mute", "left", 30)
-
-        by2 := y + h - 50
-        mb := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
-        hasSel := Atlas.HasSel(rows.Length)
-        Lumi.Btn(mb[1].x, by2, mb[1].w, 34, "Edit commands",
-            (*) => Atlas.MenuEditSel(), hasSel ? "accent" : "muted")
-        Lumi.Btn(mb[2].x, by2, mb[2].w, 34, "Assign a button",
-            (*) => Atlas.MenuAssign(), hasSel ? "accent" : "muted")
-        Lumi.Btn(mb[3].x, by2, mb[3].w, 34, "Practice safely",
-            (*) => Atlas.MenuTry(), hasSel ? "ghost" : "muted")
-        Lumi.Btn(mb[4].x, by2, mb[4].w, 34, "Duplicate",
-            (*) => Atlas.MenuDuplicate(), "ghost")
-        Lumi.Btn(mb[5].x, by2, mb[5].w, 34, "Delete",
-            (*) => Atlas.MenuDelete(), "danger")
-    }
-
-    /** Which inputs open this menu -- read back out of the bindings. */
-    static MenuBoundTo(name) {
-        out := ""
-        for row in MGet(g_Cfg, "bindings", []) {
-            a := MGet(row, "action", 0)
-            if (!IsObject(a) || MGet(a, "type", "") != "radial")
-                continue
-            v := MGet(a, "value", "")
-            ; A blank value means "whatever matches the app in front", so it
-            ; opens this menu too when this menu is that match.
-            if (v != "" && v != name)
-                continue
-            lbl := InputLabel(MGet(row, "button", ""))
-            if (MGet(row, "event", "") != "")
-                lbl .= " " MGet(row, "event", "")
-            if (v = "")
-                lbl .= " (auto)"
-            out .= (out = "" ? "" : ", ") lbl
-        }
-        return out = "" ? "— nothing opens it yet —" : out
-    }
-
     /** Select a row of the CURRENT list view -- call after Build(), which
      *  replaces the view; a sel written before it lands on the old one. */
     static SelectListRow(i) {
@@ -17269,155 +15377,6 @@ class Atlas {
         Chooser.Show("Starter packs",
             "click one to apply it   ·   each is just ordinary settings   ·   Esc cancels",
             items, StarterPackApply)
-    }
-
-    static MenuAssign() {
-        menu := Atlas.MenuSel()
-        if !IsObject(menu) {
-            Lumi.Toast("Select a menu first", "warn")
-            return
-        }
-        app := MGet(menu, "app", "")
-        seed := NewBinding(app = "" ? "*" : app, "*", "", "XButton1",
-            "hold", "radial", menu["name"])
-        Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
-    }
-
-    static MenuSelRef() {
-        if !IsObject(Atlas.list)
-            return 0
-        i := Atlas.list.sel
-        if (i < 1 || i > Atlas.menuRefs.Length)
-            return 0
-        return Atlas.menuRefs[i]
-    }
-
-    static MenuSel() {
-        ref := Atlas.MenuSelRef()
-        return ref ? g_Cfg["menus"][ref] : 0
-    }
-
-    static MenuAddNew() {
-        Lumi.EndEdit()
-        name := Trim(Lumi.FieldValue(Atlas.menuName))
-        if (name = "") {
-            Lumi.Toast("Type a name for it first", "warn")
-            return
-        }
-        if MenuByName(name) {
-            Lumi.Toast("There is already a menu called “" name "”", "warn")
-            return
-        }
-        m := Map()
-        m["name"] := name
-        m["app"] := ""
-        m["slices"] := [MenuSlice("", "none", ""), MenuSlice("", "none", ""),
-                        MenuSlice("", "none", ""), MenuSlice("", "none", "")]
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        g_Cfg["menus"].Push(m)
-        AfterCfgChange()
-        ; The menu EXISTS whether or not the file could be written, and the
-        ; list has to show it either way -- bailing before Build() left the
-        ; new menu alive in memory and invisible on screen. SaveOrWarn says
-        ; the true thing about the disk (MenuDelete has always done this).
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Atlas.SelectListRow(g_Cfg["menus"].Length)
-        Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
-    }
-
-    static MenuDuplicate() {
-        m := Atlas.MenuSel()
-        if !IsObject(m) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        base := MGet(m, "name", "menu")
-        name := base " copy"
-        i := 2
-        while MenuByName(name)
-            name := base " copy " i++
-        copy := Map()
-        copy["name"] := name
-        copy["app"] := MGet(m, "app", "")
-        sl := []
-        for one in MGet(m, "slices", []) {
-            act := MGet(one, "action", 0)
-            sl.Push(MenuSlice(MGet(one, "label", ""),
-                IsObject(act) ? MGet(act, "type", "none") : "none",
-                IsObject(act) ? MGet(act, "value", "") : ""))
-        }
-        copy["slices"] := sl
-        g_Cfg["menus"].Push(copy)
-        AfterCfgChange()
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Atlas.SelectListRow(g_Cfg["menus"].Length)
-        Lumi.Toast("Copied to “" name "”", "jade")
-    }
-
-    static MenuDelete() {
-        ref := Atlas.MenuSelRef()
-        if !ref {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        name := MGet(g_Cfg["menus"][ref], "name", "")
-        if !Atlas.Confirm("Delete the menu “" name "”?`n`n"
-            . "Its commands go with it, and anything you set to open "
-            . "it will stop opening anything. This cannot be undone.")
-            return
-        g_Cfg["menus"].RemoveAt(ref)
-        AfterCfgChange()
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Lumi.Toast("Deleted “" name "”", "magenta")
-    }
-
-    /**
-     * Open the selected menu at the cursor, latched, so it can be looked at
-     * without binding it to anything first. The settings window is hidden
-     * for it: a menu drawn over the window that opened it tells you nothing
-     * about how it will feel over an image.
-     */
-    static MenuTry() {
-        m := Atlas.MenuSel()
-        if !IsObject(m) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        name := MGet(m, "name", "")
-        Atlas.Hide()
-        ; And GIVE IT BACK. v0.5.0 hid the settings window to show the menu
-        ; over something real and then never showed it again -- the window
-        ; simply vanished, which is indistinguishable from the app freezing.
-        SetTimer(() => RadialOpen(name, 0, true), -260)
-        ; Backstop only: RadialClose brings the window back the moment the
-        ; trial ends, whichever way it ended.
-        Atlas.MenuReturnAfter(-7200)
-    }
-
-    /** Bring the settings window back after a trial menu, whatever happened. */
-    static MenuReturnAfter(delay) {
-        if !IsObject(Atlas.menuReturnTimer)
-            Atlas.menuReturnTimer := ObjBindMethod(Atlas, "MenuTryDone")
-        SetTimer(Atlas.menuReturnTimer, delay)
-    }
-
-    static MenuTryDone(*) {
-        Atlas.MenuReturnAfter(0)
-        if IsObject(g_Radial)
-            RadialClose(false)
-        Atlas.Show()
-    }
-
-    static MenuEditSel() {
-        if !IsObject(Atlas.MenuSel()) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        Atlas.OpenDlg(() => Atlas.MenuDlg())
     }
 
     static PanelWindows(x, y, w, h) {
@@ -18329,7 +16288,6 @@ class Atlas {
             switch mode {
                 case "mouse": Atlas.EditRow(i)
                 case "key":   Atlas.EditRow(i, true)
-                case "menu":  Atlas.MenuEditSel()
                 case "step":  Atlas.MacroStepEditSel()
             }
             return
@@ -18910,11 +16868,6 @@ class Atlas {
                 "YesNo Icon! Owner" . hwnd) != "Yes")
                 return
         }
-        if (atype = "radial" && event != "hold") {
-            Lumi.Toast("A radial menu opens while the button is held — "
-                . "choose “Hold it down”", "warn", 3200)
-            return
-        }
         ; One validator, shared with the classic dialogs, so "LAlt" means the
         ; same thing and fails the same way wherever it is typed.
         ok := true
@@ -19299,461 +17252,6 @@ class Atlas {
         Lumi.Focus.armed := true
         Lumi.Focus.idx := 1
         Lumi.Focus.Paint()
-    }
-
-    ; ── RADIAL MENU EDITOR ──────────────────────────────────────────────────
-    ; The wheel deck one axis further out: pick the app, then fill in up to
-    ; eight outputs, one per direction, and see all eight at the same time.
-    ; Same reasoning, and deliberately the same shape on screen -- a menu is
-    ; not a different kind of object from a deck, it is the same idea with
-    ; direction instead of notch.
-
-    static MENU_SIZES := ["4 slices — up / right / down / left",
-                          "8 slices — every 45°"]
-
-    static MenuDlg(draft := 0) {
-        ; 1000 wide (v0.6.6): the eight-column row grid on the left, and a
-        ; live wheel on the right that shows the menu as it will open --
-        ; and that can be DRAGGED: one wedge onto another swaps the two
-        ; commands, rows and all. The header row is laid out on ONE line
-        ; with room to read: "Program" no longer wraps into "Progra / m",
-        ; and "Size" sits beside its label instead of under it.
-        w := 1000
-        h := 624
-        Lumi.CloseSelect()
-        Lumi.EndEdit()
-        if IsObject(Atlas.dlg) {
-            Atlas.Disown(Atlas.dlg)
-            try Atlas.dlg.Dispose()
-            Atlas.dlg := 0
-        }
-        menu := IsObject(draft) ? draft.menu : Atlas.MenuSel()
-        if !IsObject(menu)
-            return
-        ref := IsObject(draft) ? draft.ref : Atlas.MenuSelRef()
-        slices := MGet(menu, "slices", [])
-        count := RadialCountFor(slices.Length)
-        pitch := (count = 9) ? 34 : 38      ; 4 / 8 px gaps between 30 px rows
-        parent := Atlas.lyr
-        dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
-                     w, h, "RadMapperMenuEdit")
-        Atlas.dlg := dlg
-        LayerStack.ActiveLayer := dlg
-        ; A dialog opens FOCUSED on its first control: it is a place you were
-        ; sent to answer something, so the ring is useful before Tab is
-        ; pressed. A page is not, which is why Build() does not do this.
-        Lumi.Focus.Reset(dlg, true)
-        Atlas.Own(dlg)
-        dlg.Drag()
-
-        Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Set up your radial menu", "title")
-        Lumi.Label(24, 42, w - 48,
-            "Name each command, choose its action, then record its shortcut.", "mute", "left", 20)
-        Lumi.Rule(24, 66, w - 48)
-
-        st := {ref: ref, dlg: dlg, rows: [], count: count,
-               original: g_Cfg["menus"][ref], wheel: 0}
-
-        ; ── header row: Name · Program · Size, one line ─────────────────
-        Lumi.Label(24, 84, 56, "Name", "dim", "left", 30)
-        st.name := Lumi.Field(84, 84, 200, 30, MGet(menu, "name", ""), 0,
-            "menu name", true)
-
-        apps := AppChoices()
-        cur := MGet(menu, "app", "")
-        Lumi.Label(300, 84, 70, "Program", "dim", "left", 30)
-        st.app := Lumi.Select(374, 84, 220, 30, apps,
-            Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
-
-        Lumi.Label(610, 84, 40, "Size", "dim", "left", 30)
-        st.size := Lumi.Select(654, 84, 102, 30, ["4", "8", "9 (1-9)"],
-            count = 9 ? 3 : (count = 8 ? 2 : 1), (i, t) => Atlas.MenuResize(st, i))
-
-        Lumi.Label(24, 122, 732,
-            "Program chooses the automatic menu. A named binding opens it directly.",
-            "mute", "left", 22)
-        Lumi.Rule(24, 156, w - 48)
-
-        ; ── the row grid ───────────────────────────────────────────────
-        ; Columns (x, w): direction 24/80, label 108/140, action 256/210,
-        ; details 472/134, icon 612/88, Rec 706/50. The icon column was
-        ; 70 px, which showed "magn…" and "dele…" for magnify and delete.
-        Lumi.Label(24, 164, 80, count = 9 ? "Number" : "Direction", "section")
-        Lumi.Label(108, 164, 140, "Label", "section")
-        Lumi.Label(256, 164, 210, "It does", "section")
-        Lumi.Label(474, 164, 132, "Details", "section")
-        Lumi.Label(614, 164, 86, "Icon", "section")
-
-        icons := []
-        for nm in RADIAL_ICONS
-            icons.Push(nm = "" ? "—" : nm)
-        i := 1
-        Loop count {
-            ry := 186 + (i - 1) * pitch
-            sl := slices.Has(i) ? slices[i] : 0
-            act := IsObject(sl) ? MGet(sl, "action", 0) : 0
-            code := IsObject(act) ? MGet(act, "type", "none") : "none"
-            val := IsObject(act) ? MGet(act, "value", "") : ""
-            lbl := IsObject(sl) ? MGet(sl, "label", "") : ""
-            ico := IsObject(sl) ? MGet(sl, "icon", "") : ""
-            dir := (count = 4 ? RADIAL_DIR4 : (count = 8 ? RADIAL_DIR8 : RADIAL_DIR9))[i]
-            Lumi.Label(24, ry, 80, dir, "dim", "left", 30)
-            r := {dlg: dlg, dir: dir}
-            ; The wheel on the right follows the Label field and the action
-            ; dropdown as they change, so what is typed is what is shown.
-            r.label := Lumi.Field(108, ry, 140, 30, lbl,
-                (v) => Atlas.MenuWheelPaint(st), "label", true)
-            r.act := Atlas.ActSelect(256, ry, 210, 30, code,
-                (i2, t) => Atlas.MenuWheelPaint(st))
-            r.value := Lumi.Field(474, ry, 132, 30, val, 0, "value", true)
-            r.icon := Lumi.Select(614, ry, 86, 30, icons,
-                Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
-            Lumi.Btn(708, ry, 48, 30, "Rec", Atlas.DeckRec(r), "accent")
-            st.rows.Push(r)
-            i += 1
-        }
-
-        Lumi.Para(24, 186 + (count - 1) * pitch + 38, 732, 48,
-            "For a PACS shortcut, choose Send keys and use Rec to press the "
-            . "shortcut from your viewer settings. Disabled leaves a direction "
-            . "empty. A direction set to Radial menu opens that menu inside "
-            . "this one: rest on it while holding, or release on it.", "mute")
-
-        ; ── the wheel ──────────────────────────────────────────────────
-        ; 200 px across, in the column to the right of the rows. Its
-        ; shapes are rebuilt by MenuWheelPaint whenever a label or an
-        ; action changes; the invisible Container over it is the ONE hit
-        ; target, because every Pie shares the same bounding box and
-        ; GpGFX hit-tests boxes, not arcs -- so the wedge under the
-        ; pointer is worked out from the angle here, never by GpGFX.
-        st.wheel := {x: 776, y: 186, d: 200, shapes: [], src: 0, dst: 0}
-        Lumi.Label(776, 164, 200, "As it opens", "section", "center")
-        Atlas.MenuWheelPaint(st)
-        grab := Container(st.wheel.x, st.wheel.y, st.wheel.d, st.wheel.d)
-        grab.OnEvent("LeftMouseDown", ObjBindMethod(Atlas, "MenuWheelDown", st))
-        Lumi.Para(776, 394, 200, 60,
-            "Drag one wedge onto another to swap the two commands. "
-            . "The rows on the left swap with them.", "mute")
-
-        Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
-            : count " directions · clockwise", "cyan")
-        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
-            (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.SaveMenu(st), "primary")
-
-        Atlas.dstate := st
-        Lumi.Focus.Restore()
-        Lumi.FullErase(dlg)
-        dlg.Draw()
-        dlg.Activate()
-    }
-
-    /**
-     * The row grid as a menu Map -- name, program, and one slice per row
-     * exactly as the fields hold them right now. MenuResize and the wheel
-     * drag both hand this to a fresh MenuDlg as a draft, which is the one
-     * honest way this kit rebuilds a dialog around answers already given.
-     */
-    static MenuDraftFrom(st) {
-        slices := []
-        for r in st.rows
-            slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                Atlas.ActCode(r.act),
-                Lumi.FieldValue(r.value),
-                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
-        app := AppCodeFromDisp(st.app.items[st.app.index])
-        return Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
-            "slices", slices)
-    }
-
-    /**
-     * (Re)draw the wheel from the rows. Slice i points where the real ring
-     * points it: north first, then clockwise, a full sector each (this is
-     * a root ring; RadialSliceAngles). GDI+ measures its arcs clockwise
-     * from east, so a bearing b from north is the angle b - 90 here.
-     *
-     * A filled wedge is one whose action is set; an empty one is drawn in
-     * the sunk tone so the gaps in a half-built menu are visible at a
-     * glance. During a drag the source is outlined pink and the wedge
-     * under the pointer cyan.
-     */
-    static MenuWheelPaint(st) {
-        wh := st.wheel
-        ; Paint only onto the dialog that is actually up. Atlas.dlg is set
-        ; before the first paint (dstate is not, so DlgAlive cannot be the
-        ; test here), and a field commit arriving after the dialog closed
-        ; must not build shapes into a disposed layer.
-        if (!IsObject(wh) || !IsObject(Atlas.dlg) || !Lumi.Same(Atlas.dlg, st.dlg))
-            return
-        prev := LayerStack.ActiveLayer
-        LayerStack.ActiveLayer := st.dlg
-        try {
-            for shp in wh.shapes {
-                try shp.Hide()
-                try shp.Dispose()
-            }
-            wh.shapes := []
-            n := st.count
-            cx := wh.x + wh.d / 2
-            cy := wh.y + wh.d / 2
-            step := 360.0 / n
-            gap := 3
-            for i, r in st.rows {
-                if (i > n)
-                    break
-                bearing := (i - 1) * step
-                start := bearing - 90 - step / 2 + gap / 2
-                live := (Atlas.ActCode(r.act) != "none")
-                fill := live ? Lumi.C["raised2"] : Lumi.C["sunk"]
-                if (i = wh.src)
-                    fill := Lumi.Mix(fill, Lumi.C["magenta"], 0.35)
-                else if (i = wh.dst)
-                    fill := Lumi.Mix(fill, Lumi.C["cyan"], 0.35)
-                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
-                    step - gap, fill, true))
-                edge := (i = wh.src) ? Lumi.C["magenta"]
-                    : ((i = wh.dst) ? Lumi.C["cyan"] : Lumi.C["hair"])
-                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
-                    step - gap, edge, false))
-                ; the label, on the wedge's centre line at 0.66 R
-                rad := bearing * 0.0174532925
-                tx := cx + (wh.d / 2) * 0.66 * Sin(rad)
-                ty := cy - (wh.d / 2) * 0.66 * Cos(rad)
-                txt := Trim(Lumi.FieldValue(r.label))
-                if (txt = "")
-                    txt := live ? ActLabelOf(Atlas.ActCode(r.act)) : r.dir
-                lw := (n = 4) ? 84 : 62
-                wh.shapes.Push(Lumi.Label(Round(tx - lw / 2), Round(ty - 10), lw,
-                    Lumi.Elide(txt, lw, live ? "body" : "mute"),
-                    live ? "body" : "mute", "center", 20))
-            }
-            ; the hub: release here to cancel, as on the real ring
-            hub := 22
-            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
-                hub * 2, Lumi.C["surface"], true))
-            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
-                hub * 2, Lumi.C["hair"], false))
-        } finally {
-            if IsObject(prev)
-                LayerStack.ActiveLayer := prev
-        }
-        Lumi.FullErase(st.dlg)
-        Lumi.Refresh(st.dlg)
-    }
-
-    /** Which wedge a layer-local point is on: 1..count, or 0 (hub / outside). */
-    static MenuWheelAt(st, mx, my) {
-        wh := st.wheel
-        cx := wh.x + wh.d / 2
-        cy := wh.y + wh.d / 2
-        dx := mx - cx
-        dy := my - cy
-        dist := Sqrt(dx * dx + dy * dy)
-        if (dist < 24 || dist > wh.d / 2)
-            return 0
-        bearing := RadialAngle(dx, dy)       ; degrees clockwise from north
-        step := 360.0 / st.count
-        return Mod(Round(bearing / step), st.count) + 1
-    }
-
-    /** A press on the wheel: remember the wedge, then drag OUTSIDE the
-     *  handler -- the loop below repaints the layer it was called from. */
-    static MenuWheelDown(st, shp := 0, mx := 0, my := 0) {
-        if !Atlas.DlgAlive(st)
-            return
-        i := Atlas.MenuWheelAt(st, mx, my)
-        if (i < 1)
-            return
-        Lumi.EndEdit()
-        SetTimer(() => Atlas.MenuWheelDrag(st, i), -1)
-    }
-
-    /**
-     * Drag a wedge. Polls the physical button the way Shelf.RowDrag does
-     * (no capture, so nothing can stick), lights the wedge under the
-     * pointer as it moves, and on release over a DIFFERENT wedge swaps
-     * the two slices and reopens the editor around the result -- the
-     * same draft reopen a size change does. Released on the same wedge,
-     * the hub or outside the ring: nothing happens.
-     */
-    static MenuWheelDrag(st, i) {
-        if !Atlas.DlgAlive(st)
-            return
-        wh := st.wheel
-        wh.src := i
-        wh.dst := 0
-        Atlas.MenuWheelPaint(st)
-        j := 0
-        try {
-            while GetKeyState("LButton", "P") {
-                if !Atlas.DlgAlive(st)
-                    return
-                RM_GetPos(&sx, &sy)
-                k := Atlas.MenuWheelAt(st, sx - st.dlg.x, sy - st.dlg.y)
-                if (k = i)
-                    k := 0
-                if (k != j) {
-                    j := k
-                    wh.dst := j
-                    Atlas.MenuWheelPaint(st)
-                }
-                Sleep(15)
-            }
-        } finally {
-            wh.src := 0
-            wh.dst := 0
-        }
-        if (j < 1 || j = i || !Atlas.DlgAlive(st)) {
-            Atlas.MenuWheelPaint(st)
-            return
-        }
-        if (st.ref > g_Cfg["menus"].Length
-            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
-            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
-            Atlas.MenuWheelPaint(st)
-            return
-        }
-        menu := Atlas.MenuDraftFrom(st)
-        sl := menu["slices"]
-        tmp := sl[i]
-        sl[i] := sl[j]
-        sl[j] := tmp
-        draft := {ref: st.ref, menu: menu}
-        ; Unwind before disposing the layer this drag was started from.
-        SetTimer(() => (Atlas.DlgAlive(st)
-            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
-        SetTimer(() => Lumi.Toast("Swapped " st.rows[i].dir " and "
-            . st.rows[j].dir " — Save keeps it", "cyan"), -60)
-    }
-
-    static MenuResize(st, index) {
-        Lumi.EndEdit()
-        count := [4, 8, 9][Max(1, Min(3, index))]
-        if (count = st.count || !Atlas.DlgAlive(st))
-            return
-        if (st.ref > g_Cfg["menus"].Length
-            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
-            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
-            return
-        }
-        ; Rows the new size has no slot for: warn before the draft loses them
-        kept := Map()
-        for src in MenuKeepMap(st.count, count)
-            kept[src] := 1
-        occupied := false
-        for i, r in st.rows {
-            if kept.Has(i)
-                continue
-            if (Trim(Lumi.FieldValue(r.label)) != ""
-                || Atlas.ActCode(r.act) != "none")
-                occupied := true
-        }
-        if (occupied && MsgBox("Switch to " count " slots?`n`nCommands in the "
-            . "slots that go away will be removed from this draft. The ones "
-            . "that stay keep their place. Cancel the editor to keep the saved menu.",
-            "RadMapper", "YesNo Icon? Owner" Lumi.HwndOf(st.dlg)) != "Yes") {
-            st.size.index := st.count = 9 ? 3 : (st.count = 8 ? 2 : 1)
-            Lumi.__SelectLabel(st.size)
-            Lumi.Refresh(st.dlg)
-            return
-        }
-        menu := Atlas.MenuDraftFrom(st)
-        menu["slices"] := ResizeMenuSlices(menu["slices"], count)
-        draft := {ref: st.ref, menu: menu}
-        ; Unwind the dropdown callback before disposing its owning layer.
-        SetTimer(() => (Atlas.DlgAlive(st)
-            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
-    }
-
-    static SaveMenu(st) {
-        return (*) => Atlas.DoSaveMenu(st)
-    }
-
-    static DoSaveMenu(st) {
-        Lumi.EndEdit()
-        if (!st.ref || st.ref > MGet(g_Cfg, "menus", []).Length) {
-            Lumi.Toast("That menu is no longer there", "warn")
-            Atlas.CloseDlg()
-            return
-        }
-        if !Lumi.Same(g_Cfg["menus"][st.ref], st.original) {
-            Lumi.Toast("This menu changed elsewhere. Close this editor and reopen it.", "warn")
-            return
-        }
-        hwnd := Lumi.HwndOf(st.dlg)
-        name := Trim(Lumi.FieldValue(st.name))
-        if (name = "") {
-            Lumi.Toast("A menu needs a name — that is how a button finds it",
-                "warn")
-            return
-        }
-        for i, other in g_Cfg["menus"] {
-            if (i != st.ref && MGet(other, "name", "") = name) {
-                Lumi.Toast("There is already a menu called “" name "”", "warn")
-                return
-            }
-        }
-        apps := AppChoices()
-        code := AppCodeFromDisp(apps.Has(st.app.index)
-            ? apps[st.app.index] : "Global (all apps)")
-        app := (code = "*") ? "" : code
-        count := st.count
-
-        ; Validate EVERY row before writing ANY of them, exactly as the wheel
-        ; deck does: a menu half-applied because slice six had a typo is
-        ; worse than one refused, because you cannot see which five landed.
-        plan := []
-        i := 1
-        for r in st.rows {
-            if (i > count)
-                break
-            atype := Atlas.ActCode(r.act)
-            val := Lumi.FieldValue(r.value)
-            lbl := Trim(Lumi.FieldValue(r.label))
-            if (atype != "none") {
-                ok := true
-                val := ValidateActionValue(hwnd, atype, val, &ok)
-                if !ok
-                    return
-                ; A live slice with no label is a slice you cannot read in the
-                ; wheel. Name it after its action rather than refusing.
-                if (lbl = "")
-                    lbl := ActLabelOf(atype)
-            } else
-                val := ""
-            plan.Push(MenuSlice(lbl, atype, val,
-                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
-            i += 1
-        }
-        ; A menu that fires nothing anywhere is allowed -- that is what a
-        ; half-authored PACS menu is -- but say so, because it is also what a
-        ; menu looks like when you have picked the wrong row.
-        live := 0
-        for one in plan {
-            if (MGet(one["action"], "type", "none") != "none")
-                live += 1
-        }
-        m := g_Cfg["menus"][st.ref]
-        oldName := m["name"]
-        m["name"] := name
-        m["app"] := app
-        m["slices"] := plan
-        RenameMenuBindings(oldName, name)
-        AfterCfgChange()
-        if !SaveCfg() {
-            Lumi.Toast("Changes are in memory only. Check the settings folder, then Save again.", "danger", 5000)
-            return
-        }
-        Atlas.CloseDlg()
-        Atlas.Build()
-        Lumi.Toast(live = 0
-            ? ("Saved “" name "” — no slice does anything yet")
-            : ("Saved “" name "” — " live " of " count " slices filled"),
-            live = 0 ? "warn" : "jade")
     }
 
     ; ── LIVE STATUS ─────────────────────────────────────────────────────────
@@ -20811,18 +18309,15 @@ class Warp {
             HUD("Keyboard pointer needs the overlay kit (not in this build)", "warn")
             return
         }
-        ; A radial menu, the app switcher and the timing calibrator all own
-        ; the keyboard (or a held button) while they are up. Opening an
+        ; The app switcher owns a held button while it is up. Opening an
         ; InputHook that swallows every key on top of one of them leaves the
         ; menu unable to hear its own cancel key and the switcher unable to
         ; hear its release -- and the user with two overlays and no way out
         ; but Esc. Refuse instead; the menu is one keystroke from gone.
         busy := ""
-        if IsObject(g_Radial)
-            busy := "menu"
-        else if IsObject(g_AppSw)
+        if IsObject(g_AppSw)
             busy := "window switcher"
-        ; The settings window is the fourth: it drives itself from Tab,
+        ; The settings window is the other: it drives itself from Tab,
         ; Space, Enter and the arrows (Lumi.Focus), and an InputHook that
         ; swallows all of them on top of it leaves the window looking
         ; focused and answering nothing.

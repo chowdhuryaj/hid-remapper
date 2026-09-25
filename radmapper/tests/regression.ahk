@@ -22,35 +22,19 @@ try {
     Check(MGet([], "missing", 7) = 7, "Non-map lookup must use fallback")
     Check(MGet({name: "object"}, "name", 7) = 7, "Plain object is not a config map")
 
-    four := []
-    for name in ["Up", "Right", "Down", "Left"]
-        four.Push(MenuSlice(name, "keys", name))
-    eight := ResizeMenuSlices(four, 8)
-    for i, name in ["Up", "Right", "Down", "Left"]
-        Check(eight[2 * i - 1]["label"] = name, "Growing moved " name)
-    for i in [2, 4, 6, 8]
-        Check(eight[i]["action"]["type"] = "none", "New diagonal is not empty")
-    back := ResizeMenuSlices(eight, 4)
-    for i, sl in four
-        Check(back[i]["label"] = sl["label"], "Round trip moved a direction")
-    for i, delta in [[0,-100], [100,0], [0,100], [-100,0]]
-        Check(Abs(RadialAngle(delta[1], delta[2]) - (i - 1) * 90) < 0.01, "Compass angle")
-
+    ; v0.7.2: radial menus are a separate script. A row that opened one
+    ; is dropped on load; a key literally named "0" is an ordinary key.
     g_Cfg := Map("bindings", [NewBinding("*", "*", "", "XButton1", "hold", "radial", "Old"),
-        NewBinding("*", "*", "", "XButton2", "hold", "radial", "")],
-        "menus", [Map("name", "Nested", "slices", [MenuSlice("Open", "radial", "Old")])])
-    RenameMenuBindings("Old", "New")
-    Check(g_Cfg["bindings"][1]["action"]["value"] = "New", "Rename broke a binding")
-    Check(g_Cfg["bindings"][2]["action"]["value"] = "", "Rename changed auto selection")
-    Check(g_Cfg["menus"][1]["slices"][1]["action"]["value"] = "New", "Nested rename")
+        NewBinding("*", "*", "", "0", "tap", "keys", "x")],
+        "apps", [], "layouts", [], "settings", Map())
+    ValidateCfg()
+    Check(g_Cfg["bindings"].Length = 1, "Radial row survived validation")
+    Check(g_Cfg["bindings"][1]["button"] == "0", "Key 0 row was dropped")
+    Check(IsKeyInput("0") && KeyNameValid("0"), "0 is a valid key input")
     ValidateCfgShape(g_Cfg)
     for bad in [[], Map("bindings", "bad"), Map("bindings", [], "settings", []),
-        Map("bindings", [], "menus", [Map("name", "Bad", "slices", "bad")])]
+        Map("bindings", [], "apps", "bad")]
         Rejects(() => ValidateCfgShape(bad), "Malformed config accepted")
-
-    g_Enabled := false
-    RM_Send := (*) => Check(false, "Paused radial menu sent input")
-    RadialFireSlice(Map("type", "keys", "value", "x"), "Test", 0)
 
     g_CfgRecoveryBlocked := true
     Check(!SaveCfg() && g_CfgDirty, "Recovery block must prevent saving")
@@ -66,7 +50,7 @@ try {
     Check(g_CfgDirty, "Failed save lost dirty state")
     FileDelete(testDir "\config.json")
     DirDelete(testDir)
-    FileAppend("PASS: JSON, config shape, radial geometry, rename, pause and persistence`n", "*")
+    FileAppend("PASS: JSON, config shape, retired radial rows, key 0, persistence`n", "*")
     ExitApp(0)
 } catch as e {
     FileAppend("FAIL: " e.Message " (line " e.Line ")`n", "**")
