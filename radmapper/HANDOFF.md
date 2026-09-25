@@ -73,6 +73,15 @@ syntax/scope pass found no load-time or guaranteed-runtime errors.
 - Primary dragmove hold drags its target; a host turned plain drag drops
   its layer (spec is per press -- SpecFor must never cache).
 
+## Round 4 (simplify)
+- Removed the clipboard history + scratchpad (Shelf, OnClipboardChange
+  hook -- suspected cause of freezes on copy/cut), their actions, hotkeys,
+  tray entries and config snippets.
+- Removed sniper/boost, drag scroll/zoom (+ cursor hiding), W/L dial.
+  Kept: keyboard pointer, window layouts, switcher, follow/park, macros.
+- Old rows for removed actions are dropped with a Diagnostics line;
+  their settings are in RETIRED_SETTINGS. Removal review: clean.
+
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first
 launch (expect "retired" lines for old radial rows).

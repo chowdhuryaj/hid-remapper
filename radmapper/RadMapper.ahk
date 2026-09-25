@@ -1578,6 +1578,7 @@ global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     ; v0.7.2: pointer speed modes, drag scroll/zoom and the W/L dial are gone
     "sniperSpeed", "boostSpeed", "scrollPtrPx", "scrollPtrInvert",
     "scrollPtrPin", "scrollPtrHide", "scrollPtrMax",
+    ; v0.3: the old scroll engine
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -3084,8 +3085,10 @@ ValidateCfg() {
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
         }
-        ; v0.7.2: radial menus moved to their own script. A row that
-        ; opened one has nothing left to run it: dropped, and named.
+        ; v0.7.2: features removed from RadMapper (pointer speed, drag
+        ; scroll, the W/L dial, the clipboard shelf, radial menus -- now a
+        ; separate script). A row using one has nothing left to run it:
+        ; dropped, and named in Diagnostics.
         t0 := MGet(MGet(row, "action", Map()), "type", "")
         if (t0 = "sniper" || t0 = "boost" || t0 = "scrollptr"
             || t0 = "zoomptr" || t0 = "wldial") {
@@ -9047,7 +9050,7 @@ Watchdog() {
         Problem("recovered", "released stuck " name " (" st.mode ", " why ")")
         HUD("RadMapper recovered a stuck " name)
     }
-    ; 4) and 5) THE OS's OWN STATE, not ours. Parts 1-3 reconcile g_BS, and
+    ; 4) and 5) THE OS's OWN STATE, not ours. Part 1 reconciles g_BS, and
     ;    that is exactly what the PowerScribe/PACS click freeze slipped past:
     ;    a click whose Down went out inside a "+{Tab}" delivery leaves a Shift
     ;    logically down and/or an orphan LButton down in the OS while g_BS's
