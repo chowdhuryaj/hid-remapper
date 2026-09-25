@@ -64,6 +64,12 @@ Branch `claude/dazzling-mendel-pvayp0` (PR #14's branch merged in, then this).
   it on auto-repeat (`EatRepeat`); an empty hold wheel swallowed its button
   (`Claims` now needs a live slot; `opened` flag makes a never-opened hold
   a tap).
+- Review pass (subagent) fixes: EatRepeat checked before the toggle
+  branch (a held key no longer re-chooses in a submenu); a stale Held
+  entry is dropped when the gate changes its mind, and a declined click
+  clears a leftover Swallow; empty hold wheels don't toast on every press;
+  RmCheck keys on mtime+size and a readOk flag; OpenMutex ACCESS_DENIED
+  (elevated RadMapper) counts as running. Not done: numpad twin names.
 - Caps Lock report: not reproduced from the code. With the defaults both
   scripts hooked nothing in common except XButton1/2 (RadWheel's button 5
   in PACS, button 4 in PowerScribe), which now yield.

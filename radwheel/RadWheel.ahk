@@ -82,7 +82,7 @@ global HiResOn := 0
 global EatRepeat := Map()        ; key -> tick: auto-repeats of a key press
                                  ;   that already did its job are eaten
 global RmOwned := Map()          ; inputs RadMapper has hooked right now
-global RmSeen := {running: false, cfg: "", mtime: "", pid: 0}
+global RmSeen := {running: false, cfg: "", mtime: "", readOk: false}
 
 Held.CaseSense := "Off"
 Swallow.CaseSense := "Off"
@@ -1052,9 +1052,14 @@ TrigGate(hk) {
         return true
     if (Held.Has(key) || EatRepeat.Has(key))
         return true
-    if RmOwned.Has(key)                      ; RadMapper's button: stay out
-        return false
-    return IsObject(MenuFor(trig))
+    if (RmOwned.Has(key) || !IsObject(MenuFor(trig))) {
+        ; a declined click is native, so its release must be too: a swallow
+        ; left over from a lost release must not eat it
+        if (IsMouseKey(key) && Swallow.Has(key))
+            Swallow.Delete(key)
+        return false                         ; RadMapper's button, or no wheel
+    }
+    return true
 }
 
 IsClickKey(k) => (k = "LButton" || k = "RButton" || k = "MButton")
@@ -1100,6 +1105,13 @@ TrigDown(hk) {
     trig := SubStr(hk, 2)
     key := KeyOf(trig)
     R := Cur
+    if EatRepeat.Has(key) {
+        if (A_TickCount - EatRepeat[key] < 1000) {
+            EatRepeat[key] := A_TickCount
+            return
+        }
+        EatRepeat.Delete(key)
+    }
     if (IsObject(R) && R.mode = "toggle") {
         if (R.key = key) {                   ; tapped again: choose
             Swallow[key] := true
@@ -1109,13 +1121,6 @@ TrigDown(hk) {
             return
         }
         CloseMenu()
-    }
-    if EatRepeat.Has(key) {
-        if (A_TickCount - EatRepeat[key] < 1000) {
-            EatRepeat[key] := A_TickCount
-            return
-        }
-        EatRepeat.Delete(key)
     }
     ; keyboard auto-repeat: repeats arrive every ~30 ms while held, so a
     ; press after a quiet second is a new press (a lost release can't
@@ -1129,6 +1134,8 @@ TrigDown(hk) {
     win := 0
     m := MenuFor(trig, &win)
     if !IsObject(m) {
+        if Held.Has(key)                     ; a stale press (its release
+            Held.Delete(key)                 ;   was lost) must not linger
         Swallow[key] := true                 ; the gate changed its mind: a
         SendNative(key)                      ;   whole native click, and the
         return                               ;   real release is swallowed
@@ -1136,7 +1143,7 @@ TrigDown(hk) {
     MouseGetPos(&x, &y)
     Held[key] := {menu: m, trig: trig, x: x, y: y, win: win, pass: false,
                   opened: false, t0: A_TickCount, last: A_TickCount}
-    if m.hold
+    if (m.hold && LiveCount(m))
         Held[key].opened := OpenMenu(m, "hold", key, false, win)
 }
 
@@ -1975,8 +1982,8 @@ RadMapperRunning() {
     ; the single-copy mutex RadMapper holds for its whole life
     h := DllCall("OpenMutexW", "uint", 0x00100000, "int", 0,
         "wstr", "Local\RadMapper-single-copy", "ptr")
-    if !h
-        return false
+    if !h                                    ; denied = it exists (RadMapper
+        return A_LastError = 5               ;   running elevated)
     DllCall("CloseHandle", "ptr", h)
     return true
 }
@@ -2008,6 +2015,7 @@ RmCheck() {
         if RmSeen.running {
             RmSeen.running := false
             RmSeen.mtime := ""
+            RmSeen.readOk := false
             RmSetOwned(RmEmpty())
         }
         return
@@ -2017,17 +2025,18 @@ RmCheck() {
         RmSeen.cfg := RadMapperCfgPath()
         RmSeen.mtime := ""
     }
-    mt := ""
-    try mt := FileGetTime(RmSeen.cfg, "M")
+    mt := ""                                 ; time + size: a second save in
+    try mt := FileGetTime(RmSeen.cfg, "M") "/" FileGetSize(RmSeen.cfg)  ; the same second
     if (mt != "" && mt = RmSeen.mtime)
         return
     try {
         owned := RmReadOwned(RmSeen.cfg)
         RmSeen.mtime := mt
+        RmSeen.readOk := true
     } catch {
         ; mid-save or unreadable: try again next time; until the first good
         ; read, assume RadMapper's shipped buttons
-        if RmOwned.Count
+        if RmSeen.readOk
             return
         owned := RmEmpty()
         for k in ["XButton1", "XButton2", "CapsLock", "``"]
