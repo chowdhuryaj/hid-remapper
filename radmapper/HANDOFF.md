@@ -5,7 +5,9 @@ IntelliSpace) reliable. v0.7.2 removes radial menus (now a separate script)
 and lands a five-area bug sweep.
 
 **State (v0.7.2).** Branch `claude/compassionate-clarke-ffcwdy`. Not yet run
-on Windows: all verification is by reading + portable checks.
+on Windows: all verification is by reading + portable checks. Round 3
+review agents were running at last update (latest-commit regressions,
+whole-file syntax pass).
 
 ## Completed
 - "0" labels draw (GpGFX `== 0` / `!== 0` emptiness tests); braces in Send
@@ -34,13 +36,29 @@ on Windows: all verification is by reading + portable checks.
 - Text compares: SameText() for clipboard, snippets, macro names; ParkOf
   rejects non-numeric spots.
 
-## Deliberately not done (need a decision)
-- CurCtx picks program rows by FOREGROUND window even for mouse input
-  (PS focused + pointer over PACS -> PACS rows don't match). Positional
-  would change behavior; ask the user.
-- A "Toggle engine pause" row cannot resume (its input is unhooked while
-  paused). The pause hotkey still works.
-- Chooser/Shelf don't restore focus after Esc.
+## Round 2 (user decisions applied)
+- Mouse input follows the window under the pointer: CurCtx(btn) ->
+  AppNameAt(RM_WinAt()) for mouse/wheel; keys use the foreground.
+- Layer buttons are a setting: config "layerHosts" (default XButton1,
+  XButton2, CapsLock; max 6; never LButton/wheels), edited in
+  Atlas.LayerHostsDlg ("Layer buttons…" on the tab strip). CleanLayerHosts
+  runs in NormalizeCfg before ValidateCfg. SpecFor lets M/R host when listed.
+- "Toggle engine pause" rows stay hooked while paused and resume
+  (PauseTglRowFor via MatchScore; g_SwallowUp eats the toggling release and
+  OS key repeats).
+- Focus restore after Chooser/Shelf Esc: user said fine, not changed.
+- Second sweep fixes: click-lock hotkey refuses unhooked buttons; pause
+  restores speed/closes Warp; WinMoveSure (DPI); ClipboardAll in grab;
+  layoutGuardMs clamp; hotkey dup/bad warnings; switcher commit regression
+  fixed; swapped psWin/win in delivery fixed (was breaking ALL PS/PACS
+  delivery that needed activation); primary-button drag passthrough from
+  pending/armedmod (MovePoll); layer marked used at press; held = armed
+  hosts only; scores layer 64 / mod 9 / app 8; tilt native rate limit;
+  dial/switch use holder; fgOurs mouse resolves normally.
+
+## Not done
+- ModsHeld ignores modifiers RadMapper holds via a native remap
+  (XButton1 -> LCtrl + a Ctrl+Wheel row won't match). Edge case.
 
 ## Verification
 - `python3 tests/check_source.py` PASS (now also guards `str !== 0`).
