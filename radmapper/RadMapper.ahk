@@ -2776,7 +2776,7 @@ LayerParts(row) {
 CurrentLayerDisp() {
     parts := ""
     for name, st in g_BS {
-        if (st.down && !st.consumed && g_Idx.layerBind.Has(name))
+        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost)
             parts .= (parts = "" ? "" : "/") name
     }
     return parts = "" ? "Base" : parts
@@ -3889,11 +3889,20 @@ PauseTglRowFor(btn) {
         if (MGet(row, "event", "") = "turn")
             continue
         ; the engine's own matcher: program, layer and modifiers all count
-        ; (a "^!p" row must not resume on a bare P). While paused nothing is
-        ; held, so a row inside a layer simply never resumes -- the safe way.
+        ; (a "^!p" row must not resume on a bare P).
         if !IsObject(ctx)
             ctx := CurCtx(btn)
-        if (MatchScore(row, ctx) < 0)
+        ; program and modifiers by the matcher; the LAYER physically --
+        ; while paused no host has a state, so the matcher's layer test
+        ; could never pass and such a row paused but never resumed
+        if (MatchScore(row, ctx, false) < 0)
+            continue
+        ok := true
+        for part in LayerParts(row) {
+            if !InputHeldPhysical(part)
+                ok := false
+        }
+        if !ok
             continue
         return row
     }
@@ -4366,8 +4375,8 @@ OnPressHK(btn, *) {
     ; and off every ~30 ms.
     if (isKey && g_SwallowUp.Has(btn) && InputHeldPhysical(btn))
         return
-    if g_SwallowUp.Has(btn)                  ; a fresh press: any old claim
-        g_SwallowUp.Delete(btn)              ; on its release is stale
+    if g_SwallowUp.Has(btn)                  ; a fresh mouse press: any old
+        g_SwallowUp.Delete(btn)              ; claim on its release is stale
     fgOurs := OwnGuiActive()
     ; POSITIONAL ours-ness is a MOUSE question only: a keystroke goes to the
     ; foreground window, so for keys the cursor's location is irrelevant (and
@@ -4528,10 +4537,10 @@ OnPressHK(btn, *) {
     ; the holder now, not when the row fires, so releasing the host first
     ; (ordinary rollover) cannot also fire the host's own tap. A no-op for
     ; Base rows.
+    ; Only the TAP: a layer hold row may never engage (released early, the
+    ; tap may resolve to Base), and ActionDown/ActionFire mark it when it does.
     if IsObject(spec.tap)
         MarkLayerUsed(spec.tap)
-    if IsObject(spec.hold)
-        MarkLayerUsed(spec.hold)
     RM_GetPos(&sx, &sy)
     st.sx := sx
     st.sy := sy
@@ -4744,8 +4753,16 @@ MovePoll(btn, pollId, *) {
         if (!st.usedAsMod && dist >= Cfg("dragThreshold")) {
             st.gen += 1                      ; the hold timer stands down
             st.mode := "passthru"            ; ...and the button goes out:
-            st.passBtn := btn                ; a drag is a drag
-            SendNativeDown(btn)
+            ; a drag is a drag -- of the dragmove TARGET if the hold is one
+            ; (right-drag -> middle-drag pan), else of the button itself
+            hv := (IsObject(st.spec) && IsObject(st.spec.hold)
+                && st.spec.hold["action"]["type"] = "dragmove")
+                ? MGet(st.spec.hold["action"], "value", "") : ""
+            st.passBtn := (hv != "") ? hv : btn
+            ; a host that became a plain drag no longer holds its layer
+            if IsObject(st.spec)
+                st.spec.layerHost := false
+            SendNativeDown(st.passBtn)
             st.polling := false
             SetTimer(, 0)
         }
@@ -4943,6 +4960,14 @@ OnWheelHK(wh, *) {
     if (!g_Enabled || (!tilt && OwnWindowAt(RM_WinAt()))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
+    }
+    ; Settings in front, pointer over PACS: a bound row's keys go to the
+    ; FOREGROUND, so give it to the window being scrolled first (as a press
+    ; does), or {Down} lands in a RadMapper list.
+    if (!tilt && OwnGuiActive()) {
+        uw := RM_WinAt()
+        if uw
+            try WinActivate("ahk_id " uw)
     }
     ; no turn binding exists for this wheel in ANY context -> nothing to
     ; resolve (v0.3: a wheel is only ever hooked when a row references it,
