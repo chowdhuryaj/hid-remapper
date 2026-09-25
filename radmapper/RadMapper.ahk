@@ -3049,8 +3049,12 @@ UpOwned(hk) {
 HookActive(hk) {
     if UpOwned(hk)
         return 1
-    if (IsObject(g_Bypass) && BypassFor(HkInput(hk)))
-        return 0                             ; pass-through: truly native
+    ; pass-through: truly native -- except an input already held with a
+    ; live state, whose repeats and release must keep reaching the engine
+    ; (else its release is claimed by UpOwned while repeats leak: stuck key)
+    if (IsObject(g_Bypass) && BypassFor(b := HkInput(hk))
+        && !((s := BS(b)) && s.down))
+        return 0
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
     if !ours
@@ -3096,8 +3100,12 @@ TiltNote(why, cls) {
 KbHookActive(hk) {
     if UpOwned(hk)
         return 1
-    if (IsObject(g_Bypass) && BypassFor(HkInput(hk)))
-        return 0                             ; pass-through: truly native
+    ; pass-through: truly native -- except an input already held with a
+    ; live state, whose repeats and release must keep reaching the engine
+    ; (else its release is claimed by UpOwned while repeats leak: stuck key)
+    if (IsObject(g_Bypass) && BypassFor(b := HkInput(hk))
+        && !((s := BS(b)) && s.down))
+        return 0
     try return OwnGuiActive() ? 0 : 1
     return 1
 }
