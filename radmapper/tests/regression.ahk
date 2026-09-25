@@ -31,6 +31,17 @@ try {
     Check(g_Cfg["bindings"].Length = 1, "Radial row survived validation")
     Check(g_Cfg["bindings"][1]["button"] == "0", "Key 0 row was dropped")
     Check(IsKeyInput("0") && KeyNameValid("0"), "0 is a valid key input")
+    ; v0.7.2: layer hosts are a setting. Left, wheels and junk are refused;
+    ; names are canonicalised and de-duplicated.
+    hs := CleanLayerHosts(["mbutton", "LButton", "WheelUp", "XButton1",
+        "XButton1", "{F13}", Map(), "NotAKey"])
+    Check(hs.Length = 3 && hs[1] == "MButton" && hs[2] == "XButton1"
+        && hs[3] == "F13", "Layer host list not cleaned")
+    g_Cfg["layerHosts"] := ["MButton"]
+    Check(LayerHostAllowed("MButton") && !LayerHostAllowed("XButton1"),
+        "Configured layer hosts ignored")
+    Check(LayerPathAllowed("MButton") && !LayerPathAllowed("XButton1"),
+        "Layer path check ignores configured hosts")
     ValidateCfgShape(g_Cfg)
     for bad in [[], Map("bindings", "bad"), Map("bindings", [], "settings", []),
         Map("bindings", [], "apps", "bad")]

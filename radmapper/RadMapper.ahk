@@ -29,6 +29,12 @@
 ;      GpGFX tested text for emptiness with `== 0` / `!== 0`, which are
 ;      numeric. Braces in Send syntax are no longer read as text markup
 ;      ("^{c}" drew as "^", "{Del}" struck through).
+;    * MOUSE INPUT FOLLOWS THE POINTER. Program-scoped rows for a mouse
+;      button or the wheel match the window under the pointer; keys still
+;      match the foreground window.
+;    * LAYER BUTTONS ARE A SETTING ("Layer buttons…" on the tab strip):
+;      up to six of middle, right, button 4/5 or any key; never left.
+;    * "Toggle engine pause" on an input resumes as well as pauses.
 ;    * Bug sweep (engine, config, delivery, GUI). Among the fixes: a key
 ;      remapped to a mouse button no longer re-sends its Down on key
 ;      repeat; a release over RadMapper's own window is no longer lost; a
@@ -1423,10 +1429,13 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 ; a stranded assignment lower in the file never runs before Init (auto-exec is
 ; top-to-bottom, RM_TEST hides this because it skips Init).
 global LAYER_BASE_LABEL := "Base (no button held)"
-; The ONLY inputs that may host a layer: the two thumb buttons and CapsLock
-; (it types nothing, so holding it is free). Everything else -- left, right,
-; middle, any other key -- is refused by the editors and dropped on load.
+; The DEFAULT layer hosts: the two thumb buttons and CapsLock (it types
+; nothing, so holding it is free). v0.7.2: the live list is the config's
+; "layerHosts" (LayerHosts()), editable from the Mouse/Keyboard tab strip, so
+; a mouse without buttons 4 and 5 can use the middle or right button or a
+; key. Left is never allowed: every plain click would wait on the threshold.
 global LAYER_HOSTS := ["XButton1", "XButton2", "CapsLock"]
+global LAYER_HOSTS_MAX := 6
 
 ; Friendly display names for inputs (config/JSON always stores the codes).
 global INPUT_LABELS := Map(
@@ -2503,6 +2512,7 @@ DefaultCfg() {
     c["apps"] := apps
 
     c["layers"] := ["Base"]
+    c["layerHosts"] := LAYER_HOSTS.Clone()
     c["bindings"] := []
 
     macros := Map()
@@ -3053,6 +3063,11 @@ NormalizeCfg(imported := false) {
         c["psExes"] := DefaultCfg()["psExes"]
     if (c["layers"].Length = 0)
         c["layers"] := ["Base"]
+    ; v0.7.2: the layer hosts, BEFORE ValidateCfg reads them. A list that
+    ; is not a list at all (hand edit) falls back to the default rather than
+    ; to "no hosts", which would drop every layer row.
+    c["layerHosts"] := (MGet(c, "layerHosts", 0) is Array)
+        ? CleanLayerHosts(c["layerHosts"]) : LAYER_HOSTS.Clone()
     ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
     ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
     ; as "can no longer hold a layer" instead of migrating it. Idempotent.
@@ -3109,7 +3124,7 @@ ValidateCfg() {
         if !LayerPathAllowed(MGet(row, "layer", "*")) {
             Problem("retired", InputLabel(MGet(row, "button", "")) " row dropped: "
                 . "'" MGet(row, "layer", "*") "' can no longer hold a layer "
-                . "(only button 4, button 5 or CapsLock can)")
+                . "(only " LayerHostsText() " can)")
             continue
         }
         if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "event", "") = "hold"
@@ -3992,7 +4007,9 @@ SpecFor(btn, ctx) {
     if IsPrimaryButton(btn) {
         if (IsObject(hold) && MGet(hold, "app", "*") = "*")
             hold := 0
-        layerHost := false
+        ; v0.7.2: middle or right may host a layer when the user made it one
+        if !LayerHostAllowed(btn)
+            layerHost := false
     }
 
     hasAny := IsObject(tap) || IsObject(hold) || layerHost
@@ -10000,19 +10017,70 @@ AppChoices() {
 ; LAYER_BASE_LABEL is a top-level global (defined near BUTTONS, above Init()).
 LayerChoices() {
     out := [LAYER_BASE_LABEL]
-    for b in LAYER_HOSTS
+    for b in LayerHosts()
         out.Push("Hold " InputLabel(b))
     return out
 }
 
-; May this input hold a layer open? Only LAYER_HOSTS. Everything else is
-; refused by the editors and dropped on load (ValidateCfg).
+; The inputs that may hold a layer open (v0.7.2: a setting). Everything else
+; is refused by the editors and dropped on load (ValidateCfg).
+LayerHosts() {
+    h := IsSet(g_Cfg) ? MGet(g_Cfg, "layerHosts", 0) : 0
+    return (h is Array) ? h : LAYER_HOSTS
+}
+
 LayerHostAllowed(inp) {
-    for b in LAYER_HOSTS {
+    for b in LayerHosts() {
         if (b = inp)
             return true
     }
     return false
+}
+
+; Could this input host a layer at all? Any mouse button but left (and no
+; wheel direction), or any key AutoHotkey can hook.
+LayerHostOk(inp) {
+    if (inp = "" || inp = "LButton" || IsWheel(inp))
+        return false
+    return IsMouseInput(inp) || KeyNameValid(inp)
+}
+
+; A hand-edited or stale host list, cleaned: canonical names, valid hosts
+; only, no duplicates, at most LAYER_HOSTS_MAX.
+CleanLayerHosts(list) {
+    out := []
+    for v in list {
+        if IsObject(v)
+            continue
+        n := CanonicalInputName(NormalizeInputName(String(v)))
+        for b in BUTTONS {                   ; "mbutton" -> "MButton"
+            if (b = n)
+                n := b
+        }
+        if !LayerHostOk(n)
+            continue
+        dup := false
+        for o in out {
+            if (o = n)
+                dup := true
+        }
+        if (!dup && out.Length < LAYER_HOSTS_MAX)
+            out.Push(n)
+    }
+    return out
+}
+
+; Short words for a host list: "button 4, button 5 or CapsLock".
+LayerHostsText() {
+    hs := LayerHosts()
+    if (hs.Length = 0)
+        return "no input (add one with “Layer buttons…”)"
+    out := ""
+    for i, h in hs {
+        w := IsMouseInput(h) ? StrLower(InputLabel(h)) : h
+        out .= (i = 1 ? "" : (i = hs.Length ? " or " : ", ")) w
+    }
+    return out
 }
 
 ; A row's layer path is usable when every component may host a layer and
@@ -14464,6 +14532,11 @@ class Atlas {
      * what changes is what each part does.
      */
     static LayerTabs(x, y, w) {
+        ; v0.7.2: the right end of the strip edits WHICH inputs are tabs
+        bw0 := 132
+        Lumi.Btn(x + w - bw0, y, bw0, 30, "Layer buttons…",
+            (*) => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), "ghost")
+        w -= bw0 + 8
         items := LayerChoices()
         if !items.Has(Atlas.layerIdx)        ; a tab whose host is gone
             Atlas.layerIdx := 1
@@ -14474,6 +14547,7 @@ class Atlas {
             code := LayerCodeFromLabel(lab)
             host := (code = "*") ? "" : code
             txt := (host = "") ? "Base"
+                : (host = "RButton") ? "Hold Right"
                 : "Hold " (IsMouseInput(host) ? "Button " Atlas.ZoneCap(host) : host)
             tabs.Push({i: i, txt: txt, bw: Max(72, 22 + StrLen(txt) * 7)})
         }
@@ -17146,8 +17220,8 @@ class Atlas {
             return
         }
         if !LayerPathAllowed(lay) {
-            Lumi.Toast("Only button 4, button 5 or CapsLock "
-                . "can hold a layer, one at a time", "warn", 3200)
+            Lumi.Toast("Only " LayerHostsText() " can hold a layer, one at a"
+                . " time — change the list with “Layer buttons…”", "warn", 3600)
             return
         }
         if (event = "hold" && IsPrimaryButton(btn) && app = "*") {
@@ -17311,8 +17385,8 @@ class Atlas {
             Lumi.Btn(462, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
-            for b in LAYER_HOSTS {           ; the thumb buttons: the only
-                if IsMouseInput(b)           ; mouse buttons that host a layer
+            for b in LayerHosts() {          ; the mouse buttons that may
+                if IsMouseInput(b)           ; host a layer (a setting)
                     inputs.Push(InputLabel(b))
             }
             st.input := Lumi.Select(150, 126, 300, 30, inputs,
@@ -17442,7 +17516,7 @@ class Atlas {
             return
         }
         if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.7)
-            Lumi.Toast("Only button 4, button 5 or CapsLock can hold a deck",
+            Lumi.Toast("Only " LayerHostsText() " can hold a deck",
                 "warn", 3200)
             return
         }
@@ -17562,6 +17636,190 @@ class Atlas {
         Lumi.Focus.armed := true
         Lumi.Focus.idx := 1
         Lumi.Focus.Paint()
+    }
+
+    ; ── LAYER BUTTONS (v0.7.2) ──────────────────────────────────────────────
+    ; Which inputs may hold a layer open. Each one is a tab on the Mouse and
+    ; Keyboard pages. Changes apply and save immediately; the dialog is
+    ; rebuilt in place after each one.
+
+    static LayerHostsDlg() {
+        w := 620
+        h := 520
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperLayerHosts")
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Lumi.Focus.Reset(dlg, true)
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, w - 48, "Layer buttons", "title")
+        Lumi.Label(24, 42, w - 48,
+            "Hold one of these and everything else can do something different.",
+            "mute", "left", 20)
+        Lumi.Rule(24, 66, w - 48)
+
+        st := {dlg: dlg}
+        hosts := LayerHosts()
+        y := 80
+        if (hosts.Length = 0)
+            Lumi.Label(24, y, w - 48, "None — no layers until you add one.",
+                "mute", "left", 30)
+        for hst in hosts {
+            n := Atlas.LayerRowCount(hst)
+            Lumi.Label(24, y, 300, IsMouseInput(hst) ? InputLabel(hst) : hst,
+                "body", "left", 30)
+            Lumi.Label(330, y, 150, n ? (n " setting" (n = 1 ? "" : "s")) : "empty",
+                "mute", "left", 30)
+            Lumi.Btn(w - 24 - 100, y, 100, 30, "Remove",
+                Atlas.LayerHostRemoveGo(hst), "ghost")
+            y += 36
+        }
+
+        full := (hosts.Length >= LAYER_HOSTS_MAX)
+        ay := 80 + LAYER_HOSTS_MAX * 36 + 8
+        Lumi.Rule(24, ay - 6, w - 48)
+        ; a mouse button: middle, right, 4, 5 (never left)
+        mice := []
+        for b in ["MButton", "RButton", "XButton1", "XButton2"] {
+            if !LayerHostAllowed(b)
+                mice.Push(InputLabel(b))
+        }
+        Lumi.Label(24, ay + 4, 150, "Add a mouse button", "dim", "left", 30)
+        if (mice.Length > 0) {
+            st.mouse := Lumi.Select(180, ay + 4, 300, 30, mice, 1)
+            Lumi.Btn(w - 24 - 100, ay + 4, 100, 30, "Add",
+                (*) => Atlas.LayerHostAddMouse(st), full ? "muted" : "accent")
+        } else
+            Lumi.Label(180, ay + 4, 300, "all of them are layer buttons",
+                "mute", "left", 30)
+        Lumi.Label(24, ay + 44, 150, "Add a key", "dim", "left", 30)
+        st.input := Lumi.Field(180, ay + 44, 176, 30, "", 0, "F13, Numpad0…", true)
+        Lumi.Btn(362, ay + 44, 58, 30, "Rec", Atlas.RecKey(st), "accent")
+        Lumi.Btn(426, ay + 44, 62, 30, "Pick", Atlas.PickKey(st), "ghost")
+        Lumi.Btn(w - 24 - 100, ay + 44, 100, 30, "Add",
+            (*) => Atlas.LayerHostAddKey(st), full ? "muted" : "accent")
+
+        Lumi.Para(24, ay + 84, w - 48, 48,
+            "Middle or right as a layer button: a quick click still clicks, "
+            . "but a longer press waits for the hold time and stays silent "
+            . "if nothing in its layer is used. The left button cannot be one.",
+            "mute")
+
+        Lumi.Btn(w - 24 - 110, h - 52, 110, 36, "Done",
+            (*) => Atlas.CloseDlg(), "primary")
+
+        Atlas.dstate := st
+        Lumi.Focus.Restore()
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    /** Rows living in the layer this input hosts (any program). */
+    static LayerRowCount(hst) {
+        n := 0
+        for row in g_Cfg["bindings"] {
+            if LayerIncludes(MGet(row, "layer", "*"), hst)
+                n += 1
+        }
+        return n
+    }
+
+    static LayerHostRemoveGo(hst) {
+        return (*) => Atlas.LayerHostRemove(hst)
+    }
+
+    static LayerHostRemove(hst) {
+        n := Atlas.LayerRowCount(hst)
+        lbl := IsMouseInput(hst) ? InputLabel(hst) : hst
+        if (n > 0 && !Atlas.Confirm("Stop using " lbl " as a layer button?`n`n"
+            . "The " n " setting" (n = 1 ? "" : "s") " in its layer will be "
+            . "deleted. What " lbl " itself does on a tap or hold stays."))
+            return
+        kept := []
+        for row in g_Cfg["bindings"] {
+            if !LayerIncludes(MGet(row, "layer", "*"), hst)
+                kept.Push(row)
+        }
+        g_Cfg["bindings"] := kept
+        hs := []
+        for b in LayerHosts() {
+            if (b != hst)
+                hs.Push(b)
+        }
+        Atlas.LayerHostsCommit(hs, lbl " is no longer a layer button")
+    }
+
+    static LayerHostAddMouse(st) {
+        if !IsObject(st.HasProp("mouse") ? st.mouse : 0)
+            return
+        code := InputCodeFromLabel(st.mouse.items.Has(st.mouse.index)
+            ? st.mouse.items[st.mouse.index] : "")
+        Atlas.LayerHostAdd(code)
+    }
+
+    static LayerHostAddKey(st) {
+        Lumi.EndEdit()
+        k := CanonicalInputName(NormalizeInputName(Lumi.FieldValue(st.input)))
+        if (k = "") {
+            Lumi.Toast("Type, record or pick a key first", "warn")
+            return
+        }
+        if IsMouseInput(k) {
+            Lumi.Toast("That is a mouse input — use “Add a mouse button”", "warn")
+            return
+        }
+        if !KeyNameValid(k) {
+            Lumi.Toast("RadMapper cannot watch '" k "' — use a key name like F13", "danger", 3000)
+            return
+        }
+        Atlas.LayerHostAdd(k)
+    }
+
+    static LayerHostAdd(code) {
+        if !LayerHostOk(code) {
+            Lumi.Toast("'" code "' cannot hold a layer", "warn")
+            return
+        }
+        if LayerHostAllowed(code) {
+            Lumi.Toast("Already a layer button", "warn")
+            return
+        }
+        hs := LayerHosts().Clone()
+        if (hs.Length >= LAYER_HOSTS_MAX) {
+            Lumi.Toast("At most " LAYER_HOSTS_MAX " layer buttons", "warn")
+            return
+        }
+        if (IsKeyInput(code) && IsBareTypingKey(code)
+            && !Atlas.Confirm("'" code "' types a character. Holding it for a "
+            . "layer delays that character every time you type it.`n`n"
+            . "Use it anyway?"))
+            return
+        hs.Push(code)
+        Atlas.LayerHostsCommit(hs, (IsMouseInput(code) ? InputLabel(code) : code)
+            . " is now a layer button — it has its own tab")
+    }
+
+    static LayerHostsCommit(hs, msg) {
+        g_Cfg["layerHosts"] := CleanLayerHosts(hs)
+        Atlas.layerIdx := 1                  ; tab positions just moved
+        Atlas.selWant := 0
+        AfterCfgChange()
+        Atlas.SaveOrWarn()
+        Lumi.Toast(msg, "jade")
+        ; rebuilt in place, after this click unwinds (the button is on it)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), -1)
     }
 
     ; ── LIVE STATUS ─────────────────────────────────────────────────────────

@@ -41,17 +41,24 @@ the radial script uses the thumb buttons in PACS, leave those buttons' PACS
 **hold** slots empty here so the two scripts do not both claim them.
 
 **Layers are tabs.** The Mouse and Keyboard pages have a tab strip: **Base**,
-**Hold Button 4**, **Hold Button 5** and **Hold CapsLock** -- the only three
-layers. A tab shows what every part of the mouse does *while that button is
+**Hold Button 4**, **Hold Button 5** and **Hold CapsLock** by default.
+**Layer buttons…** at the end of the tab strip changes which inputs hold a
+layer (up to six: middle, right, button 4/5 or any key -- never left), for a
+mouse without thumb buttons. A tab shows what every part of the mouse does *while that button is
 held*, exactly like a keymap layer in QMK or ZMK. Click a part of the mouse
 and its two slots appear on the right, **Tap it** and **Hold it down**, each
 with Set/Change and Clear.
 
 **What a button can do (0.7):** a button has a **tap** and a **hold**, and
 nothing else. Left, right and middle click are always instant; a hold on them
-works only inside one program you name. Only the thumb buttons and CapsLock
-can hold a layer open; rows under any other layer are dropped on load and named
-in Diagnostics. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
+works only inside one program you name. Only the layer buttons can hold a
+layer open; rows under any other layer are dropped on load and named in
+Diagnostics.
+
+**Which program a setting follows (0.7.2):** a mouse button or the wheel uses
+the window *under the pointer*; a key uses the window you are typing in. So
+with PowerScribe focused and the pointer over PACS, your PACS mouse settings
+apply. **Toggle engine pause** on a button or key both pauses and resumes. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
 wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
 The window opens in **Simple** view: Home, Mouse, Keyboard, Settings and
