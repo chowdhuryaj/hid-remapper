@@ -2557,6 +2557,8 @@ ProfileOf(hwnd) {
     for app in g_Cfg["apps"] {
         for m in MGet(app, "match", []) {
             crit := MatchCrit(m)
+            if (Trim(crit) = "")             ; an empty "title:" matched EVERY
+                continue                     ; window, and now outranked exes
             sc := (SubStr(LTrim(crit), 1, 4) != "ahk_" ? 2 : 0)
                 + (InStr(crit, "ahk_class") ? 1 : 0)
             if (sc <= bestSc)
@@ -3140,6 +3142,16 @@ GateNative(btn) {
         return false
     if ((s := BS(btn)) && s.down)            ; live state: repeats, stale Ups
         return false
+    ; an OS repeat of a KEY whose press already went native: keep it native.
+    ; Re-deciding mid-hold (a layer host pressed meanwhile) handed the
+    ; repeat to the engine, which then claimed the release -- the key stayed
+    ; down in Windows. (Logical state: down only when the press went out.)
+    if (!s && IsKeyInput(btn)) {
+        for n in InputHookNames(btn) {
+            if GetKeyState(n)
+                return true
+        }
+    }
     try {
         ctx := CurCtx(btn)
         if IsWheel(btn) {
@@ -3158,7 +3170,7 @@ GateNative(btn) {
 ; An Up the engine has no claim on goes through untouched too.
 UpClaimed(hk, inp) {
     return UpOwned(hk) || g_SwallowUp.Has(inp) || Warp.claimed.Has(inp)
-        || (Warp.active && IsKeyInput(inp)) || ClickLockHolds(inp)
+        || ClickLockHolds(inp)
 }
 
 ; A click lock latched this input: its physical release must be swallowed
@@ -4336,8 +4348,11 @@ ActionDown(binding, st, instant) {
     MarkLayerUsed(binding)
     a := binding["action"]
     if (FgDelivered(a) && !AimFg(binding,
-        IsObject(st) && IsObject(st.ctx) ? st.ctx : 0))
+        IsObject(st) && IsObject(st.ctx) ? st.ctx : 0)) {
+        if IsObject(st)
+            st.holdBinding := 0              ; nothing engaged: no ActionUp
         return
+    }
     t := a["type"]
     v := MGet(a, "value", "")
     switch t {
@@ -4544,7 +4559,10 @@ ClickLockToggle(v, self := 0) {
             st.usedAsMod := true
             st.consumed := true
         }
-        SendNativeDown(held)
+        ; a press that went through the gate natively is already down in the
+        ; OS: a second Down would restart the drag under the user's hand
+        if (st || !GetKeyState(held))
+            SendNativeDown(held)
     }
     g_ClickLock := {held: held, src: src}
     ClickLockWatchStart()
@@ -7381,6 +7399,10 @@ RM_PSFireReal(keys) {
 HandBusy() {
     if (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
         return true
+    for b in BUTTONS {                       ; a native middle/side hold (its
+        if (GetKeyState(b, "P") && !BS(b))   ; press went through the gate)
+            return true
+    }
     for name, st in g_BS {
         if (!st.down || st.consumed)
             continue
