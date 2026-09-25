@@ -26,7 +26,18 @@
 ;      On load, a row that opened a menu is dropped and named in
 ;      Diagnostics, and the "menus" list leaves the config file.
 ;    * A label that is exactly "0" (the 0 key, a zero count) drew blank:
-;      GpGFX tested text for emptiness with `== 0`, which is numeric.
+;      GpGFX tested text for emptiness with `== 0` / `!== 0`, which are
+;      numeric. Braces in Send syntax are no longer read as text markup
+;      ("^{c}" drew as "^", "{Del}" struck through).
+;    * Bug sweep (engine, config, delivery, GUI). Among the fixes: a key
+;      remapped to a mouse button no longer re-sends its Down on key
+;      repeat; a release over RadMapper's own window is no longer lost; a
+;      layer host held past 30 s stays held; PowerScribe/PACS keys are
+;      re-checked against the foreground right before sending and never
+;      sent in the background; panic/pause stop macros and close the
+;      window switcher; Rec on Settings is no longer overwritten by the
+;      field; seed-once defaults stay deleted after a reset; renaming the
+;      PACS profile keeps "PACS: send keys" working; saving is atomic.
 ;
 ;  v0.7 (later) -- CAPSLOCK DICTATES; THREE LAYERS, NO MORE.
 ;    * Layers are held open by button 4, button 5 or CapsLock only. Rows
@@ -2020,6 +2031,15 @@ _JQuote(s) {
 
 ; ── §3  CONFIG (defaults / load / save / helpers) ───────────────────────────
 
+; Exact text equality. `=` and `!=` ignore case AND compare numerically when
+; both sides look numeric ("1" = "01", "0012345" = "12345"), which is wrong
+; for names and clipboard text; `==` still compares numerically.
+SameText(a, b) {
+    if (IsObject(a) || IsObject(b))
+        return false
+    return StrCompare(a, b, true) = 0
+}
+
 MGet(m, k, d := "") {
     return (m is Map && m.Has(k)) ? m[k] : d
 }
@@ -3719,7 +3739,9 @@ ParkOf(name) {
         if (app["name"] != name)
             continue
         pk := MGet(app, "park", 0)
-        if (IsObject(pk) && pk.Has("x") && pk.Has("y"))
+        ; a hand-edited {"x":"left"} must not throw in FollowTick
+        if (pk is Map && pk.Has("x") && pk.Has("y")
+            && IsNumber(pk["x"]) && IsNumber(pk["y"]))
             return {x: Integer(pk["x"]), y: Integer(pk["y"])}
         return 0
     }
@@ -3989,8 +4011,17 @@ BS(btn) {
 ClearBS(btn) {
     ; universal teardown funnel: release, panic, ForceReleaseActive and the
     ; watchdog all land here
-    if g_BS.Has(btn)
-        g_BS.Delete(btn)
+    if !g_BS.Has(btn)
+        return
+    st := g_BS[btn]
+    ; A switcher commits when its holder goes up. A holder dropped while
+    ; still "down" (lost Up, re-press) left the switcher open, and the
+    ; watchdog's sweeps off, until Escape.
+    if (IsObject(g_AppSw) && g_AppSw.holder = st) {
+        st.down := false
+        AppSwitchClose(false)
+    }
+    g_BS.Delete(btn)
 }
 
 NewBS(btn) {
@@ -4130,7 +4161,20 @@ WinClassOf(hwnd) {
 ; selection; not hooking at all is the only clean fix. Returns 1 elsewhere so the
 ; engine still processes clicks over other apps. On any error, default to 1
 ; (engine active) -- never silently disable the engine everywhere.
+; An Up is let through whenever the engine owns a live press of that input:
+; a press over PACS released over one of our windows (or a key whose action
+; brought ours to the front) otherwise lost its release, leaving the layer
+; armed or the state "down" until the watchdog's 30 s cap.
+UpOwned(hk) {
+    if (SubStr(hk, -3) != " Up")
+        return false
+    s := BS(CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$")))
+    return (s && s.down) ? true : false
+}
+
 HookActive(hk) {
+    if UpOwned(hk)
+        return 1
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
     if !ours
@@ -4174,6 +4218,8 @@ TiltNote(why, cls) {
 ; it keeps our own Edit controls native and leaves the keys live everywhere
 ; else. Defaults to 1 (engine active) on any error, like HookActive.
 KbHookActive(hk) {
+    if UpOwned(hk)
+        return 1
     try return OwnGuiActive() ? 0 : 1
     return 1
 }
@@ -4322,13 +4368,17 @@ OnPressHK(btn, *) {
             ; press. repStart is the wall clock of the last re-fire, gated by
             ; the same repeatRate the keysrepeat hold uses (it is free here:
             ; a "fired" state never runs the keysrepeat timer that owns it).
-            gap := Max(Cfg("repeatRate"), 1)
+            gap := RepeatMs()
             since := now - prev.repStart
             if (prev.repStart = 0 || since < 0 || since >= gap) {
                 prev.repStart := now
                 ActionFire(prev.spec.tap, prev)
             }
-        } else if (prev.mode = "passthru")
+        } else if (prev.mode = "passthru"
+            && IsKeyInput(prev.passBtn != "" ? prev.passBtn : btn))
+            ; Only a KEY target repeats its down. A key remapped to a MOUSE
+            ; button re-sent {LButton Down} every ~30 ms with no Up: Windows
+            ; read double-clicks and every drag restarted.
             SendNativeDown(prev.passBtn != "" ? prev.passBtn : btn)
         return
     }
@@ -4431,6 +4481,12 @@ OnPressHK(btn, *) {
 ; this is the guard on the way OUT.
 HoldMs() {
     return ClampInt(Cfg("holdThreshold"), 50, 2000, 200)
+}
+
+; repeatRate reaches SetTimer: 0 deletes the timer, a string throws in the
+; Critical hook thread. Clamped like the hold threshold.
+RepeatMs() {
+    return ClampInt(Cfg("repeatRate"), 10, 1000, 50)
 }
 
 ArmTimers(st) {
@@ -5144,7 +5200,7 @@ ActionFire(binding, st) {
         case "zoomptr":
             ZoomPtrToggle()
         case "clicklock":
-            ClickLockToggle(v)
+            ClickLockToggle(v, st)
         case "wldial":
             DialStep(st, v)
         case "appswitch":
@@ -5195,7 +5251,7 @@ ActionDown(binding, st, instant) {
             SafeSend(v)
             if IsObject(st) {
                 st.repStart := A_TickCount   ; wall-clock runaway cap anchor
-                delay := instant ? HoldMs() : Cfg("repeatRate")
+                delay := instant ? HoldMs() : RepeatMs()
                 SetTimer(RepeatKick.Bind(st, st.gen, v), -delay)
             }
         case "dragmove":
@@ -5257,7 +5313,7 @@ RepeatKick(st, gen, v, *) {
     if (!IsObject(st) || BS(st.btn) != st || st.gen != gen || !st.down
         || st.mode != "held")
         return
-    SetTimer(RepeatTick.Bind(st, gen, v), Cfg("repeatRate"))
+    SetTimer(RepeatTick.Bind(st, gen, v), RepeatMs())
 }
 
 RepeatTick(st, gen, v, *) {
@@ -5585,13 +5641,15 @@ SPTick(*) {
 
 ; Which input to latch: the row's value, else the mouse button currently
 ; down (newest wins), else the one physically held, else LButton.
-ClickLockTarget(v) {
+; skip = the input that fired the lock: "whichever button is held" must
+; never pick the lock's own trigger (it is down too, and newest).
+ClickLockTarget(v, skip := "") {
     if (v != "")
         return v
     best := ""
     bestTick := -1
     for name, st in g_BS {
-        if (!IsMouseInput(name) || !st.down || st.consumed)
+        if (name = skip || !IsMouseInput(name) || !st.down || st.consumed)
             continue
         if (st.pressTick >= bestTick) {
             bestTick := st.pressTick
@@ -5601,7 +5659,7 @@ ClickLockTarget(v) {
     if (best != "")
         return best
     for b in BUTTONS {
-        if RM_KeyHeld(b)
+        if (b != skip && RM_KeyHeld(b))
             return b
     }
     ; NOTHING is held. This used to fall through to "LButton", which latched
@@ -5611,13 +5669,13 @@ ClickLockTarget(v) {
     return ""
 }
 
-ClickLockToggle(v) {
+ClickLockToggle(v, self := 0) {
     global g_ClickLock
     if IsObject(g_ClickLock) {
         ClickLockRelease()
         return
     }
-    src := ClickLockTarget(ResolveInputValue(v))
+    src := ClickLockTarget(ResolveInputValue(v), IsObject(self) ? self.btn : "")
     if (src = "") {
         HUD("Click lock: hold a mouse button first", "warn")
         return
@@ -9035,6 +9093,14 @@ Watchdog() {
         synthetic := (st.mode = "passthru" || st.mode = "held")
         why := ""
         if !synthetic {
+            ; A layer host held through a long scroll (a 40 s CT stack) is
+            ; still held: with no hook change since the press a "held"
+            ; reading is trustworthy (only the wiped table reads falsely UP),
+            ; and sweeping it dropped the layer mid-gesture and later sent a
+            ; lone XButton Up (Back).
+            if (st.physSeen && (g_HookChangedAt - st.pressTick) < 0
+                && InputHeldPhysical(st.btn))
+                continue
             if (age < 30000)
                 continue
             why := "held 30 s with nothing out"
@@ -9313,6 +9379,7 @@ ToggleEnabled() {
     if wasTesting                            ; and "*X" are the same hotkey
         TestStop()
     SyncHooks()
+    RegisterKbHotkeys()                      ; its clash check reads the hooks
     UpdateTray()
     if wasTesting
         TestStart()
@@ -9341,8 +9408,9 @@ PanicRelease() {
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
         . "{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
     for name, st in g_BS.Clone() {           ; v0.3: a KEY held down by our own
-        if (IsKeyInput(name) && st.down)     ; passthrough needs its own Up --
-            try SendNativeUp(st.passBtn != "" ? st.passBtn : name)
+        tgt := st.passBtn != "" ? st.passBtn : name   ; passthrough needs its
+        if (st.down && IsKeyInput(tgt))      ; own Up -- judged on the TARGET,
+            try SendNativeUp(tgt)            ; so XButton2 -> Enter is released
     }                                        ; the blanket list above is mouse
                                              ; + modifiers only
     AppSwitchClose(false)                    ; panic never commits a switch, and
@@ -10462,6 +10530,19 @@ AppDelete(row) {
         kept.Push(r)
     }
     g_Cfg["bindings"] := kept
+    ; The Mouse/Keyboard program pickers index AppChoices() (Global first,
+    ; then profiles): keep them on the same program, or Global if it went.
+    if IsSet(Atlas) {
+        pos := row + 1
+        for prop in ["appIdx", "kbAppIdx"] {
+            v := Atlas.%prop%
+            if (v = pos)
+                Atlas.%prop% := 1
+            else if (v > pos)
+                Atlas.%prop% := v - 1
+        }
+        Atlas.selWant := 0
+    }
     if dropped
         Problem("app-deleted", dropped " row(s) of '" name "' removed: a global row already covers them")
     g_Cfg["apps"].RemoveAt(row)
@@ -14062,6 +14143,8 @@ class Atlas {
         ; header, a nav and an empty body. Refuse it and stay where we are.
         if (i < 1 || i > Atlas.PANELS.Length)
             return
+        Lumi.EndEdit()                       ; a live field defers Build
+        Atlas.selWant := 0                   ; a row index means nothing here
         Atlas.panel := i
         Atlas.Build()
     }
@@ -14485,11 +14568,15 @@ class Atlas {
     }
 
     static SetApp(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.appIdx := i
         Atlas.Build()
     }
 
     static SetLayer(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.layerIdx := i
         Atlas.Build()
     }
@@ -14638,7 +14725,11 @@ class Atlas {
         ; Edit and Delete usable; without this the incoming frame inherited
         ; the sel of the list belonging to the PREVIOUS input, which pointed
         ; at whatever row happened to sit at that index here.
-        Atlas.selWant := 1
+        ; v0.7.2: 0, not 1. The list under the slots holds only MODIFIER
+        ; rows now, so pre-selecting row 1 armed Delete on a row the user
+        ; never picked.
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.Build()
     }
 
@@ -14737,11 +14828,15 @@ class Atlas {
     }
 
     static SetKbApp(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.kbAppIdx := i
         Atlas.Build()
     }
 
     static SetKbLayer(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.layerIdx := i
         Atlas.Build()
     }
@@ -14840,8 +14935,9 @@ class Atlas {
     }
 
     static PickKeyTile(code) {
+        Lumi.EndEdit()
         Atlas.keySel := code
-        Atlas.selWant := 1               ; as PickZone: the key's first row
+        Atlas.selWant := 0               ; as PickZone: nothing pre-selected
         Atlas.Build()
     }
 
@@ -14932,7 +15028,7 @@ class Atlas {
         for i, name in names {
             n := g_Cfg["macros"][name].Length
             rows.Push({cells: [name, n " step" (n = 1 ? "" : "s")]})
-            if (name = Atlas.macroSel)
+            if SameText(name, Atlas.macroSel)
                 selRow := i
         }
         Lumi.Label(x, y + 74, lw, "Macros", "section")
@@ -15016,7 +15112,7 @@ class Atlas {
         if (i < 1 || i > names.Length)
             return
         if (dbl = "ctx") {
-            if (names[i] != Atlas.macroSel) {
+            if !SameText(names[i], Atlas.macroSel) {
                 Atlas.macroSel := names[i]
                 Atlas.selWant := 0
                 Atlas.Build()
@@ -15030,7 +15126,7 @@ class Atlas {
             Atlas.StartTick()
             return
         }
-        if (names[i] = Atlas.macroSel)
+        if SameText(names[i], Atlas.macroSel)
             return
         Atlas.macroSel := names[i]
         Atlas.selWant := 0                   ; a new macro, no step picked
@@ -15071,7 +15167,7 @@ class Atlas {
             Lumi.Toast("Type the new name in the field, then click Rename", "warn")
             return
         }
-        if (name = old)
+        if SameText(name, old)
             return
         if g_Cfg["macros"].Has(name) {
             Lumi.Toast("There is already a macro called “" name "”", "warn")
@@ -15083,7 +15179,7 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             if (IsObject(a) && MGet(a, "type", "") = "macro"
-                && MGet(a, "value", "") = old) {
+                && SameText(MGet(a, "value", ""), old)) {
                 a["value"] := name
                 n += 1
             }
@@ -15106,7 +15202,7 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             if (IsObject(a) && MGet(a, "type", "") = "macro"
-                && MGet(a, "value", "") = name)
+                && SameText(MGet(a, "value", ""), name))
                 used += 1
         }
         if !Atlas.Confirm("Delete the macro “" name "”?`n`n"
@@ -15998,10 +16094,10 @@ class Atlas {
         Lumi.Label(rx + 24, B.y + 12, 300, "PowerScribe", "section")
         py0 := B.y + 32
         Lumi.Label(rx + 24, py0, pl, "Dictate key", "dim", "left", 30)
-        Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
+        dk := Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
             (t) => Atlas.SetCfgStr("psDictateKey", t), "F4", true)
         Lumi.Btn(rx + 24 + pl + 126, py0, 44, 30, "Rec",
-            Atlas.RecSendKey("psDictateKey"), "accent")
+            Atlas.RecSendKey("psDictateKey", dk), "accent")
         ; Where to FIND it. Nobody knows this key by heart, and the wrong
         ; one here is a dictation button that silently does nothing.
         Lumi.Label(rx + 24, py0 + 31, rw - 48,
@@ -16196,49 +16292,55 @@ class Atlas {
         if (cw > 0) {
             Lumi.Label(x, y, cw, Lumi.Elide(label, cw, "dim"),
                 "dim", "left", 16)
-            Lumi.Field(x, y + 17, cw - 52, 26, Cfg(key), Atlas.StrCommit(key),
+            f := Lumi.Field(x, y + 17, cw - 52, 26, Cfg(key), Atlas.StrCommit(key),
                 "unassigned", true)
             Lumi.Btn(x + cw - 46, y + 17, 46, 26, "Rec",
-                Atlas.RecHotkey(key), "accent")
+                Atlas.RecHotkey(key, f), "accent")
             Lumi.Label(x, y + 44, cw, Lumi.Elide(words, cw, "mute"),
                 "mute", "left", 13)
             return
         }
         Lumi.Label(x, y, lw, Lumi.Elide(label, lw, "dim"), "dim", "left", 28)
-        Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
+        f := Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
             "unassigned", true)
         Lumi.Btn(x + lw + fw + 6, y, 44, 30, "Rec",
-            Atlas.RecHotkey(key), "accent")
+            Atlas.RecHotkey(key, f), "accent")
         Lumi.Label(x + lw, y + 30, fw + 50, Lumi.Elide(words, fw + 50, "mute"),
             "mute", "left", 14)
     }
 
-    static RecHotkey(key) {
-        return (*) => Atlas.DoRecHotkey(key)
+    static RecHotkey(key, f := 0) {
+        return (*) => Atlas.DoRecHotkey(key, f)
     }
 
     /** Rec, for a HOTKEY field. RecordCombo returns Send syntax ("^{F9}");
      *  a hotkey is registered WITHOUT the braces, so they come off here.
      *  Same capture path the binding editor's Rec uses. */
-    static DoRecHotkey(key) {
+    static DoRecHotkey(key, f := 0) {
         Lumi.EndEdit()
         v := RecordCombo()
         if (v = "")
             return
-        Atlas.SetCfgStr(key, StrReplace(StrReplace(v, "{", ""), "}", ""))
+        v := StrReplace(StrReplace(v, "{", ""), "}", "")
+        ; Into the field's edit buffer too: when the caret was in the field,
+        ; its edit loop commits AFTER this returns, and used to commit the
+        ; old text over the recorded hotkey.
+        Lumi.FieldSet(f, v)
+        Atlas.SetCfgStr(key, v)
         Atlas.Build()
     }
 
     /** Rec, for a field that holds SEND syntax -- braces stay on. */
-    static RecSendKey(key) {
-        return (*) => Atlas.DoRecSendKey(key)
+    static RecSendKey(key, f := 0) {
+        return (*) => Atlas.DoRecSendKey(key, f)
     }
 
-    static DoRecSendKey(key) {
+    static DoRecSendKey(key, f := 0) {
         Lumi.EndEdit()
         v := RecordCombo()
         if (v = "")
             return
+        Lumi.FieldSet(f, v)                  ; see DoRecHotkey
         Atlas.SetCfgStr(key, v)
         Atlas.Build()
     }
@@ -16469,8 +16571,9 @@ class Atlas {
             return
         }
         r := g_Cfg["bindings"][ref]
-        what := Trim(InputLabel(MGet(r, "button", "")) " "
-            . MGet(r, "event", ""))
+        what := Trim(MGet(r, "mods", "") " " InputLabel(MGet(r, "button", "")) " "
+            . MGet(r, "event", "")) " (" AppDisp(MGet(r, "app", "*")) ", "
+            . LayerLabelFromCode(MGet(r, "layer", "*")) ")"
         if !Atlas.Confirm("Delete the setting for " what "?`n`n"
             . "That button or key goes back to doing whatever Windows and "
             . "the program normally do with it.")
@@ -16514,7 +16617,7 @@ class Atlas {
      * app, layer, trigger, modifiers, action, value -- is identical, because
      * in the engine it always was.
      */
-    static BindDlg(idx, keyMode := false, seed := 0) {
+    static BindDlg(idx, keyMode := false, seed := 0, focusIdx := 0) {
         ; A seed WINS over the stored row, for an edit as well as for a new
         ; one: changing the action between the free-text family and the
         ; input-picking family swaps the Details widget, and the only honest
@@ -16539,7 +16642,7 @@ class Atlas {
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
         ; pressed. A page is not, which is why Build() does not do this.
-        Lumi.Focus.Reset(dlg, true)
+        Lumi.Focus.Reset(dlg, true, focusIdx)  ; a rebuild keeps its place
         Atlas.Own(dlg)
         dlg.Drag()               ; it is borderless too -- it needs a caption
 
@@ -16713,8 +16816,11 @@ class Atlas {
         if (Atlas.ValueFamily(code) != Atlas.ValueFamily(st.actCode)) {
             Lumi.EndEdit()
             seed := Atlas.BindDraft(st, code)
+            ; Keep keyboard focus on the action list: reset to control 1 (the
+            ; program), the next arrow key changed the program instead.
+            fi := Lumi.Focus.idx
             SetTimer(() => Atlas.OpenDlg(()
-                => Atlas.BindDlg(st.idx, st.keyMode, seed)), -1)
+                => Atlas.BindDlg(st.idx, st.keyMode, seed, fi)), -1)
             return
         }
         txt := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
@@ -17557,12 +17663,12 @@ ClipHarvest() {
     }
     if (txt = "" || StrLen(txt) > 20000)
         return
-    if (g_Clip.Length > 0 && g_Clip[1] = txt)
+    if (g_Clip.Length > 0 && SameText(g_Clip[1], txt))
         return
     ; Move an existing copy to the front rather than growing a duplicate.
     i := g_Clip.Length
     while (i >= 1) {
-        if (g_Clip[i] = txt)
+        if SameText(g_Clip[i], txt)
             g_Clip.RemoveAt(i)
         i -= 1
     }
@@ -17970,7 +18076,7 @@ class Shelf {
         if !g_Cfg.Has("snippets")
             g_Cfg["snippets"] := []
         for s in g_Cfg["snippets"] {
-            if (s = text)
+            if SameText(s, text)
                 return                       ; already there
         }
         g_Cfg["snippets"].InsertAt(1, text)
@@ -23750,7 +23856,10 @@ class TextLayout {
         }
 
         ; Check if formatted rich text or monospaced multiline layout (Array of [Color, Text] OR String with tags {...}, <...>, `t, or multiline monospaced text)
-        if (Type(shape.__str) == "Array" || (Type(shape.__str) == "String" && (InStr(shape.__str, "{") || InStr(shape.__str, "<") || InStr(shape.__str, "`t") || (shape.Font && shape.Font.HasProp("isMonospace") && shape.Font.isMonospace && InStr(shape.__str, "`n"))))) {
+        ; RadMapper: {..} / <..> markup is OPT-IN (shape.markup). Send syntax
+        ; is full of braces -- "^{c}" drew as "^" ({c} is a reset tag) and
+        ; "{Del}" drew struck through.
+        if (Type(shape.__str) == "Array" || (Type(shape.__str) == "String" && ((shape.HasProp("markup") && (InStr(shape.__str, "{") || InStr(shape.__str, "<"))) || InStr(shape.__str, "`t") || (shape.Font && shape.Font.HasProp("isMonospace") && shape.Font.isMonospace && InStr(shape.__str, "`n"))))) {
             shape.__isRichText := true
             shape.__textRuns := []
             strRaw := ""
@@ -23777,7 +23886,7 @@ class TextLayout {
                 textLen := StrLen(strInput)
 
                 while (pos <= textLen) {
-                    if (!RegExMatch(strInput, "\{([^{}]*)\}|\<([a-zA-Z0-9_\/#\:\,\s\*\.\-]+)\>", &mTag, pos)) {
+                    if (!shape.HasProp("markup") || !RegExMatch(strInput, "\{([^{}]*)\}|\<([a-zA-Z0-9_\/#\:\,\s\*\.\-]+)\>", &mTag, pos)) {
                         chunk := SubStr(strInput, pos)
                         if (chunk != "") {
                             runFont := (!baseFnt) ? 0 : (currentStyle == baseStyle ? baseFnt : Font(baseFnt.family, baseFnt.size, currentStyle, currentClr, baseFnt.quality))
@@ -30722,7 +30831,7 @@ Draw(lyr) {
         }
 
         ; 1.6 TYPOGRAPHIC RICH TEXT & EMOJI RENDERING
-        if (v.str !== "" && v.str !== 0) {
+        if (v.str != "") {                   ; not `!== 0`: numeric, hid "0"
             if (!IsObject(v.Font) || !v.Font.HasProp("hFont") || !v.Font.hFont) {
                 v.Font := Font.getStock()
             }

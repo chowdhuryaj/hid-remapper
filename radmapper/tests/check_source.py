@@ -11,7 +11,7 @@ for name, end in [('Lumi', 'Atlas'), ('Atlas', 'Shelf')]:
     assert calls <= set(members), (name, calls - set(members))
 assert 'SetTimer(ObjBindMethod(Atlas, "MenuTryDone")' not in s, 'Preview timer must reuse its function object'
 # A label of exactly "0" must draw: `str == 0` is a numeric compare in AHK v2.
-assert not re.search(r'str\s*==\s*0\b', s), 'text emptiness must not compare against 0'
+assert not re.search(r'str\s*!?==?\s*0\b', s), 'text emptiness must not compare against 0'
 # All helper text must be readable on every standard background.
 def luminance(h):
     rgb = [int(h[i:i+2], 16)/255 for i in (0, 2, 4)]
