@@ -113,4 +113,4 @@ hotkeys) is skipped, then exercises the real JSON, config and save helpers
 with a temporary config. It installs no bindings.
 
 See `SECOND-PASS.md` for the second-pass findings and remaining Windows checks,
-and the changelog at the top of `RadMapper.ahk` for everything since 0.5.2.
+and `CHANGELOG.md` for the full version history.
