@@ -46,6 +46,12 @@
 ;    * "Toggle engine pause" on an input resumes as well as pauses.
 ;    * PASS-THROUGH action: hold (or tap to toggle, 2-minute safety) and
 ;      every other input is native, without pausing the engine.
+;    * FREEZE FIXES: the watchdog only releases modifiers/LButton after
+;      RadMapper's own input (a dead hook made it drop a held Ctrl mid
+;      Ctrl+C); #HotIfTimeout 150; settings/chooser/switcher context keys
+;      are live only while their window is up; hooks reinstall once per
+;      PACS focus, not every 10 s; the layout guard moves windows async and
+;      skips hung ones; toasts are built off the input thread.
 ;    * Bug sweep (engine, config, delivery, GUI). Among the fixes: a key
 ;      remapped to a mouse button no longer re-sends its Down on key
 ;      repeat; a release over RadMapper's own window is no longer lost; a
@@ -1328,10 +1334,15 @@
 
 #Requires AutoHotkey v2.0
 #SingleInstance Force
-#ClipboardTimeout 250       ; a clipboard read waits at most this long for the
-                            ; owning app (default 1 s); the shelf harvest is
-                            ; off the hook thread but must still be brief
+#ClipboardTimeout 250       ; a clipboard read (Copy buttons) waits at most
+                            ; this long for the owning app (default 1 s)
 #UseHook
+; A key or button with a context (#HotIf / HotIf) hotkey makes the input hook
+; WAIT for this script's main thread on every press, system-wide. The default
+; 1000 ms is longer than Windows' own hook timeout, after which Windows
+; silently REMOVES the hook -- typing lag, then dead remaps. Past 150 ms the
+; press simply goes through natively.
+#HotIfTimeout 150
 SendMode "Event"            ; Event + zero delays: injected input flows through
 SetKeyDelay -1, -1          ; our own hooks (and is ignored by them) without
 SetMouseDelay -1            ; SendInput's temporary hook removal
@@ -1524,7 +1535,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
     "Run macro", "Run program",
     "Open RadMapper settings",
-    "Pass everything through (hold = while held, tap = on / off)",
+    "Stand back: every other input native (hold = while held, tap = on / off)",
     "Toggle engine pause",
     "Block it (this button does nothing at all)"]
 global ACT_HINTS := Map(
@@ -3875,20 +3886,33 @@ ModsHeld() {
 ; pass-through input itself goes out natively (OnPressHK's native path) and
 ; the wheel scrolls natively. Hold the bound input for while-held; tap it to
 ; toggle, with a 2-minute safety off so it can never be forgotten on.
-global g_Bypass := 0             ; {src, mom} while on
+global g_Bypass := 0             ; {src, hosts, mom} while on
 global BYPASS_MAX_MS := 120000
 
+; The pass-through input itself and the layer host(s) its row lives under
+; keep working -- otherwise a pass-through set up inside a layer could never
+; be tapped off (its host would go native and arm nothing).
 BypassFor(btn) {
-    return IsObject(g_Bypass) && btn != g_Bypass.src
+    if (!IsObject(g_Bypass) || btn = g_Bypass.src)
+        return false
+    for h in g_Bypass.hosts {
+        if (h = btn)
+            return false
+    }
+    return true
 }
 
-BypassOn(src, mom := false) {
+BypassOn(src, mom := false, hosts := 0) {
     global g_Bypass
+    if (src = "" || IsWheel(src)) {
+        HUD("Pass-through belongs on a button or key, not the wheel", "warn")
+        return
+    }
     if IsObject(g_Bypass) {
         g_Bypass.mom := mom
         return
     }
-    g_Bypass := {src: src, mom: mom}
+    g_Bypass := {src: src, mom: mom, hosts: IsObject(hosts) ? hosts : []}
     SetTimer(BypassExpire, mom ? 0 : -BYPASS_MAX_MS)
     HUD("Pass-through ON — everything else is native"
         . (mom ? " while held" : " (tap again to end)"), "warn")
@@ -3904,11 +3928,11 @@ BypassOff(quiet := false) {
         HUD("Pass-through off", "jade")
 }
 
-BypassToggle(src) {
+BypassToggle(src, hosts := 0) {
     if IsObject(g_Bypass)
         BypassOff()
     else
-        BypassOn(src, false)
+        BypassOn(src, false, hosts)
 }
 
 BypassExpire(*) {
@@ -4237,6 +4261,8 @@ SendNativeClick(btn, n := 1) {
 ; HUD note, never a modal error dialog. Send parses the whole string before
 ; sending anything, so a failure sends nothing (no partial Down).
 SafeSend(v) {
+    global g_SynthAt
+    g_SynthAt := A_TickCount                 ; the watchdog's sweeps key off this
     try {
         RM_Send(v)
     } catch as e {
@@ -4244,6 +4270,8 @@ SafeSend(v) {
         HUD("Send error: " e.Message)
     }
 }
+
+global g_SynthAt := 0            ; tick of RadMapper's last synthetic input
 
 ; Foreground hwnd, reused within the same millisecond: OwnGuiActive and
 ; ActiveAppName both need it on the same event, and one DllCall is enough.
@@ -4312,6 +4340,9 @@ WinClassOf(hwnd) {
 ; a press over PACS released over one of our windows (or a key whose action
 ; brought ours to the front) otherwise lost its release, leaving the layer
 ; armed or the state "down" until the watchdog's 30 s cap.
+; The input a hotkey name is for: "*XButton1 Up" -> "XButton1".
+HkInput(hk) => CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$"))
+
 UpOwned(hk) {
     if (SubStr(hk, -3) != " Up")
         return false
@@ -4322,6 +4353,8 @@ UpOwned(hk) {
 HookActive(hk) {
     if UpOwned(hk)
         return 1
+    if (IsObject(g_Bypass) && BypassFor(HkInput(hk)))
+        return 0                             ; pass-through: truly native
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
     if !ours
@@ -4367,6 +4400,8 @@ TiltNote(why, cls) {
 KbHookActive(hk) {
     if UpOwned(hk)
         return 1
+    if (IsObject(g_Bypass) && BypassFor(HkInput(hk)))
+        return 0                             ; pass-through: truly native
     try return OwnGuiActive() ? 0 : 1
     return 1
 }
@@ -4422,6 +4457,12 @@ OnPressHK(btn, *) {
         return
     if g_SwallowUp.Has(btn)                  ; a fresh mouse press: any old
         g_SwallowUp.Delete(btn)              ; claim on its release is stale
+    ; an OS key repeat of a press already in hand: the absorber further down
+    ; handles it, whatever pass-through says (else CapsLock toggled at the
+    ; repeat rate while held)
+    prevSt := isKey ? BS(btn) : 0
+    rep := isKey && prevSt && prevSt.down && !prevSt.consumed
+        && InputHeldPhysical(btn)
     fgOurs := OwnGuiActive()
     ; POSITIONAL ours-ness is a MOUSE question only: a keystroke goes to the
     ; foreground window, so for keys the cursor's location is irrelevant (and
@@ -4450,7 +4491,7 @@ OnPressHK(btn, *) {
         try WinActivate("ahk_id " uw)
         fgOurs := false
     }
-    if (!g_Enabled || fgOurs || ours || BypassFor(btn)) {
+    if (!g_Enabled || fgOurs || ours || (BypassFor(btn) && !rep)) {
         if (ours && !fgOurs) {
             ; fallback: click on our own window while another app holds the
             ; foreground -- activate ourselves so the reinjected click lands
@@ -5445,7 +5486,7 @@ ActionFire(binding, st) {
         case "guiopen":
             ShowMain()
         case "bypass":
-            BypassToggle(IsObject(st) ? st.btn : "")
+            BypassToggle(IsObject(st) ? st.btn : "", LayerParts(binding))
         case "pausetgl":
             ; Pausing clears every state, so this press's release would find
             ; none and send a lone native Up (a Back click on button 4).
@@ -5486,7 +5527,7 @@ ActionDown(binding, st, instant) {
                 SetTimer(RepeatKick.Bind(st, st.gen, v), -delay)
             }
         case "bypass":
-            BypassOn(IsObject(st) ? st.btn : "", true)
+            BypassOn(IsObject(st) ? st.btn : "", true, LayerParts(binding))
         case "dragmove":
             if IsObject(st)
                 st.dragOn := false           ; MovePoll sends the real down
@@ -6318,6 +6359,7 @@ AppSwitchOpen(st) {
         HUD("Nothing to switch to", "warn")
         return
     }
+    AppSwitchBindKeys(true)
     g_AppSw := {list: list,
                 idx: 1,                      ; 1 is the CURRENT window; the
                 lyr: 0,                      ;   first step moves off it
@@ -6419,15 +6461,19 @@ AppSwitchList() {
 ; underneath. In a PowerScribe report field that is a keystroke eating text.
 ; A hotkey consumes the key instead, and only while the switcher is showing;
 ; everywhere else Delete stays completely native.
-AppSwitchBindKeys() {
+; Delete is live ONLY while the switcher is up (on = true in AppSwitchOpen,
+; false in AppSwitchClose): a context hotkey costs every Delete press in
+; every program a round trip to this thread.
+AppSwitchBindKeys(on := false) {
     static bound := false
-    if bound
-        return
+    static ctx := (*) => IsObject(g_AppSw)
     try {
-        HotIf((*) => IsObject(g_AppSw))
-        HookChanged()
-        Hotkey("Delete", AppSwitchDelKey, "On")
-        bound := true
+        HotIf(ctx)
+        if !bound {
+            Hotkey("Delete", AppSwitchDelKey, on ? "On" : "Off")
+            bound := true
+        } else
+            Hotkey("Delete", on ? "On" : "Off")
     } catch {
         ; unregistrable: the feature is simply unavailable, as before
     } finally {
@@ -6502,6 +6548,8 @@ AppSwitchClose(commit) {
     SetTimer(AppSwitchShotTick, 0)
     sw := g_AppSw
     g_AppSw := 0
+    if IsObject(sw)
+        AppSwitchBindKeys(false)
     if !IsObject(sw)
         return
     if IsObject(sw.lyr)
@@ -7597,6 +7645,9 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             continue
         try {
             id := "ahk_id " wnd.hwnd
+            ; a hung window would block this thread on every call below
+            if (enforce && DllCall("user32\IsHungAppWindow", "ptr", wnd.hwnd))
+                continue
             mm := WinGetMinMax(id)
             if (enforce && mm = -1)
                 continue
@@ -7672,19 +7723,21 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             if (!enforce
                 || Abs(cx - sx) > LAYOUT_TOL || Abs(cy - sy) > LAYOUT_TOL
                 || Abs(cw - sw) > LAYOUT_TOL || Abs(ch - sh) > LAYOUT_TOL) {
-                ; the guard already moved it and it landed exactly here: the
-                ; app refuses that rect (minimum size, DPI rounding). Moving
-                ; it again every 1.5 s is a fight, not a fix.
-                if (enforce && g_LayoutGot.Has(wnd.hwnd)
-                    && g_LayoutGot[wnd.hwnd] = cx "," cy "," cw "," ch)
-                    continue
-                WinMoveSure(sx, sy, sw, sh, id)
-                moved += 1
-                try {
-                    WinGetPos(&gx, &gy, &gw, &gh, id)
-                    g_LayoutGot[wnd.hwnd] := gx "," gy "," gw "," gh
+                ; Three guard moves in a row to the same rect and the window
+                ; is still off it: the app refuses that rect (minimum size,
+                ; DPI rounding). Moving it every 1.5 s is a fight, not a fix.
+                if enforce {
+                    tk := sx "," sy "," sw "," sh
+                    n0 := (g_LayoutGot.Has(wnd.hwnd) && g_LayoutGot[wnd.hwnd].t = tk)
+                        ? g_LayoutGot[wnd.hwnd].n : 0
+                    if (n0 >= 3)
+                        continue
+                    g_LayoutGot[wnd.hwnd] := {t: tk, n: n0 + 1}
                 }
-            }
+                WinMoveSure(sx, sy, sw, sh, id, enforce)
+                moved += 1
+            } else if (enforce && g_LayoutGot.Has(wnd.hwnd))
+                g_LayoutGot.Delete(wnd.hwnd)   ; on target: count afresh
         }
     }
     return moved
@@ -7743,7 +7796,15 @@ LayoutChoose() {
 ; per-monitor-DPI app moved onto a screen with different scaling applies
 ; Windows' suggested rectangle on WM_DPICHANGED (1.5x the size going from
 ; 100% to 150%); the second move lands after that rescale.
-WinMoveSure(x, y, w, h, id) {
+; async = the guard's timer path: SetWindowPos with SWP_ASYNCWINDOWPOS, so a
+; busy PowerScribe/PACS can never hold this thread (and every hotkey waiting
+; on it). No second pass there: the next guard tick is the second pass.
+WinMoveSure(x, y, w, h, id, async := false) {
+    if async {
+        try DllCall("user32\SetWindowPos", "ptr", WinExist(id), "ptr", 0,
+            "int", x, "int", y, "int", w, "int", h, "uint", 0x4014)
+        return
+    }
     WinMove(x, y, w, h, id)
     try {
         WinGetPos(&ax, &ay, &aw, &ah, id)
@@ -7752,7 +7813,7 @@ WinMoveSure(x, y, w, h, id) {
     }
 }
 
-; hwnd -> "x,y,w,h" where the guard last left a window (see LayoutApplyRows)
+; hwnd -> {t: target rect, n: consecutive guard moves} (see LayoutApplyRows)
 global g_LayoutGot := Map()
 
 LayoutGuardArm(name) {
@@ -9090,7 +9151,10 @@ Watchdog() {
         hs := BS(g_Bypass.src)
         ; an injected holder (physSeen false) never reads as physically
         ; held: trust its state, as the engine does elsewhere
-        if !(hs && hs.down && (!hs.physSeen || InputHeldPhysical(g_Bypass.src))) {
+        ; ...nor after a hook reinstall since the press (the physical table
+        ; is wiped then, and would read a held button as up)
+        if !(hs && hs.down && (!hs.physSeen || (g_HookChangedAt - hs.pressTick) >= 0
+            || InputHeldPhysical(g_Bypass.src))) {
             BypassOff()
             Problem("recovered", "pass-through ended: its button is no longer held")
         }
@@ -9170,7 +9234,12 @@ Watchdog() {
     ;    be holding anything down (WatchdogSweepSafe).
     static modTicks := Map()
     static lbTicks := 0
-    if !WatchdogSweepSafe() {
+    ; ...and only when RADMAPPER sent input in the last 10 s. The sweeps exist
+    ; for a modifier or button WE left down (a +{Tab} delivery, a moddrag).
+    ; With a dead hook, or keys injected by another program, "physically up"
+    ; is wrong -- and releasing Ctrl the user is holding turned Ctrl+C into
+    ; a bare "c" typed over the selection.
+    if (!WatchdogSweepSafe() || A_TickCount - g_SynthAt > 10000) {
         modTicks.Clear()                     ; a count may never survive a
         lbTicks := 0                         ; period when the guard was up
         return
@@ -9266,7 +9335,10 @@ HookFrontTick(*) {
         return
     }
     now := A_TickCount
-    if (fg = lastHwnd && now - lastAt >= 0 && now - lastAt < 10000)
+    ; ONCE each time PACS comes to the front. Every reinstall drops the
+    ; keystrokes in its gap and wipes the physical key table; doing it every
+    ; 10 s while PACS stayed in front cost more than it fixed.
+    if (fg = lastHwnd)
         return
     for name, st in g_BS {
         if st.down
@@ -9467,8 +9539,10 @@ RadUnhandledError(err, mode) {
 ; a latch, warn/danger for trouble.
 HUD(msg, tone := "cyan") {
     if (IsSet(Lumi) && IsSet(Layer)) {
+        ; Built on its own thread: a toast is a GDI+ layer (tens of ms), and
+        ; HUD is called from Critical hotkey threads that input waits on.
         try {
-            Lumi.Toast(msg, tone)
+            SetTimer(ObjBindMethod(Lumi, "Toast", msg, tone), -1)
             return
         }
     }
@@ -10665,7 +10739,7 @@ Init() {
     BuildTray()
     SyncHooks()
     RegisterKbHotkeys()
-    AppSwitchBindKeys()                      ; AFTER RegisterKbHotkeys, and
+    AppSwitchBindKeys(false)                 ; AFTER RegisterKbHotkeys, and
                                              ; here rather than lazily on the
                                              ; wheel thread that opens the
                                              ; switcher: both set a HotIf
@@ -12877,6 +12951,7 @@ class Atlas {
 
     static Show() {
         if IsObject(Atlas.lyr) {
+            Atlas.KeysOn(true)
             ; Minimised is not the same as hidden: Show() alone leaves a
             ; minimised window minimised, so the tray icon would appear to do
             ; nothing once you had used the minimise button.
@@ -12924,11 +12999,35 @@ class Atlas {
      * ONCE, under a context that is true only while our own layer is the
      * foreground window, so Escape stays completely native everywhere else.
      */
-    static BindEscape() {
-        if Atlas.escBound
+    static ctxFn := 0              ; the ONE IsFront object the keys use
+    static ctxKeys := []
+
+    /** Settings-window keys on/off -- live only while the window is up
+     *  (see #HotIfTimeout: a context hotkey costs every press of that key,
+     *  in every program, a round trip to this thread). */
+    static KeysOn(on) {
+        if !Atlas.escBound
             return
         try {
-            HotIf(ObjBindMethod(Atlas, "IsFront"))
+            HotIf(Atlas.ctxFn)
+            for hk in Atlas.ctxKeys
+                try Hotkey(hk, on ? "On" : "Off")
+        } finally {
+            HotIf()
+        }
+    }
+
+    static BindEscape() {
+        if Atlas.escBound {
+            Atlas.KeysOn(true)
+            return
+        }
+        Atlas.ctxFn := ObjBindMethod(Atlas, "IsFront")
+        Atlas.ctxKeys := ["Escape", "F1", "^!Left", "^!Right", "^!Up", "^!Down",
+            "~Tab", "~+Tab", "~Enter", "~Space", "~Left", "~Right", "~Up",
+            "~Down", "~Delete", "~BackSpace"]
+        try {
+            HotIf(Atlas.ctxFn)
             Hotkey("Escape", ObjBindMethod(Atlas, "EscKey"), "On")
             Hotkey("F1", (*) => Atlas.Help(), "On")
             ; Resize from the keyboard, live only while OUR window is in
@@ -13196,6 +13295,7 @@ class Atlas {
 
     static Hide(*) {
         Atlas.StopTick()
+        Atlas.KeysOn(false)
         Lumi.CloseSelect()               ; a floating option list must never
         if IsObject(Atlas.dlg) {         ; outlive the window that opened it
             Atlas.Disown(Atlas.dlg)
@@ -17058,6 +17158,11 @@ class Atlas {
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
             return
         }
+        if (atype = "bypass" && IsWheel(btn)) {
+            Lumi.Toast("Pass-through belongs on a button or key, not the wheel",
+                "warn", 3000)
+            return
+        }
         if (IsWheel(btn) && event != "turn") {
             Lumi.Toast("The wheel can only be set up for 'turn'", "warn", 2400)
             return
@@ -17859,6 +17964,7 @@ class Chooser {
             try Chooser.lyr.Dispose()
         }
         Chooser.lyr := 0
+        Chooser.KeysOn(false)
     }
 
     static Height() {
@@ -17872,11 +17978,28 @@ class Chooser {
         SetTimer(fn, -1)
     }
 
-    static BindEsc() {
-        if Chooser.escBound
+    static ctxFn := 0
+
+    static KeysOn(on) {
+        if !Chooser.escBound
             return
         try {
-            HotIf(ObjBindMethod(Chooser, "IsFront"))
+            HotIf(Chooser.ctxFn)
+            for hk in ["Escape", "Up", "Down", "Enter"]
+                try Hotkey(hk, on ? "On" : "Off")
+        } finally {
+            HotIf()
+        }
+    }
+
+    static BindEsc() {
+        if Chooser.escBound {
+            Chooser.KeysOn(true)
+            return
+        }
+        Chooser.ctxFn := ObjBindMethod(Chooser, "IsFront")
+        try {
+            HotIf(Chooser.ctxFn)
             Hotkey("Escape", ObjBindMethod(Chooser, "EscKey"), "On")
             ; A list of choices should work like a list of choices. These
             ; are scoped by the same IsFront context as Escape, so they are
