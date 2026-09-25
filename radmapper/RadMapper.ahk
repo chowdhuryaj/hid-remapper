@@ -33,6 +33,11 @@
 ;      OnClipboardChange hook that ran on every copy/cut (the freezes).
 ;      Their actions, hotkeys (^!c, ^!n), tray entries and saved snippets
 ;      are removed; old rows are dropped and named in Diagnostics.
+;    * SIMPLER: sniper/boost pointer speed, drag scroll / drag zoom (and
+;      the hidden-cursor machinery behind them) and the W/L dial are
+;      removed. Old rows are dropped and named in Diagnostics; their
+;      settings are retired. The Pointer page keeps the wheel repeat
+;      guards and click lock.
 ;    * MOUSE INPUT FOLLOWS THE POINTER. Program-scoped rows for a mouse
 ;      button or the wheel match the window under the pointer; keys still
 ;      match the foreground window.
@@ -1495,7 +1500,7 @@ global MODDRAG_LABELS := Map("LAlt", "Alt — zoom in PACS",
 global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick", "moddrag",
     "dragmove", "ps_dictate", "ps_next", "ps_prev", "ps_keys", "pacs_keys",
     "tele_prev", "tele_next", "parkgo",
-    "sniper", "boost", "scrollptr", "zoomptr", "clicklock", "wldial", "appswitch",
+    "clicklock", "appswitch",
     "layout",
     "winplace", "warp",
     "macro", "run", "guiopen", "pausetgl", "none"]
@@ -1509,12 +1514,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "PACS: send keys",
     "Teleport cursor: previous monitor", "Teleport cursor: next monitor",
     "Park cursor (this app's spot)",
-    "Sniper speed (hold=momentary, tap=toggle)",
-    "Boost speed (hold=momentary, tap=toggle)",
-    "Drag scroll — pointer moves the wheel (hold=momentary, tap=toggle)",
-    "Drag zoom — pointer zooms with Ctrl+wheel (hold=momentary, tap=toggle)",
     "Click lock (hold a button down until pressed again)",
-    "W/L dial step (+1 / -1)",
     "Switch window (+1 / -1) — scroll a list, release to pick",
     ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i].
     "Apply window layout",
@@ -1543,15 +1543,9 @@ global ACT_HINTS := Map(
     "tele_prev", "No value needed (monitors are ordered left to right)",
     "tele_next", "No value needed (monitors are ordered left to right)",
     "parkgo", "No value needed (set the spot in the Apps page) (turn on “Show advanced pages” on Home)",
-    "sniper", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
-    "boost", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
-    "scrollptr", "No value needed (px per notch + invert set in the Pointer page (turn on “Show advanced pages” on Home))",
-    "zoomptr", "No value needed — same engine as drag scroll, emitting "
-             . "Ctrl+wheel, so it zooms wherever Ctrl+wheel zooms",
     "clicklock", "The button it holds down until pressed again. There is "
                . "also a global lock key on the Pointer page (turn on “Show "
                . "advanced pages” on Home).",
-    "wldial", "+1 or -1 (sends W/L preset digits 1..9,0 on a ring)",
     "layout", "Leave BLANK to pick from a list at the cursor, or name one "
             . "layout from the Windows page to apply it directly (turn on “Show advanced pages” on Home)",
     "winplace", "A screen and/or a tile, e.g. next, prev, here, 2, max, "
@@ -1581,6 +1575,9 @@ global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     "radialAnim", "radialWedges",
     ; v0.7.2: the clipboard history and scratchpad are gone
     "hkClipboard", "hkScratch",
+    ; v0.7.2: pointer speed modes, drag scroll/zoom and the W/L dial are gone
+    "sniperSpeed", "boostSpeed", "scrollPtrPx", "scrollPtrInvert",
+    "scrollPtrPin", "scrollPtrHide", "scrollPtrMax",
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1611,16 +1608,6 @@ global DEFAULTS := Map(
                                ;   Pointer and show the short action list
     "welcomedVer", "",         ; last version that opened the window on
                                ;   launch; "" = never (first run)
-    "sniperSpeed", 3,          ; SPI mouse speed 1..20 while sniper active
-    "boostSpeed", 16,          ; SPI mouse speed 1..20 while boost active
-    "scrollPtrPx", 18,         ; px of pointer travel per wheel notch (drag scroll)
-    "scrollPtrInvert", 0,      ; 1 = push to scroll instead of drag the page
-    "scrollPtrPin", 1,         ; 1 = pin the cursor to the anchor while scrolling
-    "scrollPtrHide", 1,        ; 1 = hide the pointer while pinned (it is being
-                               ;   warped back every tick; seen, that reads as a
-                               ;   cursor jumping between two spots) and mark
-                               ;   the anchor with a small ring instead
-    "scrollPtrMax", 20,        ; max notches emitted per 10 ms tick (runaway cap)
     ; v0.6.5 -- WHEEL REPEAT GUARDS. A Razer tilt wheel does not send one
     ; WheelLeft when you tilt it: it sends one every 30-50 ms for as long as
     ; the wheel is held over, exactly like a held keyboard key. Bound to an
@@ -1721,12 +1708,6 @@ global g_Cfg := 0              ; whole config (Map), see DefaultCfg()
 global g_BS := Map()           ; per-input live state objects
 global g_Enabled := true
 global g_PollSeq := 0          ; movement-poll generation counter
-global g_SpeedSaved := ""      ; original SPI mouse speed ("" = untouched)
-global g_SpeedMods := Map()    ; "sniper"/"boost" -> 1 while active
-global g_ScrollPtr := 0        ; {ax, ay} anchor while drag scroll is engaged
-global g_ScrollPtrMom := false ; engaged momentarily (held) vs toggled
-global g_SPAccX := 0.0         ; sub-notch pointer travel not yet emitted
-global g_SPAccY := 0.0
 global g_ClickLock := 0        ; {held, src} while a button is latched down
 global g_ClickLockHook := 0    ; InputHook watching for the release keystroke
 global g_ClickLockArmed := 0   ; tick the latch engaged (auto-repeat grace)
@@ -1757,7 +1738,7 @@ HookChanged() {
     g_HookChangedAt := A_TickCount
 }
 
-global g_DialFree := ""        ; dial state when not tied to a held button
+
 global g_LastEvWhat := ""      ; last event; formatted lazily by LastEventText
 global g_LastEvBind := 0
 global g_LastEvDirty := false
@@ -1808,8 +1789,6 @@ global RM_KeyHeld  := (k) => GetKeyState(k, "P")  ; physical key reads
 global RM_GetPos   := RM_GetPosReal               ; pointer position reads
 global RM_AppScan  := RM_AppScanReal              ; active-app profile scan
 global RM_PSFire   := RM_PSFireReal               ; PowerScribe delivery
-global RM_GetSpeed := GetOsMouseSpeed             ; OS pointer speed
-global RM_SetSpeed := SetOsMouseSpeed
 global RM_WinAt    := RM_WinAtReal                ; top-level window under cursor
 
 RM_GetPosReal(&x, &y) {
@@ -2414,9 +2393,6 @@ StarterPacks() {
          ; on a tap.
          rows: [["PACS", "*", "", "XButton1", "hold", "moddrag", "LAlt"],
                 ["PACS", "*", "", "XButton2", "hold", "moddrag", "LCtrl"]]},
-        {name: "Drag scroll on button 5",
-         sub:  "hold button 5 and move the mouse to scroll, everywhere",
-         rows: [["*", "*", "", "XButton2", "hold", "scrollptr", ""]]},
         {name: "Monitor hopping on the thumb buttons",
          sub:  "the shipped default: tap 4 / 5 to jump the pointer left / right",
          rows: [["*", "*", "", "XButton1", "tap", "tele_prev", ""],
@@ -3111,6 +3087,13 @@ ValidateCfg() {
         ; v0.7.2: radial menus moved to their own script. A row that
         ; opened one has nothing left to run it: dropped, and named.
         t0 := MGet(MGet(row, "action", Map()), "type", "")
+        if (t0 = "sniper" || t0 = "boost" || t0 = "scrollptr"
+            || t0 = "zoomptr" || t0 = "wldial") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → " t0 " row dropped: pointer speed,"
+                . " drag scroll and the W/L dial were removed in 0.7.2")
+            continue
+        }
         if (t0 = "clipboard" || t0 = "scratchpad") {
             Problem("retired", InputLabel(MGet(row, "button", "")) " "
                 . MGet(row, "event", "") " → " t0 " row dropped: the clipboard "
@@ -4133,7 +4116,7 @@ NewBS(btn) {
     g_PollSeq += 1
     st := {btn: btn, down: false, consumed: false, mode: "", pressTick: 0,
         gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
-        holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
+        holdBinding: 0, dragOn: false, usedAsMod: false,
         passBtn: "", repStart: 0, polling: false,
         locked: false, physSeen: true, deckLocked: false}
     g_BS[btn] := st
@@ -4659,7 +4642,7 @@ StartPollIfNeeded(st) {
 ; is the whole gesture.
 RepeatSafeAct(t) {
     return (t = "keys" || t = "keysrepeat" || t = "text" || t = "native"
-        || t = "stock" || t = "wldial")
+        || t = "stock")
 }
 
 ; Hold-action types that ENGAGE state in ActionDown (ended by ActionUp)
@@ -4669,8 +4652,7 @@ RepeatSafeAct(t) {
 ; never happened, and native/moddrag/keysrepeat would lose their hold phase.
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
-        || t = "dragmove" || t = "sniper" || t = "boost" || t = "scrollptr"
-        || t = "zoomptr")
+        || t = "dragmove")
 }
 
 HoldTimer(st, gen, *) {
@@ -5385,21 +5367,8 @@ ActionFire(binding, st) {
             ParkNow()
         case "teleport":                         ; pre-v0.3.4 value-driven form
             DoTeleport(v)
-        case "sniper":
-            SpeedToggle("sniper")
-        case "boost":
-            SpeedToggle("boost")
-        case "scrollptr":
-            ScrollPtrToggle()
-        case "zoomptr":
-            ZoomPtrToggle()
         case "clicklock":
             ClickLockToggle(v, st)
-        case "wldial":
-            ; the dial position lives on the layer HOLDER, so a tap row
-            ; walks the ring instead of restarting it every press
-            h := LayerHolderSt(binding)
-            DialStep(IsObject(h) ? h : st, v)
         case "appswitch":
             h := LayerHolderSt(binding)      ; the host's release commits
             AppSwitchStep(IsObject(h) ? h : st, v)
@@ -5457,14 +5426,6 @@ ActionDown(binding, st, instant) {
         case "dragmove":
             if IsObject(st)
                 st.dragOn := false           ; MovePoll sends the real down
-        case "sniper":
-            SpeedMod("sniper", true, true)   ; momentary: watchdog-recoverable
-        case "boost":
-            SpeedMod("boost", true, true)
-        case "scrollptr":
-            ScrollPtrStart(true)             ; momentary: watchdog-recoverable
-        case "zoomptr":
-            ScrollPtrStart(true, true)
         default:
             ActionFire(binding, st)          ; instant action bound on hold
     }
@@ -5499,12 +5460,6 @@ ActionUp(binding, st) {
         case "dragmove":
             if (IsObject(st) && st.dragOn)
                 SendNativeUp(st.passBtn != "" ? st.passBtn : st.btn)
-        case "sniper":
-            SpeedMod("sniper", false)
-        case "boost":
-            SpeedMod("boost", false)
-        case "scrollptr", "zoomptr":
-            ScrollPtrStop()
     }
 }
 
@@ -5537,27 +5492,6 @@ RepeatTick(st, gen, v, *) {
     SafeSend(v)
 }
 
-; --- W/L dial -----------------------------------------------------------------
-
-DialStep(holderSt, v) {
-    global g_DialFree
-    delta := (InStr(v, "-") = 1) ? -1 : 1
-    if IsObject(holderSt) {
-        if (holderSt.dial = "")
-            holderSt.dial := 0
-        holderSt.dial := Mod(holderSt.dial + delta + 10, 10)
-        n := holderSt.dial
-    } else {
-        if (g_DialFree = "")
-            g_DialFree := 0
-        g_DialFree := Mod(g_DialFree + delta + 10, 10)
-        n := g_DialFree
-    }
-    RM_Send(String(n))
-    if Cfg("hud")
-        HUD("W/L preset " n)
-}
-
 ; --- layers -------------------------------------------------------------------
 ; v1.0 (E1): layers are button-holds now, resolved entirely through the binding
 ; index (a held layer-host button raises the specificity of its scoped rows in
@@ -5567,263 +5501,7 @@ DialStep(holderSt, v) {
 ; held, and the watchdog's stuck-button sweep already reconciles that.
 
 
-; ── §7  POINTER (speed, monitor teleport) ──────────────────────────────────
-
-GetOsMouseSpeed() {
-    spd := 0
-    DllCall("SystemParametersInfo", "UInt", 0x70, "UInt", 0, "UInt*", &spd, "UInt", 0)
-    return spd
-}
-
-SetOsMouseSpeed(spd) {
-    DllCall("SystemParametersInfo", "UInt", 0x71, "UInt", 0, "Ptr", spd, "UInt", 0)
-}
-
-; mom marks a momentary engage (held button) vs a toggle: the watchdog may
-; auto-release an orphaned momentary mod, but toggled ones belong to the user
-; (panic clears them).
-SpeedMod(name, on, mom := false) {
-    global g_SpeedSaved
-    if on
-        g_SpeedMods[name] := mom ? "m" : 1
-    else if g_SpeedMods.Has(name)
-        g_SpeedMods.Delete(name)
-    if (g_SpeedMods.Count > 0) {
-        if (g_SpeedSaved = "")
-            g_SpeedSaved := RM_GetSpeed()
-        target := g_SpeedMods.Has("boost") ? Cfg("boostSpeed") : Cfg("sniperSpeed")
-        RM_SetSpeed(target)
-        if Cfg("hud")
-            HUD(g_SpeedMods.Has("boost") ? "Boost speed" : "Sniper speed")
-    } else if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-        if Cfg("hud")
-            HUD("Normal speed")
-    }
-}
-
-SpeedToggle(name) {
-    SpeedMod(name, !g_SpeedMods.Has(name))
-}
-
-; --- drag scroll (v0.3.1) --------------------------------------------------------
-; Pointer movement becomes wheel notches: hold the bound input and move the
-; mouse to scroll, like a PDF hand tool. Deliberately NOT the v0.2 engine --
-; no velocity tracking, no momentum, no coasting, no per-app modes. One timer,
-; one accumulator per axis, whole notches out.
-;
-; With scrollPtrPin on (default) the cursor is put back on its anchor every
-; tick, so travel is unlimited and the pointer never drifts off the image;
-; with it off the pointer moves freely and each tick measures the step.
-; Direction follows the hand-tool convention -- drag DOWN and the page comes
-; down with you (a wheel-up notch). scrollPtrInvert flips that to push-to-
-; scroll.
-
-/**
- * Drag scroll, and its one variant.
- *
- * zoom = true emits Ctrl+wheel instead of wheel, which is "drag zoom": the
- * same pointer-to-notch engine pointed at whatever the application does with
- * a Ctrl-wheel. It is a FLAG on the same anchor rather than a second engine
- * and a second timer, so the two can never both be running and fighting over
- * the same pointer -- and every guard that already covers drag scroll (the
- * runaway cap, the pin, the watchdog recovery, the panic release) covers the
- * zoom for free.
- */
-ScrollPtrStart(mom := false, zoom := false) {
-    global g_ScrollPtr, g_ScrollPtrMom, g_SPAccX, g_SPAccY
-    if IsObject(g_ScrollPtr)
-        return                               ; already engaged: hold + toggle
-    RM_GetPos(&x, &y)                        ; must not stack two anchors
-    g_ScrollPtr := {ax: x, ay: y, zoom: zoom}
-    g_ScrollPtrMom := mom
-    g_SPAccX := 0.0
-    g_SPAccY := 0.0
-    if (Cfg("scrollPtrPin") && Cfg("scrollPtrHide")) {
-        SysCursorHide()
-        SPMarkerShow(x, y)
-    }
-    SetTimer(SPTick, 10)
-    if Cfg("hud")
-        HUD(zoom ? "Drag zoom — move to zoom" : "Drag scroll — move to scroll")
-}
-
-ScrollPtrStop() {
-    global g_ScrollPtr, g_ScrollPtrMom, g_SPAccX, g_SPAccY
-    if !IsObject(g_ScrollPtr)
-        return
-    SetTimer(SPTick, 0)
-    g_ScrollPtr := 0
-    g_ScrollPtrMom := false
-    g_SPAccX := 0.0
-    g_SPAccY := 0.0
-    SPMarkerHide()
-    SysCursorShow()
-    if Cfg("hud")
-        HUD("Drag scroll off")
-}
-
-; ── the pointer during a pinned drag scroll ──────────────────────────────
-; Pinning warps the cursor back to the anchor every 10 ms. The hand still
-; moves it a few pixels first, so what the eye sees is a cursor flickering
-; between the anchor and wherever the hand just was. Hide it for the
-; duration and show a small ring at the anchor instead, so the spot the
-; scroll is "held" at is still visible. The system cursors are restored
-; from the registry (SPI_SETCURSORS) on stop, on panic and on exit.
-global g_SysCursorHidden := false
-global g_SPMarker := 0
-
-SysCursorHide() {
-    global g_SysCursorHidden
-    if g_SysCursorHidden
-        return
-    ; a 32x32 cursor whose AND mask is all 1 and XOR mask all 0 draws nothing
-    andMask := Buffer(128, 0xFF)
-    xorMask := Buffer(128, 0)
-    for id in [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644,
-               32645, 32646, 32648, 32649, 32650, 32651] {
-        h := DllCall("CreateCursor", "ptr", 0, "int", 0, "int", 0, "int", 32,
-            "int", 32, "ptr", andMask, "ptr", xorMask, "ptr")
-        if h
-            DllCall("SetSystemCursor", "ptr", h, "uint", id)   ; takes ownership
-    }
-    g_SysCursorHidden := true
-}
-
-SysCursorShow() {
-    global g_SysCursorHidden
-    if !g_SysCursorHidden
-        return
-    g_SysCursorHidden := false
-    DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
-}
-
-SPMarkerShow(x, y) {
-    global g_SPMarker, g_PassThru
-    SPMarkerHide()
-    if (!IsSet(Lumi) || !IsSet(Layer))
-        return
-    prev := LayerStack.ActiveLayer
-    try {
-        r := 11
-        L := Layer(x - r, y - r, r * 2, r * 2, "RadScrollAnchor")
-        LayerStack.ActiveLayer := L
-        Ellipse(2, 2, r * 2 - 4, r * 2 - 4, Lumi.C["cyan"], false)
-        Ellipse(3, 3, r * 2 - 6, r * 2 - 6, Lumi.C["cyan"], false)
-        Ellipse(r - 2, r - 2, 4, 4, Lumi.C["cyan"], true)
-        L.ClickThrough := true
-        L.NoActivate()
-        L.TopMost(true)
-        g_PassThru[L.hwnd] := 1
-        L.Draw()
-        g_SPMarker := L
-    } catch as e {
-        Problem("scrollptr", "anchor marker failed: " e.Message)
-    } finally {
-        if IsObject(prev)
-            LayerStack.ActiveLayer := prev
-    }
-}
-
-SPMarkerHide() {
-    global g_SPMarker, g_PassThru
-    if !IsObject(g_SPMarker)
-        return
-    try g_PassThru.Delete(g_SPMarker.hwnd)
-    try g_SPMarker.Dispose()
-    g_SPMarker := 0
-}
-
-ScrollPtrToggle() {
-    if IsObject(g_ScrollPtr)
-        ScrollPtrStop()
-    else
-        ScrollPtrStart(false)
-}
-
-ZoomPtrToggle() {
-    if IsObject(g_ScrollPtr)
-        ScrollPtrStop()
-    else
-        ScrollPtrStart(false, true)
-}
-
-/**
- * One notch of zoom.
- *
- * Ctrl is pressed and released AROUND EACH NOTCH rather than held down for
- * the whole drag. Holding it would be smoother in the handful of apps that
- * accumulate, but it means a synthetic Ctrl Down whose Up depends on the
- * drag ending cleanly -- and a stuck Ctrl on a reading workstation turns
- * every subsequent keystroke into a shortcut. Per-notch cannot stick.
- */
-SendZoomRaw(dir) {
-    SafeSend("{Blind}^{" dir " 1}")
-}
-
-SPTick(*) {
-    Critical "On"                            ; shares g_ScrollPtr/g_SPAcc* with
-    global g_SPAccX, g_SPAccY                ; the hook threads (cf. MovePoll,
-    if !IsObject(g_ScrollPtr) {              ; Watchdog): a stop mid-tick used
-                                             ; to leave this dereferencing 0
-        SetTimer(, 0)                        ; the timer outlived its state
-        return
-    }
-    RM_GetPos(&x, &y)
-    dx := x - g_ScrollPtr.ax
-    dy := y - g_ScrollPtr.ay
-    if (dx = 0 && dy = 0)
-        return
-    zoom := g_ScrollPtr.HasProp("zoom") && g_ScrollPtr.zoom
-    if Cfg("scrollPtrPin")
-        DllCall("SetCursorPos", "int", g_ScrollPtr.ax, "int", g_ScrollPtr.ay)
-    else {
-        g_ScrollPtr.ax := x                  ; free cursor: each tick measures
-        g_ScrollPtr.ay := y                  ; the step, not the total offset
-    }
-    px := Max(Cfg("scrollPtrPx"), 1)
-    inv := Cfg("scrollPtrInvert") ? -1 : 1
-    g_SPAccY += dy * inv
-    g_SPAccX += dx * inv
-    cap := Max(Cfg("scrollPtrMax"), 1)       ; a teleport or a lost tick must
-    n := 0                                   ; never dump 300 notches at once
-    while (Abs(g_SPAccY) >= px && n < cap) {
-        if (g_SPAccY > 0) {                  ; moved DOWN -> page follows the
-            if zoom                          ; hand -> wheel up
-                SendZoomRaw("WheelUp")
-            else
-                SendWheelRaw("WheelUp", 1)
-            g_SPAccY -= px
-        } else {
-            if zoom
-                SendZoomRaw("WheelDown")
-            else
-                SendWheelRaw("WheelDown", 1)
-            g_SPAccY += px
-        }
-        n += 1
-    }
-    if zoom {
-        g_SPAccX := 0.0                      ; there is no sideways zoom
-        return
-    }
-    n := 0
-    while (Abs(g_SPAccX) >= px && n < cap) {
-        if (g_SPAccX > 0) {
-            SendWheelRaw("WheelLeft", 1)
-            g_SPAccX -= px
-        } else {
-            SendWheelRaw("WheelRight", 1)
-            g_SPAccX += px
-        }
-        n += 1
-    }
-    if (Abs(g_SPAccY) > px * cap)            ; drop what the cap could not
-        g_SPAccY := 0.0                      ; emit rather than owing it
-    if (Abs(g_SPAccX) > px * cap)
-        g_SPAccX := 0.0
-}
+; ── §7  POINTER (click lock, monitor teleport) ──────────────────────────────────
 
 ; --- click lock (v0.3.1) ---------------------------------------------------------
 ; Hold a mouse button, tap the input bound to "Click lock", and the button
@@ -6266,7 +5944,7 @@ FollowTick(*) {
         if GetKeyState(b, "P")
             return
     }
-    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr))
+    if IsObject(g_ClickLock)
         return
     ; 2b. ... and a gesture whose holder is a KEY is invisible to the loop
     ;     above. The switcher CHOOSES BY POINTER POSITION,
@@ -9271,7 +8949,7 @@ ForceReleaseActive() {
     ; teardown is not a commit.
     AppSwitchClose(false)
     ClickLockRelease()                       ; a latch must never outlive the
-    ScrollPtrStop()                          ; hooks that can release it
+                                             ; hooks that can release it
     for name, st in g_BS.Clone() {
         if (st.down && !st.consumed) {
             if (st.mode = "passthru")
@@ -9298,37 +8976,11 @@ ForceReleaseActive() {
 ; owns those. A 500 ms age guard keeps the watchdog out of legitimate
 ; in-flight transitions.
 
-; True while any live held-mode input owns an action of this type -- the
-; anchor test for momentary speed states.
-WatchdogHolderAlive(type) {
-    for name, st in g_BS {
-        if (st.down && st.mode = "held" && IsObject(st.holdBinding)
-            && st.holdBinding["action"]["type"] = type)
-            return true
-    }
-    return false
-}
-
 Watchdog() {
     Critical "On"
     ; Before the enabled test: a wedged UI count is not an engine state, and
     ; it must clear even while the engine is paused. See Lumi.EditGuard.
     try Lumi.EditGuard()
-    ; Also before the enabled test, and for the same reason: a hidden system
-    ; cursor is not engine state. SetSystemCursor replaces the cursors for the
-    ; WHOLE desktop (it is the only way to hide the pointer over another
-    ; process), so if the thing that hid it dies without restoring -- a throw
-    ; inside SPTick, a paused engine, a teardown that skipped ScrollPtrStop --
-    ; the user is left with no pointer at all and no pointer to fix it with.
-    ; Drag scroll/zoom is the only caller, so no live anchor means nothing
-    ; owns the hidden cursor: give it back.
-    if (g_SysCursorHidden && !IsObject(g_ScrollPtr)) {
-        SysCursorShow()
-        SPMarkerHide()
-        Problem("recovered", "system cursor was hidden with no drag scroll"
-            . " running -- restored")
-        HUD("RadMapper restored the mouse pointer")
-    }
     if !g_Enabled
         return
     now := A_TickCount
@@ -9394,28 +9046,6 @@ Watchdog() {
         ClearBS(name)                        ; switcher, a menu) see a release
         Problem("recovered", "released stuck " name " (" st.mode ", " why ")")
         HUD("RadMapper recovered a stuck " name)
-    }
-    ; 2) momentary speed states whose holder is gone entirely (state cleared
-    ;    without ActionUp -- e.g. a lost Up followed by nothing). Held LAYERS
-    ;    need no sweep here: a layer is active only while its holder is
-    ;    physically down, and part 1 above already releases a holder whose
-    ;    input went up, which drops the layer with it.
-    for name in ["sniper", "boost"] {
-        if (g_SpeedMods.Has(name) && g_SpeedMods[name] = "m"
-            && !WatchdogHolderAlive(name)) {
-            SpeedMod(name, false)
-            Problem("recovered", "released orphaned momentary " name " speed")
-            HUD("RadMapper restored pointer speed")
-        }
-    }
-    ; 3) a momentary drag scroll whose holder is gone (a toggled one is the
-    ;    user's choice and is never swept -- panic owns that)
-    if (IsObject(g_ScrollPtr) && g_ScrollPtrMom
-        && !WatchdogHolderAlive("scrollptr")
-        && !WatchdogHolderAlive("zoomptr")) {
-        ScrollPtrStop()
-        Problem("recovered", "stopped orphaned drag scroll")
-        HUD("RadMapper stopped drag scroll")
     }
     ; 4) and 5) THE OS's OWN STATE, not ours. Parts 1-3 reconcile g_BS, and
     ;    that is exactly what the PowerScribe/PACS click freeze slipped past:
@@ -9488,7 +9118,7 @@ WatchdogSweepSafe() {
         if st.down
             return false
     }
-    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr)
+    if (IsObject(g_ClickLock)
         || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
         return false
     try {
@@ -9542,7 +9172,7 @@ HookFrontTick(*) {
             return
     }
     if (IsObject(g_AppSw) || IsObject(g_ClickLock)
-        || IsObject(g_ScrollPtr) || IsObject(g_RecHook))
+        || IsObject(g_RecHook))
         return
     try {
         if Warp.active
@@ -9590,8 +9220,6 @@ PanicSnapshot() {
     live := ""
     if IsObject(g_ClickLock)
         live .= " clicklock"
-    if IsObject(g_ScrollPtr)
-        live .= " dragscroll"
     if IsObject(g_AppSw)
         live .= " switcher"
     try {
@@ -9613,21 +9241,15 @@ PanicSnapshot() {
 }
 
 ToggleEnabled() {
-    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy, g_SpeedSaved
+    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy
     g_Enabled := !g_Enabled
     if !g_Enabled {
         g_MacroGen += 1                      ; a running macro stops too
         g_MacroBusy := false
         ForceReleaseActive()                 ; nothing may stay down once hooks drop
-        ; "input is native" must be true: a toggled sniper/boost speed and
-        ; the keyboard pointer's InputHook would otherwise outlive the pause
-        ; with their off switch unhooked.
+        ; "input is native" must be true: the keyboard pointer's InputHook
+        ; would otherwise outlive the pause with its off switch unhooked.
         try Warp.Close(true)
-        g_SpeedMods.Clear()
-        if (g_SpeedSaved != "") {
-            RM_SetSpeed(g_SpeedSaved)
-            g_SpeedSaved := ""
-        }
         g_PSQueue := []                      ; and nothing may still be on its
         g_PSGen += 1                         ; way into the study: queued
     }                                        ; deliveries die, the in-flight
@@ -9655,7 +9277,7 @@ ToggleEnabled() {
 }
 
 PanicRelease() {
-    global g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
+    global g_PSQueue, g_PSGen, g_ClickLock
     global g_MacroBusy, g_MacroGen
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
@@ -9667,8 +9289,6 @@ PanicRelease() {
     try Problem("panic", PanicSnapshot())   ; BEFORE anything is cleared
     g_MacroGen += 1
     g_MacroBusy := false
-    try SysCursorShow()                      ; never leave the pointer hidden
-    try SPMarkerHide()
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
         . "{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
     for name, st in g_BS.Clone() {           ; v0.3: a KEY held down by our own
@@ -9684,13 +9304,7 @@ PanicRelease() {
     }
     g_ClickLock := 0                         ; the blanket Up above released it
     ClickLockWatchStop()                     ; and its watcher must not outlive it
-    ScrollPtrStop()
     try Warp.Close(true)                     ; the keyboard comes back, too
-    if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-    }
-    g_SpeedMods.Clear()
     HUD("PANIC: everything released & reset")
 }
 
@@ -9731,11 +9345,6 @@ RadUnhandledError(err, mode) {
     try Problem("unhandled", detail)
     try OutputDebug("[RadMapper unhandled] " detail "`n")
     try DllCall("user32\ReleaseCapture")
-    ; The error may have come out of the drag-scroll tick, which hides the
-    ; system cursor process-wide. Never let an unhandled error be the reason
-    ; the workstation has no pointer. (OnExit -> Cleanup does the same.)
-    try SysCursorShow()
-    try SPMarkerHide()
     return 1
 }
 
@@ -10902,23 +10511,17 @@ BuildTray() {
 }
 
 Cleanup(*) {
-    global g_SpeedSaved, g_Problems, g_FgLockSaved
+    global g_Problems, g_FgLockSaved
     SetTimer(Watchdog, 0)
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     TeleportSignalStop()
-    try ScrollPtrStop()                      ; restores a hidden pointer too
-    try SysCursorShow()
     g_Problems := []                         ; in-memory only, dies with us
     if g_CfgDirty
         SaveCfg()                            ; never drop a debounced slider value
     ForceReleaseActive()
-    if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-    }
     ; Put the user's foreground-lock timeout back. It is a per-user Windows
     ; setting, not ours to leave changed on a shared login. -1 = never read.
     if (g_FgLockSaved >= 0) {
@@ -13111,7 +12714,7 @@ class Atlas {
     ; ActView still keeps a row's own action, so nothing bound is hidden.
     static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
-        "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
+        "ps_keys", "pacs_keys", "tele_prev", "tele_next",
         "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
@@ -14097,10 +13700,6 @@ class Atlas {
         ; Chips stop clear of the window buttons on the right. They used to
         ; start at w-34, i.e. underneath them.
         cx := w - 166                    ; clear of four window buttons now
-        if IsObject(g_ScrollPtr) {
-            cx -= 110
-            Lumi.Chip(cx, 20, 106, 24, "drag scroll", "cyan")
-        }
         if IsObject(g_ClickLock) {
             cx -= 132
             Lumi.Chip(cx, 20, 128, 24,
@@ -16280,66 +15879,26 @@ class Atlas {
 
     static PanelPointer(x, y, w, h) {
         Lumi.Label(x, y, 400, "Pointer", "title")
-        ; Band 2 grew a second column in v0.6.5 (the wheel repeat guards),
-        ; so it takes a larger share and a taller minimum; band 3 gives the
-        ; difference back. The three minimums total 446 (148 + 166 + 132 +
-        ; 2 gaps of 12); at the 940x760 minimum the bands are given 566.
-        bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 166, 132])
-        sw := Min(300, Max(160, w - 340))    ; slider track
+        ; v0.7.2: speed modes and drag scroll are gone; two bands remain.
+        bands := Atlas.Bands(y + 34, h - 34, [0.45, 0.55], [150, 150])
         lx := x + 24
 
-        ; ── speed ───────────────────────────────────────────────────────
+        ; ── the wheel repeat guards ─────────────────────────────────────
         B := bands[1]
         Lumi.Card(x, B.y, w, B.h)
-        Lumi.Label(lx, B.y + 12, 300, "Speed", "section")
-        Lumi.Label(lx, B.y + 38, 170, "Sniper", "dim", "left", 24)
-        Lumi.Slider(lx + 176, B.y + 40, sw, 1, 20, Cfg("sniperSpeed"),
-            (v) => Atlas.SetCfg("sniperSpeed", v))
-        Lumi.Label(lx, B.y + 76, 170, "Boost", "dim", "left", 24)
-        Lumi.Slider(lx + 176, B.y + 78, sw, 1, 20, Cfg("boostSpeed"),
-            (v) => Atlas.SetCfg("boostSpeed", v))
-        Lumi.Para(lx, B.y + 110, w - 48, B.h - 122,
-            "Windows pointer-speed steps, the same 1-20 scale as Mouse "
-            . "Properties. Bind “Sniper speed” or “Boost speed” to an input: "
-            . "hold for momentary, tap to toggle. The original speed is "
-            . "restored on release, on panic and on exit.", "mute")
-
-        ; ── the wheel: drag scroll, and the repeat guards ────────────────
-        ; Two columns. Left is drag scroll; right is what a HELD tilt or a
-        ; held wheel is allowed to do. At the 940 px minimum the panel is
-        ; 704 px wide, so each column is (704 - 48 - 24) / 2 = 316 and a
-        ; 150 px name plus a 90 px box (240) sits inside one with room over.
-        B := bands[2]
-        Lumi.Card(x, B.y, w, B.h)
-        col := Max(240, (w - 72) // 2)
-        rxw := lx + col + 24
-        Lumi.Label(lx, B.y + 12, 300, "Drag scroll", "section")
-        Lumi.Label(lx, B.y + 34, 150, "Pixels per notch", "dim", "left", 30)
-        Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("scrollPtrPx")),
-            (t) => Atlas.SetCfgInt("scrollPtrPx", t, 2, 200, 18), "", true)
-        Lumi.Toggle(lx, B.y + 70, "Pin the cursor while scrolling",
-            Cfg("scrollPtrPin"), (v) => Atlas.SetCfg("scrollPtrPin", v ? 1 : 0))
-        Lumi.Toggle(lx, B.y + 102, "Invert (push to scroll)",
-            Cfg("scrollPtrInvert"),
-            (v) => Atlas.SetCfg("scrollPtrInvert", v ? 1 : 0))
-        Lumi.Label(rxw, B.y + 12, 300, "Wheel repeat", "section")
-        Lumi.Label(rxw, B.y + 34, 150, "Tilt guard (ms)", "dim", "left", 30)
-        Lumi.Field(rxw + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
+        Lumi.Label(lx, B.y + 12, 300, "Wheel repeat", "section")
+        Lumi.Label(lx, B.y + 34, 150, "Tilt guard (ms)", "dim", "left", 30)
+        Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
             (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150), "", true)
-        Lumi.Label(rxw, B.y + 70, 150, "Wheel guard (ms)", "dim", "left", 30)
-        Lumi.Field(rxw + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
+        Lumi.Label(lx, B.y + 70, 150, "Wheel guard (ms)", "dim", "left", 30)
+        Lumi.Field(lx + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
             (t) => Atlas.SetCfgInt("wheelRepeatMs", t, 0, 1000, 0), "", true)
-        Lumi.Para(rxw, B.y + 104, col, 40,
+        Lumi.Para(lx, B.y + 106, w - 48, B.h - 118,
             "Razer tilt wheels repeat while held; 150 ms turns a held tilt "
             . "into one press. 0 = off.", "mute")
-        Lumi.Para(lx, B.y + 134, col, B.h - 146,
-            "Bind “Drag scroll” to an input, hold it and move the mouse. "
-            . "Pinning holds the cursor on the spot you started from, so "
-            . "travel is unlimited and the pointer never drifts off the "
-            . "image. Smaller px/notch scrolls faster.", "mute")
 
         ; ── click lock ──────────────────────────────────────────────────
-        B := bands[3]
+        B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Click lock", "section")
         Lumi.Label(lx, B.y + 36, 170, "Lock button", "dim", "left", 30)
@@ -18077,7 +17636,6 @@ class Atlas {
         }
         sig := (g_Enabled ? "1" : "0")
             . (IsObject(g_ClickLock) ? g_ClickLock.held : "")
-            . (IsObject(g_ScrollPtr) ? "S" : "")
             . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length "|" g_CfgSaveFailed
         if (sig = Atlas.lastSig)
             return
