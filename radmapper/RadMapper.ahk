@@ -44,6 +44,8 @@
 ;    * LAYER BUTTONS ARE A SETTING ("Layer buttons…" on the tab strip):
 ;      up to six of middle, right, button 4/5 or any key; never left.
 ;    * "Toggle engine pause" on an input resumes as well as pauses.
+;    * PASS-THROUGH action: hold (or tap to toggle, 2-minute safety) and
+;      every other input is native, without pausing the engine.
 ;    * Bug sweep (engine, config, delivery, GUI). Among the fixes: a key
 ;      remapped to a mouse button no longer re-sends its Down on key
 ;      repeat; a release over RadMapper's own window is no longer lost; a
@@ -1503,7 +1505,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "clicklock", "appswitch",
     "layout",
     "winplace", "warp",
-    "macro", "run", "guiopen", "pausetgl", "none"]
+    "macro", "run", "guiopen", "bypass", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
     "Double-click a button",
@@ -1521,7 +1523,9 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Window: move / fill the active window",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
     "Run macro", "Run program",
-    "Open RadMapper settings", "Toggle engine pause",
+    "Open RadMapper settings",
+    "Pass everything through (hold = while held, tap = on / off)",
+    "Toggle engine pause",
     "Block it (this button does nothing at all)"]
 global ACT_HINTS := Map(
     "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
@@ -1562,6 +1566,10 @@ global ACT_HINTS := Map(
     "macro", "Macro name from the Macros page (turn on “Show advanced pages” on Home)",
     "run", "Program or document path / URL",
     "guiopen", "No value needed",
+    "bypass", "No value needed. While it is on, every OTHER button, key "
+            . "and the wheel does exactly what it does without RadMapper; "
+            . "the engine keeps running. Hold it: on while held. Tap it: on "
+            . "until tapped again (or 2 minutes).",
     "pausetgl", "No value needed",
     "none", "Suppresses the input entirely")
 
@@ -3861,6 +3869,55 @@ ModsHeld() {
     return s
 }
 
+; ── PASS-THROUGH (v0.7.2) ────────────────────────────────────────────────
+; A temporary "RadMapper, stand back" that is NOT a pause: hooks stay in,
+; the watchdog and deliveries keep running, but every press other than the
+; pass-through input itself goes out natively (OnPressHK's native path) and
+; the wheel scrolls natively. Hold the bound input for while-held; tap it to
+; toggle, with a 2-minute safety off so it can never be forgotten on.
+global g_Bypass := 0             ; {src, mom} while on
+global BYPASS_MAX_MS := 120000
+
+BypassFor(btn) {
+    return IsObject(g_Bypass) && btn != g_Bypass.src
+}
+
+BypassOn(src, mom := false) {
+    global g_Bypass
+    if IsObject(g_Bypass) {
+        g_Bypass.mom := mom
+        return
+    }
+    g_Bypass := {src: src, mom: mom}
+    SetTimer(BypassExpire, mom ? 0 : -BYPASS_MAX_MS)
+    HUD("Pass-through ON — everything else is native"
+        . (mom ? " while held" : " (tap again to end)"), "warn")
+}
+
+BypassOff(quiet := false) {
+    global g_Bypass
+    SetTimer(BypassExpire, 0)
+    if !IsObject(g_Bypass)
+        return
+    g_Bypass := 0
+    if !quiet
+        HUD("Pass-through off", "jade")
+}
+
+BypassToggle(src) {
+    if IsObject(g_Bypass)
+        BypassOff()
+    else
+        BypassOn(src, false)
+}
+
+BypassExpire(*) {
+    if IsObject(g_Bypass) {
+        BypassOff(true)
+        HUD("Pass-through ended after 2 minutes", "mute")
+    }
+}
+
 ; Inputs whose next release belongs to a pause toggle (see OnReleaseHK).
 global g_SwallowUp := Map()
 
@@ -4393,7 +4450,7 @@ OnPressHK(btn, *) {
         try WinActivate("ahk_id " uw)
         fgOurs := false
     }
-    if (!g_Enabled || fgOurs || ours) {
+    if (!g_Enabled || fgOurs || ours || BypassFor(btn)) {
         if (ours && !fgOurs) {
             ; fallback: click on our own window while another app holds the
             ; foreground -- activate ourselves so the reinjected click lands
@@ -4655,7 +4712,7 @@ RepeatSafeAct(t) {
 ; never happened, and native/moddrag/keysrepeat would lose their hold phase.
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
-        || t = "dragmove")
+        || t = "dragmove" || t = "bypass")
 }
 
 HoldTimer(st, gen, *) {
@@ -4945,7 +5002,7 @@ OnWheelHK(wh, *) {
     ; lands the pointer in the middle of the next monitor -- under the
     ; settings window whenever it is open there (v0.6.6.3).
     tilt := (wh = "WheelLeft" || wh = "WheelRight")
-    if (!g_Enabled || (!tilt && OwnWindowAt(RM_WinAt()))) {
+    if (!g_Enabled || IsObject(g_Bypass) || (!tilt && OwnWindowAt(RM_WinAt()))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
     }
@@ -5387,6 +5444,8 @@ ActionFire(binding, st) {
             try Run(v)
         case "guiopen":
             ShowMain()
+        case "bypass":
+            BypassToggle(IsObject(st) ? st.btn : "")
         case "pausetgl":
             ; Pausing clears every state, so this press's release would find
             ; none and send a lone native Up (a Back click on button 4).
@@ -5426,6 +5485,8 @@ ActionDown(binding, st, instant) {
                 delay := instant ? HoldMs() : RepeatMs()
                 SetTimer(RepeatKick.Bind(st, st.gen, v), -delay)
             }
+        case "bypass":
+            BypassOn(IsObject(st) ? st.btn : "", true)
         case "dragmove":
             if IsObject(st)
                 st.dragOn := false           ; MovePoll sends the real down
@@ -5460,6 +5521,9 @@ ActionUp(binding, st) {
             SafeSend("{Blind}{" v " Up}")
         case "keysrepeat":
             return                           ; repeat timer self-cancels
+        case "bypass":
+            if (IsObject(g_Bypass) && g_Bypass.mom)
+                BypassOff()
         case "dragmove":
             if (IsObject(st) && st.dragOn)
                 SendNativeUp(st.passBtn != "" ? st.passBtn : st.btn)
@@ -8948,6 +9012,7 @@ RegisterKbHotkeys() {
 ; before any path that can unregister an Up hotkey (disable, config change)
 ; or the release event is lost and the synthetic input stays down forever.
 ForceReleaseActive() {
+    BypassOff(true)                          ; pass-through never outlives teardown
     ; BEFORE the g_BS sweep: a held switcher commits on release, and
     ; teardown is not a commit.
     AppSwitchClose(false)
@@ -8986,6 +9051,15 @@ Watchdog() {
     try Lumi.EditGuard()
     if !g_Enabled
         return
+    if (IsObject(g_Bypass) && g_Bypass.mom) {
+        hs := BS(g_Bypass.src)
+        ; an injected holder (physSeen false) never reads as physically
+        ; held: trust its state, as the engine does elsewhere
+        if !(hs && hs.down && (!hs.physSeen || InputHeldPhysical(g_Bypass.src))) {
+            BypassOff()
+            Problem("recovered", "pass-through ended: its button is no longer held")
+        }
+    }
     now := A_TickCount
     ; 1) input states whose physical input is no longer down (lost Up)
     for name, st in g_BS.Clone() {
@@ -9308,6 +9382,7 @@ PanicRelease() {
     g_ClickLock := 0                         ; the blanket Up above released it
     ClickLockWatchStop()                     ; and its watcher must not outlive it
     try Warp.Close(true)                     ; the keyboard comes back, too
+    BypassOff(true)
     HUD("PANIC: everything released & reset")
 }
 
@@ -12718,7 +12793,7 @@ class Atlas {
     static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next",
-        "none"]
+        "bypass", "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -13703,6 +13778,10 @@ class Atlas {
         ; Chips stop clear of the window buttons on the right. They used to
         ; start at w-34, i.e. underneath them.
         cx := w - 166                    ; clear of four window buttons now
+        if IsObject(g_Bypass) {
+            cx -= 132
+            Lumi.Chip(cx, 20, 128, 24, "pass-through", "warn")
+        }
         if IsObject(g_ClickLock) {
             cx -= 132
             Lumi.Chip(cx, 20, 128, 24,
@@ -17637,7 +17716,7 @@ class Atlas {
             Atlas.Build()
             return
         }
-        sig := (g_Enabled ? "1" : "0")
+        sig := (g_Enabled ? "1" : "0") (IsObject(g_Bypass) ? "B" : "")
             . (IsObject(g_ClickLock) ? g_ClickLock.held : "")
             . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length "|" g_CfgSaveFailed
         if (sig = Atlas.lastSig)
