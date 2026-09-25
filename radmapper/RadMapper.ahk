@@ -29,6 +29,10 @@
 ;      GpGFX tested text for emptiness with `== 0` / `!== 0`, which are
 ;      numeric. Braces in Send syntax are no longer read as text markup
 ;      ("^{c}" drew as "^", "{Del}" struck through).
+;    * THE CLIPBOARD HISTORY AND SCRATCHPAD ARE GONE, and with them the
+;      OnClipboardChange hook that ran on every copy/cut (the freezes).
+;      Their actions, hotkeys (^!c, ^!n), tray entries and saved snippets
+;      are removed; old rows are dropped and named in Diagnostics.
 ;    * MOUSE INPUT FOLLOWS THE POINTER. Program-scoped rows for a mouse
 ;      button or the wheel match the window under the pointer; keys still
 ;      match the foreground window.
@@ -1492,7 +1496,6 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "dragmove", "ps_dictate", "ps_next", "ps_prev", "ps_keys", "pacs_keys",
     "tele_prev", "tele_next", "parkgo",
     "sniper", "boost", "scrollptr", "zoomptr", "clicklock", "wldial", "appswitch",
-    "clipboard", "scratchpad",
     "layout",
     "winplace", "warp",
     "macro", "run", "guiopen", "pausetgl", "none"]
@@ -1513,13 +1516,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Click lock (hold a button down until pressed again)",
     "W/L dial step (+1 / -1)",
     "Switch window (+1 / -1) — scroll a list, release to pick",
-    ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i]. These
-    ; three were transposed in v0.4.1 -- "layout" went into ACT_CODES before
-    ; the two shelf codes but its label went in after them -- so choosing
-    ; "Apply window layout" in the dropdown saved a "clipboard" row and opened
-    ; the clipboard. Nothing but the order was wrong.
-    "Open the clipboard shelf",
-    "Open the scratchpad",
+    ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i].
     "Apply window layout",
     "Window: move / fill the active window",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
@@ -1565,8 +1562,6 @@ global ACT_HINTS := Map(
     "warp", "No value needed — opens the lettered grid on the screen under "
           . "the pointer (again closes it). Space clicks, G drags, N snaps "
           . "to the control under the pointer, Esc closes",
-    "clipboard", "No value needed — the last 25 copies, at the cursor",
-    "scratchpad", "No value needed — your saved snippets, at the cursor",
     "appswitch", "+1 or -1. Put it on the wheel inside a layer: the list "
                . "appears while the layer's input is held and stays up while "
                . "you scroll, and releasing switches to the highlighted window.",
@@ -1584,6 +1579,8 @@ global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     ; v0.7.2: radial menus moved to their own script
     "radialDwellMs", "radialDead", "radialRadius", "radialSubMs",
     "radialAnim", "radialWedges",
+    ; v0.7.2: the clipboard history and scratchpad are gone
+    "hkClipboard", "hkScratch",
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1688,8 +1685,6 @@ global DEFAULTS := Map(
     ; say), the notches still arriving belong to the scroll, not the deck:
     ; they stay native until the wheel has been still this long. 0 = off.
     "deckSettleMs", 250,
-    "hkClipboard", "^!c",
-    "hkScratch", "^!n",
     ; v0.6.2: stations, window placement, the keyboard pointer
     "stationAuto", 1,          ; apply a station's arrangement when its screens
                                ;   appear (launch, dock, KVM, log-in elsewhere)
@@ -2534,7 +2529,6 @@ DefaultCfg() {
     c["layouts"] := []
     ; Scratchpad snippets. The clipboard HISTORY is deliberately not here --
     ; see the S14c header: it never touches disk.
-    c["snippets"] := []
 
     c["psExes"] := ["Nuance.PowerScribe360.exe", "Nuance.PSOne.exe"]
     SeedDefaultBindings(c)
@@ -3055,8 +3049,9 @@ NormalizeCfg(imported := false) {
     ; with them; the rows that opened one are dropped by ValidateCfg.
     if c.Has("menus")
         c.Delete("menus")
-    if !c.Has("snippets")
-        c["snippets"] := []
+    ; v0.7.2: the scratchpad is gone, and its snippets with it
+    if c.Has("snippets")
+        c.Delete("snippets")
     if !c.Has("macros")
         c["macros"] := Map()
     if !c.Has("psExes")
@@ -3086,7 +3081,7 @@ NormalizeCfg(imported := false) {
 ValidateCfgShape(c) {
     if !(c is Map) || !(MGet(c, "bindings", 0) is Array)
         throw Error("Expected a settings object with a bindings list")
-    for key in ["apps", "layers", "layouts", "snippets", "psExes",
+    for key in ["apps", "layers", "layouts", "psExes",
                 "stations"] {
         if (c.Has(key) && !(c[key] is Array))
             throw Error(key " must be a list")
@@ -3115,7 +3110,14 @@ ValidateCfg() {
         }
         ; v0.7.2: radial menus moved to their own script. A row that
         ; opened one has nothing left to run it: dropped, and named.
-        if (MGet(MGet(row, "action", Map()), "type", "") = "radial") {
+        t0 := MGet(MGet(row, "action", Map()), "type", "")
+        if (t0 = "clipboard" || t0 = "scratchpad") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → " t0 " row dropped: the clipboard "
+                . "history and scratchpad were removed in 0.7.2")
+            continue
+        }
+        if (t0 = "radial") {
             Problem("retired", InputLabel(MGet(row, "button", "")) " "
                 . MGet(row, "event", "") " → radial menu row dropped: radial "
                 . "menus are a separate script now")
@@ -5407,10 +5409,6 @@ ActionFire(binding, st) {
             WinPlace(v)
         case "warp":
             Warp.Toggle()
-        case "clipboard":
-            Shelf.Toggle("clip")
-        case "scratchpad":
-            Shelf.Toggle("scratch")
         case "macro":
             SetTimer(RunMacro.Bind(v), -1)
         case "run":
@@ -9193,8 +9191,6 @@ RegisterKbHotkeys() {
         [Cfg("hkPause"),     (*) => ToggleEnabled()],
         [Cfg("hkPanic"),     (*) => PanicRelease()],
         [Cfg("hkClickLock"), (*) => ClickLockToggle("")],
-        [Cfg("hkClipboard"), (*) => Shelf.Toggle("clip")],
-        [Cfg("hkScratch"),   (*) => Shelf.Toggle("scratch")],
         [Cfg("hkWinNext"),   (*) => WinPlace("next")],
         [Cfg("hkWinPrev"),   (*) => WinPlace("prev")],
         [Cfg("hkWinMax"),    (*) => WinPlace("max")],
@@ -10895,8 +10891,6 @@ UpdateTray() {
 BuildTray() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Settings…", (*) => ShowMain())
-    A_TrayMenu.Add("Clipboard…", (*) => Shelf.Toggle("clip"))
-    A_TrayMenu.Add("Scratchpad…", (*) => Shelf.Toggle("scratch"))
     A_TrayMenu.Add("Rendering self-test…", (*) => ShowGallery())
     A_TrayMenu.Add("Enabled", (*) => ToggleEnabled())
     A_TrayMenu.Add("Panic release", (*) => PanicRelease())
@@ -10952,7 +10946,6 @@ Init() {
                                              ; set was armed BEFORE the last
                                              ; exit; arm it again now
 
-    OnClipboardChange(ClipChanged)           ; feeds the clipboard shelf
     BuildTray()
     SyncHooks()
     RegisterKbHotkeys()
@@ -18090,588 +18083,6 @@ class Atlas {
             return
         Atlas.lastSig := sig
         Atlas.Build()
-    }
-}
-
-
-; ══════════════════════════════════════════════════════════════════════════════
-;  §14c  SHELF -- clipboard history and scratchpad
-; ══════════════════════════════════════════════════════════════════════════════
-;
-;  Two summonable panels that share one implementation because they differ in
-;  exactly two things: where the items come from, and whether they survive a
-;  restart.
-;
-;    CLIPBOARD  -- the last 25 things copied, captured automatically.
-;                  MEMORY ONLY. Never written to disk, cleared on exit.
-;    SCRATCHPAD -- snippets you put there on purpose. Saved in the config.
-;
-;  THAT SPLIT IS DELIBERATE AND IS NOT A DETAIL. This runs on a SHARED
-;  hospital workstation, and a clipboard on a reading station holds patient
-;  identifiers, accession numbers and report text. Persisting that history to
-;  %APPDATA% would write PHI to disk, silently, on a machine other people use
-;  -- so the clipboard history never touches disk. The scratchpad DOES persist,
-;  because canned phrases are the entire point of it, and the panel says so on
-;  screen: what you deliberately put in a scratchpad is your call, what merely
-;  passed through your clipboard is not.
-;
-;  ON DRAG AND DROP. Real OLE drag-and-drop (IDropTarget / DoDragDrop) is not
-;  implemented, and the panel does not pretend otherwise. Building a COM drop
-;  target by hand for a GDI+ layered window is a large, fragile piece of work,
-;  and it would still land on the inconsistent drop targets of PACS, PS and
-;  Epic. What is implemented is the thing that actually works everywhere:
-;
-;    INTO the shelf   -- anything you copy anywhere lands in the clipboard
-;                        list by itself, and "Grab selection" pulls the
-;                        current selection out of the window you came from.
-;    OUT of the shelf -- press a row and drag onto any window. On release
-;                        RadMapper sets the clipboard, clicks where you let
-;                        go (which is what places the caret), and pastes.
-;
-;  It is a simulated drop, and it behaves like a drop in every app tested
-;  against the same technique, because paste is the one interchange format
-;  all of them agree on.
-;
-;  The panel is summoned AT THE CURSOR, which is the same deliberate exception
-;  the radial-menu research reserves: v0.4.0 moved every passive HUD into a
-;  corner because a notification over the image is a notification over the
-;  finding, but this is modal, requested, and dismissed the moment it is used.
-
-global g_Clip := []            ; newest FIRST. Memory only, by design.
-global g_ClipMine := 0         ; tick of a clipboard write WE made
-
-/** Registered in Init. Text only -- an image on the clipboard is ignored. */
-ClipChanged(type) {
-    global g_Clip, g_ClipMine
-    if (type != 1)                           ; 1 = text
-        return
-    ; OnClipboardChange is a hook: Windows can call it in the middle of the
-    ; auto-execute thread, before the statements further down this file have
-    ; run. That is how "g_ClipMine has not been assigned a value" fell out of
-    ; a load-time error dialog. Init() runs last now, so this is belt and
-    ; braces -- but the hook must never be the thing that raises the error.
-    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
-        return
-    ; NEVER read the clipboard from inside the hook. This runs on the message
-    ; that announces the change, and A_Clipboard blocks until the owning
-    ; application renders the text -- a hung viewer or a remote-session
-    ; clipboard proxy would stall our hook, and a stalled clipboard hook
-    ; stalls Ctrl+C for every application on the station. Harvest off-thread.
-    SetTimer(ClipHarvest, -1)
-}
-
-/** The rest of ClipChanged, run off the hook's own thread. */
-ClipHarvest() {
-    global g_Clip, g_ClipMine
-    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
-        return
-    if (A_TickCount - g_ClipMine < 1200)     ; our own paste, not the user's
-        return
-    try {
-        txt := A_Clipboard
-    } catch {
-        return
-    }
-    if (txt = "" || StrLen(txt) > 20000)
-        return
-    if (g_Clip.Length > 0 && SameText(g_Clip[1], txt))
-        return
-    ; Move an existing copy to the front rather than growing a duplicate.
-    i := g_Clip.Length
-    while (i >= 1) {
-        if SameText(g_Clip[i], txt)
-            g_Clip.RemoveAt(i)
-        i -= 1
-    }
-    g_Clip.InsertAt(1, txt)
-    while (g_Clip.Length > Shelf.MAXCLIP)
-        g_Clip.RemoveAt(g_Clip.Length)
-}
-
-class Shelf {
-    static MAXCLIP := 25
-    static VIS := 11               ; rows on screen at once
-    static W := 660
-    static ROWH := 30
-
-    static lyr := 0
-    static kind := "clip"          ; "clip" | "scratch"
-    static prevWin := 0            ; the window we were summoned over
-    static items := []
-    static sel := 1
-    static top := 1
-    static escBound := false
-    static busy := false
-
-    ; ── lifecycle ───────────────────────────────────────────────────────────
-
-    static Toggle(kind) {
-        if (IsObject(Shelf.lyr) && Shelf.kind = kind) {
-            Shelf.Close()
-            return
-        }
-        Shelf.Show(kind)
-    }
-
-    static Show(kind) {
-        Shelf.Close()
-        ; Captured BEFORE our own layer appears: this is the window a paste
-        ; has to go back to, and once we are activated it is too late to ask.
-        Shelf.prevWin := WinExist("A")
-        Shelf.kind := kind
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Load()
-        prev := LayerStack.ActiveLayer
-        h := Shelf.Height()
-        lyr := Layer(Shelf.W, h, "RadMapperShelf")
-        Shelf.lyr := lyr
-        LayerStack.ActiveLayer := lyr
-        try {
-            Atlas.Own(lyr)
-            lyr.TopMost(true)
-            lyr.Drag()
-            Shelf.Place(lyr)
-            Shelf.BindEsc()
-            Shelf.Paint()
-            lyr.Activate()
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static Close(*) {
-        if IsObject(Shelf.lyr) {
-            try Atlas.Disown(Shelf.lyr)
-            try Shelf.lyr.Dispose()
-        }
-        Shelf.lyr := 0
-    }
-
-
-    static Place(lyr) {
-        PlaceAtCursor(lyr)
-    }
-
-    static Height() {
-        n := Min(Max(Shelf.items.Length, 1), Shelf.VIS)
-        return 74 + n * Shelf.ROWH + 76
-    }
-
-    static Load() {
-        if (Shelf.kind = "clip") {
-            Shelf.items := g_Clip
-            return
-        }
-        if !g_Cfg.Has("snippets")
-            g_Cfg["snippets"] := []
-        Shelf.items := g_Cfg["snippets"]
-    }
-
-    ; ── escape ──────────────────────────────────────────────────────────────
-
-    static BindEsc() {
-        if Shelf.escBound
-            return
-        try {
-            HotIf(ObjBindMethod(Shelf, "IsFront"))
-            Hotkey("Escape", ObjBindMethod(Shelf, "EscKey"), "On")
-            Shelf.escBound := true
-        } catch {
-        } finally {
-            HotIf()
-        }
-    }
-
-    static IsFront(*) {
-        if !IsObject(Shelf.lyr)
-            return 0
-        try
-            return WinActive("ahk_id " Shelf.lyr.hwnd) ? 1 : 0
-        return 0
-    }
-
-    static EscKey(*) {
-        Lumi.EndEdit()
-        Shelf.Defer(ObjBindMethod(Shelf, "Close"))
-    }
-
-    /**
-     * Every row and button action goes through here.
-     *
-     * All of them either repaint (which calls lyr.Clear() and disposes every
-     * shape) or close the layer outright -- and all of them are invoked from
-     * inside GpGFX's shape dispatch, with the shape that was clicked live on
-     * the stack. Running them inline returns into a disposed shape. The -1
-     * timer lets the dispatch unwind first. Same rule as the resize grip.
-     */
-    static Defer(fn) {
-        SetTimer(fn, -1)
-    }
-
-    ; ── paint ───────────────────────────────────────────────────────────────
-
-    static Paint() {
-        lyr := Shelf.lyr
-        if !IsObject(lyr)
-            return
-        prev := LayerStack.ActiveLayer
-        LayerStack.ActiveLayer := lyr
-        try {
-            Shelf.__Paint(lyr)
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static __Paint(lyr) {
-        Shelf.Load()
-        lyr.Clear()
-        w := Shelf.W
-        h := Shelf.Height()
-        try {
-            lyr.Resize(w, h)
-            lyr.Move(, , w, h)
-        }
-        clip := (Shelf.kind = "clip")
-
-        Lumi.Card(0, 0, w, h, "surface", 0)
-        Rectangle(0, 0, w, 3, clip ? Lumi.C["cyan"] : Lumi.C["jade"], true)
-        Lumi.Label(18, 12, 400, clip ? "Clipboard" : "Scratchpad", "title")
-        Lumi.Label(18, 38, w - 200,
-            clip ? "Last " Shelf.MAXCLIP " copies · memory only, never saved to disk"
-                 : "Saved snippets · stored in your config file",
-            "mute", "left", 18)
-        Lumi.Btn(w - 44, 12, 30, 26, "X",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "Close")), "ghost")
-        Lumi.Rule(18, 66, w - 36)
-
-        ; A backdrop that carries the wheel handlers, drawn BEFORE the rows so
-        ; the rows still win the hit test (the v0.3.8 dropdown fix, same shape).
-        vis := Min(Max(Shelf.items.Length, 1), Shelf.VIS)
-        listH := vis * Shelf.ROWH
-        back := Rectangle(10, 74, w - 20, listH, Lumi.C["abyss"], true)
-        back.OnEvent("MouseScrollUp", ObjBindMethod(Shelf, "Scroll", -1))
-        back.OnEvent("MouseScrollDown", ObjBindMethod(Shelf, "Scroll", 1))
-
-        if (Shelf.items.Length = 0) {
-            Lumi.Label(30, 74, w - 60,
-                clip ? "Nothing copied yet."
-                     : "Empty — use “Add from clipboard” or “Grab selection”.",
-                "mute", "left", listH)
-        }
-
-        i := Shelf.top
-        r := 0
-        while (r < vis && i <= Shelf.items.Length) {
-            ry := 74 + r * Shelf.ROWH
-            active := (i = Shelf.sel)
-            if active {
-                Rectangle(14, ry, w - 28, Shelf.ROWH - 2,
-                    Lumi.C["raised2"], true)
-                Rectangle(14, ry, 2, Shelf.ROWH - 2, Lumi.C["magenta"], true)
-            }
-            Lumi.Label(26, ry, 26, String(i), "mute", "left", Shelf.ROWH - 2)
-            Lumi.Label(56, ry, w - 90, Shelf.Preview(Shelf.items[i]),
-                active ? "body" : "dim", "left", Shelf.ROWH - 2)
-            hit := Container(14, ry, w - 28, Shelf.ROWH - 2)
-            hit.OnEvent("LeftMouseDown", ObjBindMethod(Shelf, "RowDown", i))
-            ; Right-click SELECTS without acting, so Copy / Send to scratchpad
-            ; / Del have a way to reach a row other than the one a left click
-            ; would have already pasted and closed on.
-            hit.OnEvent("RightMouseDown", ObjBindMethod(Shelf, "RowPick", i))
-            hit.OnEvent("MouseScrollUp", ObjBindMethod(Shelf, "Scroll", -1))
-            hit.OnEvent("MouseScrollDown", ObjBindMethod(Shelf, "Scroll", 1))
-            i += 1
-            r += 1
-        }
-
-        by := 74 + listH + 12
-        Lumi.Label(18, by, w - 36,
-            "Click a row to paste it back · drag a row onto any window to "
-            . "drop it there · right-click to select without pasting",
-            "mute", "left", 18)
-        by += 22
-        ; UseSel / CopySel / ToScratchSel, not ObjBindMethod(..., Shelf.sel):
-        ; a bound argument is captured when the button is PAINTED, and the
-        ; selection moves after that, so every one of these would have acted
-        ; on whatever was selected when the panel was drawn.
-        Lumi.Btn(18, by, 130, 30, "Paste",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "UseSel")), "primary")
-        Lumi.Btn(156, by, 110, 30, "Copy",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "CopySel")), "accent")
-        if clip {
-            Lumi.Btn(274, by, 150, 30, "Send to scratchpad",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "ToScratchSel")),
-                "ghost")
-            Lumi.Btn(432, by, 130, 30, "Clear list",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "ClearAll")), "danger")
-        } else {
-            Lumi.Btn(274, by, 160, 30, "Add from clipboard",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "AddFromClip")), "ghost")
-            Lumi.Btn(442, by, 130, 30, "Grab selection",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "GrabSelection")), "ghost")
-            Lumi.Btn(580, by, 62, 30, "Del",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "DeleteSel")), "danger")
-        }
-
-        Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
-        lyr.Draw()
-    }
-
-    /** One line, no tabs or newlines, trimmed to something that fits. */
-    static Preview(s) {
-        s := StrReplace(StrReplace(StrReplace(s, "`r`n", " "), "`n", " "), "`t", " ")
-        s := Trim(s)
-        while InStr(s, "  ")
-            s := StrReplace(s, "  ", " ")
-        return (StrLen(s) > 92) ? SubStr(s, 1, 91) "…" : s
-    }
-
-    static Scroll(d, *) {
-        if (Shelf.items.Length <= Shelf.VIS)
-            return
-        t := Shelf.top + d
-        t := Min(Max(t, 1), Shelf.items.Length - Shelf.VIS + 1)
-        if (t = Shelf.top)
-            return
-        Shelf.top := t
-        Shelf.Defer(ObjBindMethod(Shelf, "Paint"))
-    }
-
-    ; ── rows: click to paste, drag to drop ──────────────────────────────────
-
-    /**
-     * A press on a row is not yet a click. It becomes a drag if the pointer
-     * leaves a small threshold before release, and a paste if it does not --
-     * so one gesture covers both without a modifier or a second button.
-     */
-    static RowDown(i, shp := 0, mx := 0, my := 0) {
-        Shelf.sel := i
-        Shelf.Defer(ObjBindMethod(Shelf, "RowDrag", i))
-    }
-
-    static RowPick(i, shp := 0, mx := 0, my := 0) {
-        Shelf.sel := i
-        Shelf.Defer(ObjBindMethod(Shelf, "Paint"))
-    }
-
-    static UseSel() => Shelf.Use(Shelf.sel)
-    static CopySel() => Shelf.CopyOnly(Shelf.sel)
-    static ToScratchSel() => Shelf.ToScratch(Shelf.sel)
-
-    static RowDrag(i) {
-        if Shelf.busy
-            return
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        text := Shelf.items[i]               ; the row AS GRABBED
-        Shelf.busy := true
-        moved := false
-        ex := 0
-        ey := 0
-        try {
-            CoordMode("Mouse", "Screen")
-            MouseGetPos(&sx, &sy)
-            while GetKeyState("LButton", "P") {
-                MouseGetPos(&cx, &cy)
-                if (Abs(cx - sx) > 12 || Abs(cy - sy) > 12)
-                    moved := true
-                Sleep(15)
-            }
-            MouseGetPos(&ex, &ey)
-        } finally {
-            Shelf.busy := false
-        }
-        ; Escape (or the X button) during the drag closes the shelf, and the
-        ; wait loop above yields, so that really happens mid-gesture. A
-        ; cancelled drag must not still paste into the study.
-        if !IsObject(Shelf.lyr)
-            return
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        ; Shelf.items IS g_Clip for the clipboard shelf, and ClipChanged
-        ; re-orders it from a copy made in another window while we waited --
-        ; row i may no longer be the row that was grabbed.
-        if (Shelf.items[i] !== text) {
-            HUD("The list changed — nothing was pasted", "warn")
-            return
-        }
-        if moved
-            Shelf.Drop(text, ex, ey)
-        else
-            Shelf.Use(i)
-    }
-
-    /**
-     * Simulated drop: close, click where the pointer was released so the
-     * target places its caret there, then paste. Closing FIRST matters --
-     * otherwise the click lands on our own panel.
-     */
-    static Drop(text, x, y) {
-        Shelf.Close()
-        Sleep(40)                            ; let the layer actually go away
-        CoordMode("Mouse", "Screen")         ; CoordMode is per-THREAD
-        hwnd := 0
-        try {
-            MouseGetPos(, , &hwnd)
-        }
-        if (!hwnd || g_OurHwnds.Has(hwnd)) {
-            HUD("Dropped nowhere — release over a window", "warn")
-            return
-        }
-        Shelf.SetClip(text)
-        try {
-            WinActivate("ahk_id " hwnd)
-            if !WinWaitActive("ahk_id " hwnd, , 1)
-                return                       ; never paste into the wrong window
-            Sleep(40)
-            Click(x " " y)               ; v2 Click takes ONE options string
-            Sleep(40)
-            SafeSend("^v")
-        }
-    }
-
-    ; ── actions ─────────────────────────────────────────────────────────────
-
-    static SetClip(text) {
-        global g_ClipMine
-        g_ClipMine := A_TickCount            ; so ClipChanged ignores this one
-        A_Clipboard := text
-        ClipWait(1, 1)
-    }
-
-    /** Paste into the window we were summoned over. */
-    static Use(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        text := Shelf.items[i]
-        win := Shelf.prevWin
-        Shelf.Close()
-        Shelf.SetClip(text)
-        if (!win || !WinExist("ahk_id " win)) {
-            HUD("Copied — no window to paste into", "warn")
-            return
-        }
-        try {
-            WinActivate("ahk_id " win)
-            if !WinWaitActive("ahk_id " win, , 1)
-                return
-            Sleep(40)
-            SafeSend("^v")
-        }
-    }
-
-    static CopyOnly(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        Shelf.SetClip(Shelf.items[i])
-        Shelf.Close()
-        HUD("Copied to clipboard", "jade")
-    }
-
-    static ToScratch(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        Shelf.AddSnippet(Shelf.items[i])
-        Shelf.Paint()
-        HUD("Saved to scratchpad", "jade")
-    }
-
-    static AddSnippet(text) {
-        text := Trim(text)
-        if (text = "")
-            return
-        if !g_Cfg.Has("snippets")
-            g_Cfg["snippets"] := []
-        for s in g_Cfg["snippets"] {
-            if SameText(s, text)
-                return                       ; already there
-        }
-        g_Cfg["snippets"].InsertAt(1, text)
-        if !Atlas.SaveOrWarn()
-            HUD("Applied for now — not written to disk", "danger")
-    }
-
-    static AddFromClip() {
-        try {
-            Shelf.AddSnippet(A_Clipboard)
-        }
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Paint()
-    }
-
-    /**
-     * Pull the current selection out of the window we were summoned over.
-     * This is the "drag something INTO the shelf" gesture, done the way that
-     * works in every one of these applications: activate, Ctrl+C, read it.
-     */
-    static GrabSelection() {
-        win := Shelf.prevWin
-        if (!win || !WinExist("ahk_id " win)) {
-            HUD("No window to grab from", "warn")
-            return
-        }
-        Shelf.Close()
-        try {
-            WinActivate("ahk_id " win)
-            if !WinWaitActive("ahk_id " win, , 1) {
-                HUD("Could not focus that window", "warn")
-                return
-            }
-            Sleep(40)
-            ; ClipWait is true the moment the clipboard holds ANY text, so
-            ; with nothing selected it returns on whatever was there before
-            ; -- and that went straight into the config file on disk. Empty
-            ; the clipboard first: then only a copy that actually happened
-            ; can satisfy the wait. The user's clipboard is put back.
-            before := ClipboardAll()         ; every format: an image copied
-            A_Clipboard := ""                ; from PACS must survive a grab
-            SafeSend("^c")
-            if !ClipWait(1, 0) {
-                A_Clipboard := before
-                HUD("Nothing was selected", "warn")
-                return
-            }
-            got := A_Clipboard
-            A_Clipboard := before
-            Shelf.AddSnippet(got)
-            HUD("Selection saved to scratchpad", "jade")
-        }
-    }
-
-    static DeleteSel() {
-        i := Shelf.sel
-        if (Shelf.kind != "scratch" || i < 1 || i > Shelf.items.Length)
-            return
-        ; A snippet is typed once and kept for months; deleting it was one
-        ; keypress with no question and no undo. Show what is about to go.
-        gone := g_Cfg["snippets"][i]
-        head := (StrLen(gone) > 80) ? SubStr(gone, 1, 80) "…" : gone
-        if !Atlas.Confirm("Delete this snippet?`n`n" head)
-            return
-        g_Cfg["snippets"].RemoveAt(i)
-        ok := Atlas.SaveOrWarn()
-        Shelf.sel := Max(1, Min(i, g_Cfg["snippets"].Length))
-        Shelf.top := 1
-        Shelf.Paint()
-        HUD(ok ? "Snippet deleted" : "Applied for now — not written to disk",
-            ok ? "magenta" : "danger")
-    }
-
-    /** Clipboard list only -- the scratchpad is deleted a row at a time. */
-    static ClearAll() {
-        global g_Clip
-        if (Shelf.kind != "clip")
-            return
-        g_Clip := []
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Paint()
-        HUD("Clipboard history cleared", "magenta")
     }
 }
 

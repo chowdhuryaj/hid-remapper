@@ -3,7 +3,7 @@ from pathlib import Path
 from collections import Counter
 import re
 s = (Path(__file__).parents[1] / 'RadMapper.ahk').read_text(encoding='utf-8-sig')
-for name, end in [('Lumi', 'Atlas'), ('Atlas', 'Shelf')]:
+for name, end in [('Lumi', 'Atlas'), ('Atlas', 'Chooser')]:
     part = s[s.index('class ' + name + ' {'):s.index('class ' + end + ' {')]
     members = re.findall(r'^    static (\w+)\s*(?:\(|:=)', part, re.M)
     assert not [n for n, count in Counter(m.lower() for m in members).items() if count > 1], name
