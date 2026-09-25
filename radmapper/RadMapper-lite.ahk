@@ -8525,20 +8525,9 @@ Init() {
     ; so it was a false alarm on every launch.)
     TrayTip("Running (lite build). Double-click the tray icon or press "
         . Cfg("hkGui") " to edit the config file.", "RadMapper " RM_VERSION)
-    ; FIRST RUN (v0.6): a colleague who was handed this file should not have
-    ; to find the tray icon. The first launch of each version opens the
-    ; settings window on its Home page; every later launch stays quiet.
-    if (Cfg("welcomedVer") != RM_VERSION) {
-        CfgSet("welcomedVer", RM_VERSION)
-        try SaveCfg()
-        SetTimer(FirstRunOpen, -800)
-    }
+    ; LITE: no first-run window (the full build's welcomedVer is left alone).
 }
 
-; LITE: no welcome window; the launch TrayTip says where settings are.
-FirstRunOpen(*) {
-    return
-}
 
 ; ONE RADMAPPER PER MACHINE, whatever the file is called or where it lives.
 ; #SingleInstance only recognises the SAME script path, so RadMapper.ahk in
@@ -8577,11 +8566,17 @@ SingleCopyGuard() {
 ;  the value it has when that window is not open, and a static __Call /
 ;  __Get catch-all answers "" for anything else instead of throwing.
 
-; A feature that needs drawing was asked for: say so on the HUD every time,
-; and log it to Diagnostics once per feature per session.
+; A feature that needs drawing was asked for: say so on the HUD (at most once
+; a second per feature -- a wheel spin bound to the switcher would otherwise
+; redraw the tooltip on every notch from the wheel's Critical thread), and
+; log it to Diagnostics once per feature per session.
 LiteNA(key, what) {
-    static told := Map()
-    HUD(what " is not available in the lite build", "warn")
+    static told := Map(), shown := Map()
+    now := A_TickCount
+    if (!shown.Has(key) || now - shown[key] > 1000 || now < shown[key]) {
+        shown[key] := now
+        HUD(what " is not available in the lite build", "warn")
+    }
     if !told.Has(key) {
         told[key] := 1
         Problem("lite", what " was requested; it needs the graphics library,"

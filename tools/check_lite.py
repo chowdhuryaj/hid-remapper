@@ -29,10 +29,11 @@ import pathlib
 import re
 import sys
 
+sys.dont_write_bytecode = True               # no tools/__pycache__ litter
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from ahk_lex import (code_lines, top_units, swallowed_headers, unit_scope,  # noqa: E402
-                     references, _decl_names, ASSIGN)
+                     references, _decl_names, _split_top, _match_paren, ASSIGN)
 
 ROOT = HERE.parent
 SRC = ROOT / "radmapper" / "RadMapper.ahk"
@@ -40,7 +41,7 @@ LITE = ROOT / "radmapper" / "RadMapper-lite.ahk"
 
 STUBS = ["Atlas", "Lumi", "Chooser", "Warp"]
 # Built-ins the lite build's own code uses that the full engine never did.
-EXTRA_BUILTINS = {"notepad"}
+EXTRA_BUILTINS = set()
 
 
 class Model:
@@ -107,6 +108,58 @@ def stub_members(lite, name):
         if m:
             members[m.group(1).lower()] = "method" if m.group(2) == "(" else "value"
     return members
+
+
+def param_counts(params):
+    """(min, max) arguments for a parameter list; max None = variadic."""
+    parts = [p.strip() for p in _split_top(params) if p.strip()]
+    lo = hi = 0
+    for p in parts:
+        if p.endswith("*"):
+            return lo, None
+        hi += 1
+        if ":=" not in p and not p.endswith("?"):
+            lo = hi
+    return lo, hi
+
+
+def check_arity(model):
+    """AutoHotkey v2 rejects, at load time, a direct call to a known function
+    with too few or too many arguments. Check every such call."""
+    sig = {n: param_counts(u.params) for n, u in model.defs.items() if u.kind == "func"}
+    problems = []
+    count = 0
+    for u in model.units:
+        loc = model.scopes[id(u)]
+        joined = "\n".join(model.code[u.start:u.end + 1])
+        first = True
+        for m in re.finditer(r"(?<![\w.$#@%])([A-Za-z_]\w*)\(", joined):
+            low = m.group(1).lower()
+            if low not in sig or low in loc:
+                continue
+            if first and u.kind == "func" and low == u.name.lower() and m.start() == 0:
+                first = False                # the definition header itself
+                continue
+            end = _match_paren(joined, m.end() - 1)
+            if end < 0:
+                continue
+            inner = joined[m.end():end]
+            args = [a for a in _split_top(inner)]
+            if len(args) == 1 and not args[0].strip():
+                args = []
+            if any(a.strip().endswith("*") for a in args):
+                continue                     # spread call: unknown count
+            after = joined[end + 1:].lstrip()
+            if after.startswith("{") or after.startswith("=>"):
+                continue                     # a nested definition, not a call
+            lo, hi = sig[low]
+            count += 1
+            n = len(args)
+            if n < lo or (hi is not None and n > hi):
+                line = u.start + joined[:m.start()].count("\n") + 1
+                problems.append(f"line {line}: {m.group(1)}() called with {n} argument(s); "
+                                f"it takes {lo}-{'any' if hi is None else hi}")
+    return problems, count
 
 
 def main(argv):
@@ -208,6 +261,23 @@ def main(argv):
         info.append("(c) every stub member the lite code uses is defined explicitly"
                     " (the __Call/__Get catch-alls are a safety net only)")
 
+    # (g) load-time rules AutoHotkey v2 enforces --------------------------
+    seen_defs = {}
+    for u in lite.units:
+        if u.kind in ("func", "class"):
+            low = u.name.lower()
+            if low in seen_defs:
+                bad("g", f"{u.name} defined twice (lines {seen_defs[low] + 1} and {u.start + 1})")
+            seen_defs[low] = u.start
+    for g in sorted(lite.globals & set(lite.defs)):
+        if any(u.kind in ("global", "assign") and (u.name or "").lower() == g for u in lite.units):
+            bad("g", f"global variable {g} has the name of a function/class")
+    arity_bad, ncalls = check_arity(lite)
+    for msg in arity_bad:
+        bad("g", msg)
+    info.append(f"(g) no duplicate definitions; {ncalls} direct calls to script functions"
+                " match the parameter counts")
+
     # (d) entry point ------------------------------------------------------
     tail = [c.strip() for c in lite.code if c.strip()][-2:]
     if tail != ["if !IsSet(RM_TEST)", "Init()"]:
@@ -268,7 +338,7 @@ def main(argv):
                 f" GUI used to call; harmless): {', '.join(dead)}")
 
     lines = lite_text.count("\n")
-    print(f"check_lite: {LITE.relative_to(ROOT)}: {lines} lines "
+    print(f"check_lite: {LITE.name}: {lines} lines "
           f"(full build {SRC.read_text(encoding='utf-8').count(chr(10))})")
     for i in info:
         print("check_lite:", i)

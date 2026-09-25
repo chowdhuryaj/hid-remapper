@@ -24,6 +24,7 @@ import pathlib
 import re
 import sys
 
+sys.dont_write_bytecode = True               # no tools/__pycache__ litter
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from ahk_lex import code_lines, top_units, BANNER  # noqa: E402
@@ -93,6 +94,8 @@ REMOVE_UNITS = [
     ("func", "AppDlg"),
     ("func", "AppOk"),
     ("func", "AppDelete"),
+    # §12: the first-run welcome opened the settings window
+    ("func", "FirstRunOpen"),
 ]
 
 # Units whose whole text (and comment block above) is replaced. The new
@@ -256,12 +259,6 @@ BuildTray() {
     UpdateTray()
 }
 ''',
-    ("func", "FirstRunOpen"): r'''
-; LITE: no welcome window; the launch TrayTip says where settings are.
-FirstRunOpen(*) {
-    return
-}
-''',
 }
 
 # Exact-text edits inside kept units: (unique old text, new text).
@@ -270,6 +267,17 @@ TEXT_EDITS = [
      '        . " for settings.", "RadMapper " RM_VERSION)',
      'TrayTip("Running (lite build). Double-click the tray icon or press "\n'
      '        . Cfg("hkGui") " to edit the config file.", "RadMapper " RM_VERSION)'),
+    # no welcome window, and welcomedVer stays the full build's business (a
+    # lite stamp "x.y.z lite" would make the full build welcome again)
+    ('    ; FIRST RUN (v0.6): a colleague who was handed this file should not have\n'
+     '    ; to find the tray icon. The first launch of each version opens the\n'
+     '    ; settings window on its Home page; every later launch stays quiet.\n'
+     '    if (Cfg("welcomedVer") != RM_VERSION) {\n'
+     '        CfgSet("welcomedVer", RM_VERSION)\n'
+     '        try SaveCfg()\n'
+     '        SetTimer(FirstRunOpen, -800)\n'
+     '    }\n',
+     '    ; LITE: no first-run window (the full build\'s welcomedVer is left alone).\n'),
 ]
 
 LITE_SECTION = r'''
@@ -284,11 +292,17 @@ LITE_SECTION = r'''
 ;  the value it has when that window is not open, and a static __Call /
 ;  __Get catch-all answers "" for anything else instead of throwing.
 
-; A feature that needs drawing was asked for: say so on the HUD every time,
-; and log it to Diagnostics once per feature per session.
+; A feature that needs drawing was asked for: say so on the HUD (at most once
+; a second per feature -- a wheel spin bound to the switcher would otherwise
+; redraw the tooltip on every notch from the wheel's Critical thread), and
+; log it to Diagnostics once per feature per session.
 LiteNA(key, what) {
-    static told := Map()
-    HUD(what " is not available in the lite build", "warn")
+    static told := Map(), shown := Map()
+    now := A_TickCount
+    if (!shown.Has(key) || now - shown[key] > 1000 || now < shown[key]) {
+        shown[key] := now
+        HUD(what " is not available in the lite build", "warn")
+    }
     if !told.Has(key) {
         told[key] := 1
         Problem("lite", what " was requested; it needs the graphics library,"

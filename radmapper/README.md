@@ -114,3 +114,49 @@ with a temporary config. It installs no bindings.
 
 See `SECOND-PASS.md` for the second-pass findings and remaining Windows checks,
 and the changelog at the top of `RadMapper.ahk` for everything since 0.5.2.
+
+## Lite build (no graphics)
+
+`RadMapper-lite.ahk` is the same engine without the vendored GpGFX graphics
+library -- about 8,600 lines instead of about 29,000. It is **generated**
+from `RadMapper.ahk`; never edit it by hand.
+
+**What it keeps:** everything the engine does -- config load/save/migration
+(the same `%APPDATA%\RadMapper\RadMapperConfig.json`), the mouse and keyboard
+hooks, layers, PowerScribe/PACS delivery, macros, window layouts, stations
+and window placement, follow focus and park spots, click lock, pass-through,
+the watchdog, panic, pause, the Settings hotkeys and the Diagnostics log.
+
+**What it lacks:**
+
+- The settings window. Tray > **Open config file…** (also the Settings
+  hotkey, a double-click on the tray icon, or a "guiopen" action) opens the
+  config JSON in Notepad: edit, save, then tray > **Reload config**. A file
+  with a mistake is not loaded -- the engine keeps its settings and says
+  what is wrong.
+- The keyboard pointer, the window switcher and the layout chooser (a
+  "layout" action with no layout name). They show "not available in the lite
+  build" and log it once in Diagnostics. A layout action that names a
+  layout still applies it.
+- The teleport flash and focus ring (the pointer still moves), and the
+  rendering self-test.
+- The toasts: messages are a small tooltip in the HUD corner for 1.5 s.
+
+Tray menu: Open config file, Reload config, Copy diagnostics (the text the
+Diagnostics page would copy), Test my mouse, Enabled (untick to pause),
+Panic release, Reload script, Exit. Run the lite build **or** `RadMapper.ahk`,
+not both: they share the config and the one-copy lock.
+
+**Regenerate it** after any change to `RadMapper.ahk` (Python 3, any OS):
+
+```sh
+python3 tools/build_lite.py
+```
+
+This rewrites `RadMapper-lite.ahk` and then runs `tools/check_lite.py`, which
+checks that nothing references a removed class or function, that every
+function is balanced, that each stand-in class (Atlas, Lumi, Chooser, Warp)
+defines what the engine reads from it, that every kept engine function is
+unchanged, and that the file ends with the `Init()` entry point. The build
+stops with a message naming the anchor if `RadMapper.ahk` changed in a way it
+does not know about; teach `tools/build_lite.py` about the change and rerun.
