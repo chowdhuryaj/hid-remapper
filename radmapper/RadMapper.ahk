@@ -6002,6 +6002,12 @@ FollowTick(*) {
         return
     if HandBusy()
         return
+    ; A PowerScribe/PACS delivery holds the foreground for a moment and
+    ; hands it back: adopt the window instead of warping to it and back.
+    if (g_PSBusy || g_PSQueue.Length) {
+        g_FollowLast := hwnd
+        return
+    }
     ; 3. our own windows: the settings GUI and the toast are not destinations
     if (g_OurHwnds.Has(hwnd) || OwnWindowAt(hwnd))
         return
@@ -6133,9 +6139,11 @@ FocusSignal(x, y) {
 
 ; --- monitor teleport ---------------------------------------------------------
 DoTeleport(v) {
-    if (v = "prev" || v = "-1" || v = "left" || v = "l")
+    ; == on the signed forms: "1" = "+1" is a NUMERIC compare in v2, so
+    ; screen 1 used to mean "next screen".
+    if (v = "prev" || v == "-1" || v = "left" || v = "l")
         TeleportMonitor(-1)                  ; monitors are ordered by X, so
-    else if (v = "next" || v = "+1" || v = "right" || v = "r")
+    else if (v = "next" || v == "+1" || v = "right" || v = "r")
         TeleportMonitor(1)                   ; prev/next = left/right
     else if IsInteger(v)
         TeleportToIndex(Integer(v))
@@ -8249,8 +8257,15 @@ PSSendAtomic(keys) {
 ; BOUNDED: after PS_DEFER_MS of continuous deferral the keys go out anyway.
 PSDeferForButtons(entry) {
     global g_PSQueue
-    static since := 0
+    static since := 0, sinceGen := -1
     static PS_DEFER_MS := 1500
+    ; A deferral the queue was dropped under (panic, pause) must not leave
+    ; its start time behind: the next delivery during a click would read
+    ; it as "waited long enough" and send straight through the click.
+    if (sinceGen != g_PSGen) {
+        since := 0
+        sinceGen := g_PSGen
+    }
     gen := g_PSGen
     held := false
     for b in BUTTONS {
@@ -8338,18 +8353,10 @@ AppDeliverNow(appName, keys) {
         try WinActivate(win)                     ; foreground lock: one retry
         if !WinWaitActive(win, , 0.5) {
             if (g_PSGen = gen && WinExist(win)) {
-                ; Best effort, and NOT a delivery. ControlSend posts to a
-                ; window's message queue; a WPF application (PowerScribe One,
-                ; and the WPF parts of the viewer) routes keyboard input
-                ; through its own focus manager and ignores a posted message
-                ; aimed at the HWND. So this may land and may do nothing at
-                ; all, and the old wording -- "key delivered in background" --
-                ; told the reader the keystroke had arrived when the usual
-                ; outcome is that it did not.
-                try ControlSend(keys, , win)
+                ; No ControlSend fallback: WPF drops posted keys, and a
+                ; modifier sent that way can stick in the active window.
                 Problem("app-blocked", appName " would not come forward;"
-                    . " background delivery attempted (ControlSend is"
-                    . " unreliable in WPF and may have done nothing)")
+                    . " keys not sent: " keys)
                 HUD(appName " would not come forward — press it again", "warn")
             }
             return
@@ -8361,10 +8368,21 @@ AppDeliverNow(appName, keys) {
         return
     }
     Sleep(50)
-    PSSendAtomic(keys)
+    ; The thread is interruptible across the waits above: a click back into
+    ; the viewer in that moment must not receive the keys.
+    Critical "On"
+    ok := (g_PSGen = gen) && WinActive(psWin)
+    if ok
+        PSSendAtomic(keys)
+    Critical "Off"
+    if !ok {
+        Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        return
+    }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        try WinActivate("ahk_id " prev)
+        if WinActive(psWin)                    ; not if the user has moved on
+            try WinActivate("ahk_id " prev)
     }
 }
 
@@ -8416,12 +8434,13 @@ HandBusy() {
 }
 
 PSDrain() {
-    global g_PSBusy, g_PSQueue, g_PSDefer
+    global g_PSBusy, g_PSQueue, g_PSDefer, g_PSGen
     if g_PSBusy
         return
     if !g_Enabled {                          ; paused: input is native, and
         g_PSQueue := []                      ; nothing of ours may land in
         g_PSDefer := 0                       ; the study
+        g_PSGen += 1
         return
     }
     ; Never activate another window or send keys under the user's hand -- a
@@ -8487,14 +8506,10 @@ PSDeliverNow(keys) {
         try WinActivate(psWin)                   ; foreground lock: one retry
         if !WinWaitActive(psWin, , 0.5) {
             if (g_PSGen = gen && WinExist(psWin)) {
-                ; Last resort, and best effort ONLY -- see AppDeliverNow:
-                ; PowerScribe is WPF, so a posted keystroke is very likely to
-                ; be dropped by its focus manager. Attempt it, then tell the
-                ; truth: the window would not come forward.
-                try ControlSend(keys, , psWin)
+                ; No ControlSend fallback: WPF drops posted keys, and a
+                ; modifier sent that way can stick in the active window.
                 Problem("ps-blocked", "PowerScribe would not come forward;"
-                    . " background delivery attempted (ControlSend is"
-                    . " unreliable in WPF and may have done nothing)")
+                    . " keys not sent: " keys)
                 HUD("PowerScribe would not come forward — press it again",
                     "warn")
             }
@@ -8507,10 +8522,21 @@ PSDeliverNow(keys) {
         return
     }
     Sleep(50)
-    PSSendAtomic(keys)
+    ; The thread is interruptible across the waits above: a click back into
+    ; the viewer in that moment must not receive the keys.
+    Critical "On"
+    ok := (g_PSGen = gen) && WinActive(win)
+    if ok
+        PSSendAtomic(keys)
+    Critical "Off"
+    if !ok {
+        Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        return
+    }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        try WinActivate("ahk_id " prev)
+        if WinActive(win)                    ; not if the user has moved on
+            try WinActivate("ahk_id " prev)
     }
 }
 
@@ -8539,8 +8565,7 @@ FocusApp(name) {
             crit := MatchCrit(m)
             if WinExist(crit) {
                 try WinActivate(crit)
-                WinWaitActive(crit, , 1)
-                return true
+                return WinWaitActive(crit, , 1) ? true : false
             }
         }
     }
@@ -8583,13 +8608,23 @@ RunMacro(name, *) {
                     PSMacroSync()
                 case "pskeys":
                     PSFire(v)
+                    PSMacroSync()
                 case "pacskeys":
                     PACSFire(v)
                     PSMacroSync()
                 case "focus":
-                    FocusApp(v)
+                    ; the next step would type into whatever IS in front
+                    if !FocusApp(v) {
+                        Problem("macro-focus", "Macro " name ": could not focus " v)
+                        HUD("Macro stopped: " v " would not come forward", "warn")
+                        break
+                    }
                 case "run":
                     try Run(v)
+                    catch as e {
+                        Problem("run", "Run failed: " v " — " e.Message)
+                        HUD("Could not start: " v, "warn")
+                    }
                 case "teleport":
                     DoTeleport(v)
                 case "tooltip":
@@ -9257,9 +9292,11 @@ PanicSnapshot() {
 }
 
 ToggleEnabled() {
-    global g_Enabled, g_PSQueue, g_PSGen
+    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy
     g_Enabled := !g_Enabled
     if !g_Enabled {
+        g_MacroGen += 1                      ; a running macro stops too
+        g_MacroBusy := false
         ForceReleaseActive()                 ; nothing may stay down once hooks drop
         g_PSQueue := []                      ; and nothing may still be on its
         g_PSGen += 1                         ; way into the study: queued
@@ -9308,8 +9345,11 @@ PanicRelease() {
             try SendNativeUp(st.passBtn != "" ? st.passBtn : name)
     }                                        ; the blanket list above is mouse
                                              ; + modifiers only
-    for name, st in g_BS.Clone()
+    AppSwitchClose(false)                    ; panic never commits a switch, and
+    for name, st in g_BS.Clone() {           ; a switcher left up would disable
+        st.down := false                     ; the watchdog until Esc
         ClearBS(name)
+    }
     g_ClickLock := 0                         ; the blanket Up above released it
     ClickLockWatchStop()                     ; and its watcher must not outlive it
     ScrollPtrStop()
@@ -18476,7 +18516,8 @@ class Warp {
     static StartHook() {
         Warp.StopHook()
         ih := InputHook()
-        ih.VisibleText := false
+        ih.MinSendLevel := 1                 ; our own sends (ps_next's Tab)
+        ih.VisibleText := false              ; reach their app, not the grid
         ih.VisibleNonText := false
         ih.KeyOpt("{All}", "N")
         ih.KeyOpt("{LShift}{RShift}{LCtrl}{RCtrl}{LAlt}{RAlt}{LWin}{RWin}", "V")
