@@ -40,6 +40,8 @@
 ; silently REMOVES the hook -- typing lag, then dead remaps. Past 150 ms the
 ; press simply goes through natively.
 #HotIfTimeout 150
+ListLines 0                 ; no per-line history on the hot paths
+KeyHistory 0                ; nor a key log
 SendMode "Event"            ; Event + zero delays: injected input flows through
 SetKeyDelay -1, -1          ; our own hooks (and is ignored by them) without
 SetMouseDelay -1            ; SendInput's temporary hook removal
@@ -903,20 +905,30 @@ AppCodeFromDisp(label) {
     return (label = "Global (all apps)") ? "*" : label
 }
 
+; Lookups run several times per input event: case-insensitive Maps, built
+; on first use (CaseSense must be set while a Map is still empty).
 IsWheel(code) {
-    for wh in WHEELS {
-        if (wh = code)
-            return true
+    static m := 0
+    if !m {
+        m := Map()
+        m.CaseSense := "Off"
+        for w in WHEELS
+            m[w] := 1
     }
-    return false
+    return !IsObject(code) && m.Has(code)
 }
 
 IsMouseInput(code) {
-    for b in BUTTONS {
-        if (b = code)
-            return true
+    static m := 0
+    if !m {
+        m := Map()
+        m.CaseSense := "Off"
+        for b in BUTTONS
+            m[b] := 1
+        for w in WHEELS
+            m[w] := 1
     }
-    return IsWheel(code)
+    return !IsObject(code) && m.Has(code)
 }
 
 ; Any referenced input that is not one of the five mouse buttons or four wheel
@@ -1012,13 +1024,16 @@ KeyTwin(name) {
         "Numpad3", "NumpadPgDn", "Numpad4", "NumpadLeft", "Numpad5", "NumpadClear",
         "Numpad6", "NumpadRight", "Numpad7", "NumpadHome", "Numpad8", "NumpadUp",
         "Numpad9", "NumpadPgUp", "NumpadDot", "NumpadDel")
-    for a, b in twins {
-        if (a = name)
-            return b
-        if (b = name)
-            return a
+    static t := 0
+    if !t {
+        t := Map()
+        t.CaseSense := "Off"
+        for a, b in twins {
+            t[a] := b
+            t[b] := a
+        }
     }
-    return ""
+    return (!IsObject(name) && t.Has(name)) ? t[name] : ""
 }
 
 ; The name a twin pair is STORED under, so one physical key is one row
@@ -1028,11 +1043,14 @@ CanonicalInputName(name) {
         "NumpadDown", "Numpad2", "NumpadPgDn", "Numpad3", "NumpadLeft", "Numpad4",
         "NumpadClear", "Numpad5", "NumpadRight", "Numpad6", "NumpadHome", "Numpad7",
         "NumpadUp", "Numpad8", "NumpadPgUp", "Numpad9", "NumpadDel", "NumpadDot")
-    for a, b in primary {
-        if (a = name)
-            return b
+    static p := 0
+    if !p {
+        p := Map()
+        p.CaseSense := "Off"
+        for a, b in primary
+            p[a] := b
     }
-    return name
+    return (!IsObject(name) && p.Has(name)) ? p[name] : name
 }
 
 ; Every hotkey name one bound input must be registered under.
@@ -2751,6 +2769,11 @@ AimFg(binding, ctx) {
         && DllCall("GetAncestor", "ptr", fg, "uint", 3, "ptr")
          = DllCall("GetAncestor", "ptr", win, "uint", 3, "ptr"))
         return true
+    if DllCall("user32\IsHungAppWindow", "ptr", win) {
+        Problem("aim", AppDisp(app) " is not responding; not sent: "
+            . DescribeAction(binding["action"]))
+        return false
+    }
     try WinActivate("ahk_id " win)
     if WinWaitActive("ahk_id " win, , 0.15)
         return true
@@ -2817,7 +2840,7 @@ MatchScore(row, ctx, checkLayer := true, checkMods := true) {
 ; Best binding for (button, event) in ctx, or 0. Later rows win score ties so
 ; the GUI list order acts as a natural tiebreaker (index arrays keep config
 ; order, so >= preserves that exactly).
-FindBindingFor(btn, event, ctx) {
+FindBindingFor(btn, event, ctx, &score := -1) {
     k := btn "|" event
     if !g_Idx.bind.Has(k)
         return 0
@@ -2832,6 +2855,7 @@ FindBindingFor(btn, event, ctx) {
             best := row
         }
     }
+    score := bestScore
     return best
 }
 
@@ -2855,13 +2879,13 @@ LayerHostExists(btn, ctx) {
 ; Everything the state machine needs to know about btn in ctx, precomputed at
 ; press time so per-event work stays tiny.
 SpecFor(btn, ctx) {
-    tap     := FindBindingFor(btn, "tap", ctx)
-    hold    := FindBindingFor(btn, "hold", ctx)
+    ts := -1, hs := -1
+    tap     := FindBindingFor(btn, "tap", ctx, &ts)
+    hold    := FindBindingFor(btn, "hold", ctx, &hs)
     ; A MORE SPECIFIC "Pass through" (or a tap "Block it") carves the whole
     ; INPUT out of the less specific rows of the other event: a PACS stock
     ; tap used to leave a global hold live in PACS (v0.7.2).
     if (IsObject(tap) && IsObject(hold)) {
-        ts := MatchScore(tap, ctx), hs := MatchScore(hold, ctx)
         tt := tap["action"]["type"], ht := hold["action"]["type"]
         if (ts > hs && (tt = "stock" || tt = "none"))
             hold := 0
@@ -3122,12 +3146,17 @@ WinClassOf(hwnd) {
 ; brought ours to the front) otherwise lost its release, leaving the layer
 ; armed or the state "down" until the watchdog's 30 s cap.
 ; The input a hotkey name is for: "*XButton1 Up" -> "XButton1".
-HkInput(hk) => CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$"))
+HkInput(hk) {
+    static memo := Map()                     ; a finite set of hotkey names
+    if !memo.Has(hk)
+        memo[hk] := CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$"))
+    return memo[hk]
+}
 
 UpOwned(hk) {
     if (SubStr(hk, -3) != " Up")
         return false
-    s := BS(CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$")))
+    s := BS(HkInput(hk))
     return (s && s.down) ? true : false
 }
 
@@ -3187,7 +3216,7 @@ HookActive(hk) {
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
-    if (IsObject(g_Bypass) && BypassFor(b := HkInput(hk))
+    if (IsObject(g_Bypass) && BypassFor(b := inp)
         && !((s := BS(b)) && s.down))
         return 0
     ours := false
@@ -3239,7 +3268,7 @@ KbHookActive(hk) {
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
-    if (IsObject(g_Bypass) && BypassFor(b := HkInput(hk))
+    if (IsObject(g_Bypass) && BypassFor(b := inp)
         && !((s := BS(b)) && s.down))
         return 0
     try return (OwnGuiActive() || GateNative(inp)) ? 0 : 1
@@ -3328,7 +3357,8 @@ OnPressHK(btn, *) {
     ; over PowerScribe must not go native just because Settings was last
     ; focused.
     if (g_Enabled && fgOurs && !ours && uw && !isKey) {
-        try WinActivate("ahk_id " uw)
+        if !DllCall("user32\IsHungAppWindow", "ptr", uw)
+            try WinActivate("ahk_id " uw)
         fgOurs := false
     }
     if (!g_Enabled || fgOurs || ours || (BypassFor(btn) && !rep)) {
@@ -3895,9 +3925,15 @@ OnWheelHK(wh, *) {
     ; FOREGROUND, so give it to the window being scrolled first (as a press
     ; does), or {Down} lands in a RadMapper list.
     if (!tilt && OwnGuiActive()) {
+        ; once per window per half second, never a hung one: a notch stream
+        ; retrying a refused activation at 100+/s would couple us to it
+        static lastUw := 0, lastAt := 0
         uw := RM_WinAt()
-        if uw
+        if (uw && !(uw = lastUw && A_TickCount - lastAt < 500)
+            && !DllCall("user32\IsHungAppWindow", "ptr", uw)) {
+            lastUw := uw, lastAt := A_TickCount
             try WinActivate("ahk_id " uw)
+        }
     }
     ; no turn binding exists for this wheel in ANY context -> nothing to
     ; resolve (v0.3: a wheel is only ever hooked when a row references it,
@@ -8181,13 +8217,18 @@ HookFrontTick(*) {
     static lastHwnd := 0, lastAt := 0, logged := false
     if !g_Enabled
         return
+    static lastNot := 0                      ; a window already seen not PACS
     fg := FgHwnd()
+    if (fg = lastNot)                        ; an hwnd's exe never changes
+        return
     exe := ""
     try exe := WinGetProcessName("ahk_id " fg)
     if (exe != "IntelliSpacePACSRadiology.exe") {
         lastHwnd := 0
+        lastNot := fg
         return
     }
+    lastNot := 0
     now := A_TickCount
     ; ONCE each time PACS comes to the front. Every reinstall drops the
     ; keystrokes in its gap and wipes the physical key table; doing it every
@@ -16747,7 +16788,7 @@ class Atlas {
         }
         sig := (g_Enabled ? "1" : "0") (IsObject(g_Bypass) ? "B" : "")
             . (IsObject(g_ClickLock) ? g_ClickLock.held : "")
-            . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length "|" g_CfgSaveFailed
+            . ActiveAppName() "|" CurrentLayerDisp() "|" g_ProblemSeq "|" g_CfgSaveFailed
         if (sig = Atlas.lastSig)
             return
         Atlas.lastSig := sig
