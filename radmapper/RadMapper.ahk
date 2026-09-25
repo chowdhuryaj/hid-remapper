@@ -3856,6 +3856,31 @@ ModsHeld() {
     return s
 }
 
+; Inputs whose next release belongs to a pause toggle (see OnReleaseHK).
+global g_SwallowUp := Map()
+
+; A "Toggle engine pause" row on this input that applies here, or 0. Read
+; straight from the config: while paused, the index is still built but no
+; other row may fire, so only this one type is looked for.
+PauseTglRowFor(btn) {
+    app := ""
+    for row in g_Cfg["bindings"] {
+        if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl")
+            continue
+        if (CanonicalInputName(NormalizeInputName(MGet(row, "button", ""))) != btn)
+            continue
+        ra := MGet(row, "app", "*")
+        if (ra != "*") {
+            if (app = "")
+                app := IsMouseInput(btn) ? AppNameAt(RM_WinAt()) : ActiveAppName()
+            if (ra != app)
+                continue
+        }
+        return row
+    }
+    return 0
+}
+
 ; Snapshot of everything a lookup needs. held = mapped buttons physically down.
 ; btn = the input being resolved: a MOUSE input (button or wheel) is scoped
 ; by the window under the pointer, a key by the foreground window (v0.7.2).
@@ -4315,6 +4340,17 @@ OnPressHK(btn, *) {
     if (ours)                                ; HotIf should have kept this native;
         Problem("hookmiss", "hooked click over our own window ("
             . WinClassOf(uw) ") -- HotIf gate missed it")   ; if we got here it didn't
+    ; Paused: the one thing a hooked input can still do is resume.
+    if (!g_Enabled && PauseTglRowFor(btn)) {
+        ClearBS(btn)
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        g_SwallowUp[btn] := 1
+        SetTimer(ToggleEnabled, -1)
+        return
+    }
     if (!g_Enabled || fgOurs || ours) {
         if (ours && !fgOurs) {
             ; fallback: click on our own window while another app holds the
@@ -4664,6 +4700,11 @@ MovePoll(btn, pollId, *) {
 OnReleaseHK(btn, *) {
     Critical "On"
     TestNotify(btn, 0)
+    if g_SwallowUp.Has(btn) {                ; the release of a pause toggle
+        g_SwallowUp.Delete(btn)
+        ClearBS(btn)
+        return
+    }
     ; A key whose PRESS was handed to the keyboard pointer must not emit a
     ; native Up here -- and "is Warp still up?" is the wrong test for that.
     ; The press that CLOSES the overlay (Esc, Space, R/M/F, V) sets
@@ -5260,6 +5301,12 @@ ActionFire(binding, st) {
         case "guiopen":
             ShowMain()
         case "pausetgl":
+            ; Pausing clears every state, so this press's release would find
+            ; none and send a lone native Up (a Back click on button 4).
+            ; Only while it is still down: a tap fired AT release has no
+            ; release left to swallow, and would eat the next one.
+            if (IsObject(st) && st.HasProp("btn") && st.down)
+                g_SwallowUp[st.btn] := 1
             ToggleEnabled()
         case "none":
             return
@@ -8771,6 +8818,13 @@ SyncHooks() {
                 }
             }
         }                                    ; the layer
+    } else {
+        ; v0.7.2: a "Toggle engine pause" row is a TOGGLE, so its input stays
+        ; hooked while paused -- otherwise it could pause but never resume.
+        for row in g_Cfg["bindings"] {
+            if (MGet(MGet(row, "action", Map()), "type", "") = "pausetgl")
+                needed[CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))] := 1
+        }
     }
     ; Each Hotkey toggle is wrapped: a throw mid-reconfigure must never leave an
     ; input SUPPRESSED with no live handler (a dead/frozen click, or a keyboard
