@@ -1804,6 +1804,8 @@ ValidateCfg() {
         ; scroll, the W/L dial, the clipboard shelf, radial menus -- now a
         ; separate script). A row using one has nothing left to run it:
         ; dropped, and named in Diagnostics.
+        if (MGet(row, "app", "*") = "")      ; hand edit: "" means everywhere
+            row["app"] := "*"
         t0 := MGet(MGet(row, "action", Map()), "type", "")
         if (t0 = "sniper" || t0 = "boost" || t0 = "scrollptr"
             || t0 = "zoomptr" || t0 = "wldial") {
@@ -2363,16 +2365,12 @@ AppNameAt(hwnd) {
     d := now - g_AppAtCache.tick
     if (hwnd = g_AppAtCache.hwnd && d >= 0 && d <= 100)
         return g_AppAtCache.name
-    name := ""
-    for app in g_Cfg["apps"] {
-        for m in MGet(app, "match", []) {
-            try {
-                if WinExist(MatchCrit(m) " ahk_id " hwnd) {
-                    name := app["name"]
-                    break 2
-                }
-            }
-        }
+    name := ProfileOf(hwnd)
+    ; an owned popup with a title-only match: judge it by its owner
+    if (name = "") {
+        o := DllCall("GetAncestor", "ptr", hwnd, "uint", 3, "ptr")
+        if (o && o != hwnd)
+            name := ProfileOf(o)
     }
     g_AppAtCache.name := name
     g_AppAtCache.tick := now
@@ -2545,15 +2543,33 @@ ParkNow() {
 }
 
 RM_AppScanReal() {
+    return ProfileOf(DllCall("GetForegroundWindow", "ptr"))
+}
+
+; The profile a window belongs to. The MOST SPECIFIC match wins (a title
+; match beats an exe-only one, a class adds one), config order breaks ties:
+; a "PACS viewer" profile matched by title now wins over "PACS" by exe
+; instead of never applying because PACS was listed first (v0.7.2).
+ProfileOf(hwnd) {
+    if !hwnd
+        return ""
+    best := "", bestSc := -1
     for app in g_Cfg["apps"] {
         for m in MGet(app, "match", []) {
+            crit := MatchCrit(m)
+            sc := (SubStr(LTrim(crit), 1, 4) != "ahk_" ? 2 : 0)
+                + (InStr(crit, "ahk_class") ? 1 : 0)
+            if (sc <= bestSc)
+                continue
             try {
-                if WinActive(MatchCrit(m))
-                    return app["name"]
+                if WinExist(crit " ahk_id " hwnd) {
+                    best := app["name"]
+                    bestSc := sc
+                }
             }
         }
     }
-    return ""
+    return best
 }
 
 ; Physically-held keyboard modifiers as a "^!+#" string.
@@ -2679,16 +2695,67 @@ PauseTglRowFor(btn) {
 ; by the window under the pointer, a key by the foreground window (v0.7.2).
 CurCtx(btn := "") {
     held := []
+    layApp := ""                             ; the program a held layer host
+    layWin := 0                              ; was pressed in (v0.7.2)
     for name, st in g_BS {
         ; only a press that was resolved AS a layer host holds a layer: a
         ; plain passthrough of the same input must not satisfy layer rows
-        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost)
+        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost) {
             held.Push(name)
+            if IsObject(st.ctx) {
+                layApp := st.ctx.app
+                layWin := st.ctx.HasProp("win") ? st.ctx.win : 0
+            }
+        }
     }
-    app := !g_Idx.anyApp ? ""
-        : (btn != "" && IsMouseInput(btn)) ? AppNameAt(RM_WinAt())
-        : ActiveAppName()
-    return {app: app, mods: ModsHeld(), held: held}
+    mouse := (btn != "" && IsMouseInput(btn))
+    win := mouse ? RM_WinAt() : 0
+    app := !g_Idx.anyApp ? "" : mouse ? AppNameAt(win) : ActiveAppName()
+    return {app: app, mods: ModsHeld(), held: held, win: win,
+        layApp: layApp, layWin: layWin}
+}
+
+; Does this action deliver to the FOREGROUND window (keystrokes, a modifier,
+; a key remap) rather than to a fixed target (ps_* / pacs_keys) or the
+; pointer (a click)?
+FgDelivered(a) {
+    t := a["type"]
+    if (t = "keys" || t = "keysrepeat" || t = "text" || t = "moddrag")
+        return true
+    v := MGet(a, "value", "")
+    return IsNativeAct(t) && v != "" && IsKeyInput(v)
+}
+
+; A PROGRAM-SCOPED row fires in the window that scoped it (v0.7.2). A mouse
+; row is scoped by the window under the pointer, but keystrokes go to the
+; foreground: with PowerScribe focused and the pointer on PACS, a PACS
+; "keys r" row typed "r" into the report. Bring that window forward first
+; (a native click would have activated it anyway); if it will not come,
+; send nothing. Global rows, and key rows (scoped by the foreground), are
+; unchanged.
+AimFg(binding, ctx) {
+    app := MGet(binding, "app", "*")
+    if (app = "*" || !IsObject(ctx))
+        return true
+    win := (LayerParts(binding).Length && ctx.HasProp("layWin") && ctx.layWin)
+        ? ctx.layWin : (ctx.HasProp("win") ? ctx.win : 0)
+    if (!win || AppNameAt(win) != app)
+        return true
+    fg := DllCall("GetForegroundWindow", "ptr")
+    if (DllCall("GetAncestor", "ptr", fg, "uint", 2, "ptr") = win)
+        return true
+    ; the program's own modal is in front of it: that is where keys belong
+    if (!DllCall("IsWindowEnabled", "ptr", win)
+        && DllCall("GetAncestor", "ptr", fg, "uint", 3, "ptr")
+         = DllCall("GetAncestor", "ptr", win, "uint", 3, "ptr"))
+        return true
+    try WinActivate("ahk_id " win)
+    if WinWaitActive("ahk_id " win, , 0.15)
+        return true
+    Problem("aim", AppDisp(app) " would not come forward; not sent: "
+        . DescribeAction(binding["action"]))
+    HUD(AppDisp(app) " would not come forward — nothing sent", "warn")
+    return false
 }
 
 HeldHas(ctx, btn) {
@@ -2710,7 +2777,12 @@ MatchScore(row, ctx, checkLayer := true, checkMods := true) {
     sc := 0
     app := MGet(row, "app", "*")
     if (app != "*") {
-        if (app != ctx.app)
+        ; a LAYER row's program is the one its host was pressed in, not the
+        ; one this member is pressed in (keys follow focus, mouse the
+        ; pointer: a PACS layer failed whenever they differed)
+        cmp := (checkLayer && ctx.HasProp("layApp") && ctx.held.Length
+            && LayerParts(row).Length) ? ctx.layApp : ctx.app
+        if (app != cmp)
             return -1
         sc += 8
     }
@@ -2783,6 +2855,17 @@ LayerHostExists(btn, ctx) {
 SpecFor(btn, ctx) {
     tap     := FindBindingFor(btn, "tap", ctx)
     hold    := FindBindingFor(btn, "hold", ctx)
+    ; A MORE SPECIFIC "Pass through" (or a tap "Block it") carves the whole
+    ; INPUT out of the less specific rows of the other event: a PACS stock
+    ; tap used to leave a global hold live in PACS (v0.7.2).
+    if (IsObject(tap) && IsObject(hold)) {
+        ts := MatchScore(tap, ctx), hs := MatchScore(hold, ctx)
+        tt := tap["action"]["type"], ht := hold["action"]["type"]
+        if (ts > hs && (tt = "stock" || tt = "none"))
+            hold := 0
+        else if (hs > ts && ht = "stock")
+            tap := 0
+    }
     layerHost := LayerHostExists(btn, ctx)
 
     ; Left, right and middle are instant everywhere: the only hold the engine
@@ -3046,9 +3129,49 @@ UpOwned(hk) {
     return (s && s.down) ? true : false
 }
 
+; A press NO row applies to here goes to Windows untouched -- decided at the
+; gate, so it is never suppressed and re-sent (v0.7.2). An input hooked only
+; for PACS used to be swallowed and re-injected everywhere else: dead over
+; elevated windows (UIPI), invisible to other AutoHotkey scripts, and every
+; click re-sent. Same pure-spec lookup OnPressHK makes.
+GateNative(btn) {
+    global g_WheelLast
+    if (!g_Enabled || g_Testing || Warp.active || ClickLockOwns(btn))
+        return false
+    if ((s := BS(btn)) && s.down)            ; live state: repeats, stale Ups
+        return false
+    try {
+        ctx := CurCtx(btn)
+        if IsWheel(btn) {
+            if IsObject(FindBindingFor(btn, "turn", ctx))
+                return false
+            g_WheelLast := A_TickCount       ; deck settle still sees the notch
+            return true
+        }
+        spec := SpecFor(btn, ctx)
+        ; a pure row inside a layer must still mark its holder used
+        return spec.pure && !(IsObject(spec.tap) && LayerParts(spec.tap).Length)
+    }
+    return false
+}
+
+; An Up the engine has no claim on goes through untouched too.
+UpClaimed(hk, inp) {
+    return UpOwned(hk) || g_SwallowUp.Has(inp) || Warp.claimed.Has(inp)
+        || (Warp.active && IsKeyInput(inp)) || ClickLockHolds(inp)
+}
+
+; A click lock latched this input: its physical release must be swallowed
+; (it is what keeps the button down), even when its press went through the
+; gate natively and left no state behind.
+ClickLockHolds(inp) {
+    return IsObject(g_ClickLock) && (g_ClickLock.src = inp || g_ClickLock.held = inp)
+}
+
 HookActive(hk) {
-    if UpOwned(hk)
-        return 1
+    inp := HkInput(hk)
+    if (SubStr(hk, -3) = " Up")
+        return UpClaimed(hk, inp) ? 1 : 0
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
@@ -3058,7 +3181,7 @@ HookActive(hk) {
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
     if !ours
-        return 1
+        return GateNative(inp) ? 0 : 1
     ; A TILT is never gated: nothing of ours scrolls sideways, and a tilt
     ; bound to a monitor hop must hop wherever the pointer is. OnWheelHK
     ; already exempted tilts from its own-window test, but this gate runs
@@ -3098,15 +3221,16 @@ TiltNote(why, cls) {
 ; it keeps our own Edit controls native and leaves the keys live everywhere
 ; else. Defaults to 1 (engine active) on any error, like HookActive.
 KbHookActive(hk) {
-    if UpOwned(hk)
-        return 1
+    inp := HkInput(hk)
+    if (SubStr(hk, -3) = " Up")
+        return UpClaimed(hk, inp) ? 1 : 0
     ; pass-through: truly native -- except an input already held with a
     ; live state, whose repeats and release must keep reaching the engine
     ; (else its release is claimed by UpOwned while repeats leak: stuck key)
     if (IsObject(g_Bypass) && BypassFor(b := HkInput(hk))
         && !((s := BS(b)) && s.down))
         return 0
-    try return OwnGuiActive() ? 0 : 1
+    try return (OwnGuiActive() || GateNative(inp)) ? 0 : 1
     return 1
 }
 
@@ -3372,6 +3496,10 @@ OnPressHK(btn, *) {
             MarkLayerUsed(spec.tap)
         st.mode := "passthru"
         st.passBtn := spec.remap
+        if (IsKeyInput(spec.remap) && !AimFg(spec.tap, ctx)) {
+            st.consumed := true              ; nothing went out: release inert
+            return
+        }
         SendNativeDown(spec.remap)
         LastEvent(btn " -> " InputLabel(spec.remap), spec.tap)
         return
@@ -3597,6 +3725,8 @@ OnReleaseHK(btn, *) {
     st := BS(btn)
     if (Warp.active && IsKeyInput(btn) && !st)
         return                               ; press went to the keyboard pointer
+    if (!st && ClickLockHolds(btn))
+        return                               ; the latch's own release: keep it down
     if (!st || !st.down) {
         SendNativeUp(btn)                    ; safety: never leave one stuck
         if st
@@ -3816,7 +3946,8 @@ OnWheelHK(wh, *) {
                     . (tilt ? "tilt" : "wheel") " guard (" WheelLimitMs(wh) " ms)")
                 return
             }
-            ActionFire(b, holder)            ; ActionFire marks every lay holder used
+            ActionFire(b, holder, ctx)       ; marks every lay holder used; ctx
+                                             ; is the WHEEL's, not the holder's
         }
         lay := MGet(b, "layer", "*")
         LastEvent(wh (LayerParts(b).Length ? " (layer " lay ")" : ""), b)
@@ -4123,9 +4254,12 @@ LayerHolderSt(binding) {
 }
 
 ; One-shot execution (taps, wheel turns).
-ActionFire(binding, st) {
+ActionFire(binding, st, ctx := 0) {
     MarkLayerUsed(binding)
     a := binding["action"]
+    if (FgDelivered(a) && !AimFg(binding, IsObject(ctx) ? ctx
+        : (IsObject(st) && IsObject(st.ctx) ? st.ctx : 0)))
+        return
     t := a["type"]
     v := MGet(a, "value", "")
     switch t {
@@ -4201,6 +4335,9 @@ ActionFire(binding, st) {
 ActionDown(binding, st, instant) {
     MarkLayerUsed(binding)
     a := binding["action"]
+    if (FgDelivered(a) && !AimFg(binding,
+        IsObject(st) && IsObject(st.ctx) ? st.ctx : 0))
+        return
     t := a["type"]
     v := MGet(a, "value", "")
     switch t {
@@ -9312,11 +9449,18 @@ AppDelete(row) {
         if (MGet(r, "app", "*") = name)
             used += 1
     }
-    msg := used > 0
-        ? "Profile '" name "' is used by " used " row(s); they will be switched to Global (all apps)"
-          . " unless a global row already does the same job (those are removed). Delete?"
-        : "Delete profile '" name "'?"
-    if (MsgBox(msg, "RadMapper", "YesNo Icon?") != "Yes")
+    toGlobal := false
+    if (used > 0) {
+        ; Default: its settings go WITH it. Made global, a PACS "keys r"
+        ; thumb row would start typing into PowerScribe.
+        ans := MsgBox("Delete profile '" name "'?`n`nIt has " used " setting(s)."
+            . "`n`nYes = delete them too (recommended)"
+            . "`nNo = keep them, working in every program"
+            . "`nCancel = keep the profile", "RadMapper", "YesNoCancel Icon? Default1")
+        if (ans = "Cancel")
+            return
+        toGlobal := (ans = "No")
+    } else if (MsgBox("Delete profile '" name "'?", "RadMapper", "YesNo Icon?") != "Yes")
         return
     ; Moving a row to Global must not shadow an existing global row on the
     ; same key, and a left/right/middle hold cannot be global at all.
@@ -9324,6 +9468,10 @@ AppDelete(row) {
     dropped := 0
     for r in g_Cfg["bindings"] {
         if (MGet(r, "app", "*") = name) {
+            if !toGlobal {
+                dropped += 1
+                continue
+            }
             g := r.Clone()
             g["app"] := "*"
             if ((IsPrimaryButton(MGet(r, "button", "")) && MGet(r, "event", "") = "hold")
@@ -9350,7 +9498,7 @@ AppDelete(row) {
         Atlas.selWant := 0
     }
     if dropped
-        Problem("app-deleted", dropped " row(s) of '" name "' removed: a global row already covers them")
+        Problem("app-deleted", dropped " row(s) of '" name "' removed with it")
     g_Cfg["apps"].RemoveAt(row)
     SaveCfg()
     AfterCfgChange()
