@@ -2419,7 +2419,8 @@ StarterPackApply(name) {
     rows := []
     replacing := []
     for r in pk.rows {
-        b := NewBinding(r[1], r[2], r[3], r[4], r[5], r[6], r[7])
+        ; Packs say "PACS"; the profile may have been renamed since.
+        b := NewBinding(r[1] = "PACS" ? PacsAppName() : r[1], r[2], r[3], r[4], r[5], r[6], r[7])
         for d in FindDupBinding(b) {
             old := g_Cfg["bindings"][d]
             if !IsInertRow(old)
@@ -2459,6 +2460,11 @@ DefaultCfg() {
     c["settings"] := Map()
     for k, v in DEFAULTS
         c["settings"][k] := v
+    ; A fresh config already HAS what the seed-once migrations add. Without
+    ; these flags the first load after a reset re-added a CapsLock row or
+    ; the syngo.via profile that had been deleted in the meantime.
+    for f in ["seedSyngo", "seedCapsLock07", "migPanic123"]
+        c["settings"][f] := 1
 
     apps := []
     a1 := Map()
@@ -2608,8 +2614,12 @@ MigrateCfg() {
             s.Delete("psBackground")
         ; v1.2.3: panic hotkey default eased ^!+F12 -> ^!q (bench E2-4).
         ; Migrate only the OLD DEFAULT; a customized binding is kept.
-        if (MGet(s, "hkPanic", "") = "^!+F12")
-            s["hkPanic"] := "^!q"
+        ; Once only: a user who picks ^!+F12 later must keep it.
+        if !s.Has("migPanic123") {
+            s["migPanic123"] := 1
+            if (MGet(s, "hkPanic", "") = "^!+F12")
+                s["hkPanic"] := "^!q"
+        }
         ; v0.3: the scroll engine, gestures and chords are gone. Their knobs
         ; are deleted so the saved file stops carrying settings nothing reads.
         for k in RETIRED_SETTINGS {
@@ -2655,7 +2665,7 @@ MigrateCfg() {
 }
 
 MigrateRow(row) {
-    if !IsObject(row)
+    if !(row is Map)
         return
     w := MGet(row, "while", "")
     if (w != "")
@@ -2898,8 +2908,10 @@ LoadCfg() {
                 return
             preserved := CFG_PATH ".corrupt-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
             try FileCopy(CFG_PATH, preserved, 0)
-            catch
-                g_CfgRecoveryBlocked := true
+            catch {
+                if FileExist(CFG_PATH)       ; gone = already preserved
+                    g_CfgRecoveryBlocked := true
+            }
             MsgBox(CFG_NAME " could not be parsed (" e.Message ")"
                 . " and no usable backup was found.`n`n"
                 . (g_CfgRecoveryBlocked
@@ -2962,11 +2974,20 @@ RestoreNewestBackup(why) {
             ValidateCfgShape(loaded)
             if (!IsObject(loaded) || !loaded.Has("bindings"))
                 continue
+            ; Normalize BEFORE moving the bad file aside: a backup that
+            ; throws here must leave the original where it is, or the
+            ; caller's preserve-copy fails and saving gets blocked.
+            prev := g_Cfg
+            try {
+                g_Cfg := loaded
+                NormalizeCfg()
+                RebuildIndex()
+            } catch {
+                g_Cfg := prev
+                continue
+            }
             try FileMove(CFG_PATH, CFG_PATH ".corrupt-"
                 . FormatTime(, "yyyyMMdd-HHmmss"), 1)
-            g_Cfg := loaded
-            NormalizeCfg()
-            RebuildIndex()
             SaveCfg()
             Problem("config-restored", "Config was unreadable (" why
                 . "); restored from " nm)
@@ -3012,6 +3033,11 @@ NormalizeCfg(imported := false) {
         c["psExes"] := DefaultCfg()["psExes"]
     if (c["layers"].Length = 0)
         c["layers"] := ["Base"]
+    ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
+    ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
+    ; as "can no longer hold a layer" instead of migrating it. Idempotent.
+    for row in c["bindings"]
+        MigrateRow(row)
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
     ValidateCfg()                            ; ...and the v0.7 host rules
@@ -3202,6 +3228,11 @@ SaveCfg() {
         return false
     }
     SetTimer(CfgFlush, 0)                    ; cancel any pending debounce
+    ; Not re-entrant: a timer or hotkey thread saving between FileAppend and
+    ; FileMove moved the shared .new away and the outer FileMove threw -- a
+    ; false "not saved" on a save that had worked.
+    wasCrit := A_IsCritical
+    Critical "On"
     try {
         txt := JsonDump(g_Cfg)
         tmp := CFG_PATH ".new"                   ; write-then-rename: the
@@ -3219,6 +3250,8 @@ SaveCfg() {
         TrayTip("Changes are not saved. Check the settings folder and retry. "
             . e.Message, "RadMapper", "Iconx")
         return false
+    } finally {
+        Critical(wasCrit)
     }
 }
 
@@ -9611,6 +9644,7 @@ RestoreDefaults(confirmed := false) {
     if (!confirmed && MsgBox("Restore the shipped defaults?"
         . " Your assignments will be replaced, including the dictation and monitor-switching defaults.", "RadMapper", "YesNo Icon?") != "Yes")
         return
+    try BackupCfg()                          ; edits since launch stay recoverable
     g_Cfg := DefaultCfg()
     SaveCfg()
     AfterCfgChange()
@@ -10320,13 +10354,26 @@ AppOk(dlg, editRow, edName, edMatch) {
         MsgBox("Enter at least one match entry.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
+    ; Two profiles with one name would share every row: renaming or
+    ; deleting either rewrote the rows of both.
+    for i, other in g_Cfg["apps"] {
+        if (i != editRow && MGet(other, "name", "") = name) {
+            MsgBox("There is already a profile called '" name "'.", "RadMapper",
+                "Iconx Owner" . dlg.Hwnd)
+            return
+        }
+    }
     if editRow {
         old := g_Cfg["apps"][editRow]["name"]
-        if (old != name) {
+        if (old !== name) {
             for row in g_Cfg["bindings"] {
                 if (MGet(row, "app", "*") = old)
                     row["app"] := name
             }
+            ; "PACS: send keys" targets a profile by NAME; follow the rename
+            ; or every pacs_keys press reports a missing profile.
+            if (Cfg("pacsApp") = old)
+                CfgSet("pacsApp", name)
         }
         g_Cfg["apps"][editRow]["name"] := name
         g_Cfg["apps"][editRow]["match"] := matches
@@ -10352,14 +10399,31 @@ AppDelete(row) {
             used += 1
     }
     msg := used > 0
-        ? "Profile '" name "' is used by " used " row(s); they will be switched to Global (all apps). Delete?"
+        ? "Profile '" name "' is used by " used " row(s); they will be switched to Global (all apps)"
+          . " unless a global row already does the same job (those are removed). Delete?"
         : "Delete profile '" name "'?"
     if (MsgBox(msg, "RadMapper", "YesNo Icon?") != "Yes")
         return
+    ; Moving a row to Global must not shadow an existing global row on the
+    ; same key, and a left/right/middle hold cannot be global at all.
+    kept := []
+    dropped := 0
     for r in g_Cfg["bindings"] {
-        if (MGet(r, "app", "*") = name)
+        if (MGet(r, "app", "*") = name) {
+            g := r.Clone()
+            g["app"] := "*"
+            if ((IsPrimaryButton(MGet(r, "button", "")) && MGet(r, "event", "") = "hold")
+                || FindDupBinding(g).Length > 0) {
+                dropped += 1
+                continue
+            }
             r["app"] := "*"
+        }
+        kept.Push(r)
     }
+    g_Cfg["bindings"] := kept
+    if dropped
+        Problem("app-deleted", dropped " row(s) of '" name "' removed: a global row already covers them")
     g_Cfg["apps"].RemoveAt(row)
     SaveCfg()
     AfterCfgChange()
