@@ -1,4 +1,4 @@
-# RadWheel 1.0
+# RadWheel 1.1
 
 Radial menus for the reading room: hold a button, move toward a command, let
 go. It's RadMapper's radial-menu feature as a separate, standalone
@@ -115,7 +115,35 @@ the selected slot for real, after a countdown.
 The settings live in `%APPDATA%\RadWheel\RadWheel.ini`, a plain UTF-16 INI
 file. You can edit it by hand, copy it to a colleague, or back it up.
 
-Don't bind the same button in RadMapper and RadWheel at the same time.
+## Running alongside RadMapper
+
+RadWheel and RadMapper can run at the same time, but never on the same
+button. Both scripts hook the mouse, and Windows asks the newest hook first.
+RadMapper also moves its hook back to the front every 10 s while PACS is in
+front. If both scripts owned one button, they would take turns winning it.
+
+So RadWheel steps aside on its own. Every 3 s it checks whether RadMapper is
+running. If it is, RadWheel reads RadMapper's settings file and leaves every
+button RadMapper has hooked alone. That covers any button with a real
+assignment and any button that holds a layer. A toast names the buttons it
+gave up, and the RadWheel window shows ⚠ on any wheel whose button is taken.
+When RadMapper exits, or frees the button, RadWheel takes it back.
+
+With RadMapper's shipped setup, RadMapper keeps button 4, button 5, Caps Lock
+and backtick. RadWheel keeps the right button, so **PACS tools** on
+hold right-click works alongside RadMapper. The **Window presets** (button 5)
+and **PowerScribe** (button 4) wheels stay off while RadMapper runs. You can
+move them to another button (for example the middle button, or F13–F20 on a
+programmable mouse), or clear those buttons in RadMapper.
+
+Details:
+
+- A paused RadMapper still counts as running. Exit it to give its buttons
+  back.
+- The two scripts ignore each other's keystrokes and clicks, so a key that
+  RadWheel sends never sets off a RadMapper shortcut, and a RadMapper click
+  never opens a wheel.
+- Set `YieldToRadMapper="0"` in the settings file to turn this off.
 
 ## First run checks (Windows)
 
@@ -129,6 +157,11 @@ Don't bind the same button in RadMapper and RadWheel at the same time.
    left open at the spot where you started.
 5. Read menu… on a Measurements slot lists the PACS menu as a tree.
 6. Right-drag in another program still works (the wheel is PACS-only).
+7. Start RadMapper as well. Within 3 s a toast says RadWheel leaves
+   button 4 and button 5 to it. Hold button 5 in PACS: RadMapper's own
+   wheel opens, not RadWheel's. Hold right-click in PACS: the RadWheel PACS
+   tools wheel still opens. Exit RadMapper: a toast says RadWheel has the
+   buttons back.
 
 ## Checks
 

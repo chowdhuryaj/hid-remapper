@@ -65,7 +65,7 @@ SetDefaultMouseSpeed SetMouseDelay SetTimer SetTitleMatchMode SetWinDelay Sin Co
 StrReplace StrSplit StrUpper String SubStr ToolTip TraySetIcon TrayTip Trim WinActivate WinActive
 WinExist WinGetClass WinGetList WinGetMinMax WinGetPID WinGetPos WinGetProcessName WinGetTitle
 WinRestore WinWaitActive WinWaitClose RegExMatch RegExReplace InstallKeybdHook InstallMouseHook
-GetKeyState Buffer ExitApp Persistent Round'''.split())
+GetKeyState Buffer ExitApp Persistent Round DetectHiddenWindows Error FileGetTime FileRead SetKeyDelay'''.split())
 methods_ok = set('''Add Delete Push Pop Has Clone RemoveAt OnEvent Show Hide Destroy SetFont Opt
 Choose GetSelection GetText Start Wait KeyOpt Bind Get Clear Init Ensure Free Update Close Write
 accDoDefaultAction accLocation ToggleCheck'''.split())

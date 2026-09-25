@@ -44,7 +44,34 @@ Branch `claude/relaxed-hamilton-88wxwj`. Not yet run under AutoHotkey.
   same time (user confirmed). Offered, not built: warn at start if RadMapper
   is running.
 
+## 1.1: bug sweep, speed, RadMapper coexistence
+Branch `claude/dazzling-mendel-pvayp0` (PR #14's branch merged in, then this).
+- RadMapper facts it relies on: mutex `Local\RadMapper-single-copy`; config
+  `%APPDATA%\RadMapper\RadMapperConfig.json` (or beside a portable script);
+  SyncHooks hooks every non-inert row's `button` plus each `layer` part (and
+  clicklock targets); HookFrontTick re-hooks ahead of every other hook every
+  10 s in PACS; SendMode Event, SendLevel 0; defaults hook XButton1/2,
+  CapsLock, backtick; RButton is not hooked.
+- §11b: `RmCheck` (3 s timer) -> `RmReadOwned` (small JSON reader) ->
+  `RmOwned`; `TrigGate` returns false for an owned key, so the press stays
+  with RadMapper. Toast on change; editor summary shows ⚠. INI
+  `YieldToRadMapper="0"` turns it off. Paused RadMapper still counts
+  (its pause is internal; not visible from outside).
+- SendMode Event + SetKeyDelay -1 (was Input; falls back to Event at 10 ms
+  per key while RadMapper's keyboard hook exists).
+- `ExeOf`: exe name cached per hwnd (checked by pid) for the per-press gate.
+- Fixes: a keyboard trigger held to choose from a tapped-open wheel reopened
+  it on auto-repeat (`EatRepeat`); an empty hold wheel swallowed its button
+  (`Claims` now needs a live slot; `opened` flag makes a never-opened hold
+  a tap).
+- Caps Lock report: not reproduced from the code. With the defaults both
+  scripts hooked nothing in common except XButton1/2 (RadWheel's button 5
+  in PACS, button 4 in PowerScribe), which now yield.
+- JSON reader logic checked against a Python port (escapes, surrogates,
+  malformed input, owned-set rules). Still never run under AutoHotkey.
+
 ## Next steps / risks to verify on Windows
+- README "First run checks" 7 (RadMapper running alongside).
 - Load errors (never executed). Run `README.md` "First run checks".
 - MSAA on IntelliSpace's context menu (WinForms?): names, HASPOPUP state,
   popup detection by new window of the PACS pid.

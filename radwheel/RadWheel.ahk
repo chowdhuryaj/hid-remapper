@@ -2,7 +2,7 @@
 #SingleInstance Force
 #UseHook
 ; ═════════════════════════════════════════════════════════════════════════════
-;  RadWheel 1.0  --  radial menus for the reading room
+;  RadWheel 1.1  --  radial menus for the reading room
 ; ═════════════════════════════════════════════════════════════════════════════
 ;
 ;  A standalone script: the radial-menu feature of RadMapper on its own, with
@@ -42,7 +42,12 @@
 ; ═════════════════════════════════════════════════════════════════════════════
 
 Persistent
-SendMode "Input"
+; Event mode with no delays, the same as RadMapper. SendInput briefly takes
+; the script's own hooks out while it sends (RadMapper avoids it for that
+; reason), and while another script's keyboard hook is installed it falls
+; back to SendEvent anyway, at the default 10 ms per key.
+SendMode "Event"
+SetKeyDelay -1, -1
 CoordMode "Mouse", "Screen"
 CoordMode "ToolTip", "Screen"
 SetTitleMatchMode 2
@@ -58,7 +63,7 @@ ProcessSetPriority "AboveNormal"
 ; ── §1  CONSTANTS AND STATE ─────────────────────────────────────────────────
 
 global APP := "RadWheel"
-global VER := "1.0"
+global VER := "1.1"
 global CFG_DIR := A_AppData "\RadWheel"
 global CFG_FILE := CFG_DIR "\RadWheel.ini"
 
@@ -74,14 +79,20 @@ global Paused := false
 global Stamp := 0                ; bumps on every config change (cache key)
 global Ed := 0                   ; the settings window
 global HiResOn := 0
+global EatRepeat := Map()        ; key -> tick: auto-repeats of a key press
+                                 ;   that already did its job are eaten
+global RmOwned := Map()          ; inputs RadMapper has hooked right now
+global RmSeen := {running: false, cfg: "", mtime: "", pid: 0}
 
 Held.CaseSense := "Off"
 Swallow.CaseSense := "Off"
 ClickSwallow.CaseSense := "Off"
+EatRepeat.CaseSense := "Off"
+RmOwned.CaseSense := "Off"
 
 global SETTING_KEYS := ["Size", "ShowDelay", "SubmenuDelay", "ToggleTimeout",
     "Confirm", "ReturnPointer", "RightClickMethod", "PsExes", "PacsExes",
-    "PacsViewerTitle", "ReturnDelay", "TapMs"]
+    "PacsViewerTitle", "ReturnDelay", "TapMs", "YieldToRadMapper"]
 
 DefaultSettings() {
     d := Map()
@@ -98,6 +109,7 @@ DefaultSettings() {
     d["ReturnDelay"] := 60           ; ms before focus goes back after PS/PACS
     d["TapMs"] := 300                ; a press shorter than this, let go in
                                      ;   the centre, is a TAP (normal click)
+    d["YieldToRadMapper"] := 1       ; leave RadMapper's buttons to RadMapper
     return d
 }
 
@@ -194,9 +206,10 @@ LiveCount(m) {
 }
 
 ; Does this menu actually take its button over? A menu whose hold does
-; nothing and whose tap is "normal" leaves the button native.
+; nothing (or opens an empty wheel) and whose tap is "normal" leaves the
+; button native, drags and all.
 Claims(m) {
-    return m.trigger != "" && (m.hold || m.tap.type != "native")
+    return m.trigger != "" && ((m.hold && LiveCount(m)) || m.tap.type != "native")
 }
 
 ProgramExes(p) {
@@ -213,6 +226,28 @@ ProgramExes(p) {
     return out
 }
 
+; The exe behind a window. The gate asks this on every press of a menu button
+; anywhere, while the hook waits for the answer; opening the process to read
+; its name each time is the slow part, so the name is kept per window and
+; re-checked only by the (cheap) owning process id.
+ExeOf(hwnd) {
+    static cache := Map()
+    if !hwnd
+        return ""
+    pid := 0
+    DllCall("GetWindowThreadProcessId", "ptr", hwnd, "uint*", &pid)
+    if !pid
+        return ""
+    if (cache.Has(hwnd) && cache[hwnd].pid = pid)
+        return cache[hwnd].exe
+    exe := ""
+    try exe := WinGetProcessName("ahk_id " hwnd)
+    if (cache.Count > 128)
+        cache.Clear()
+    cache[hwnd] := {pid: pid, exe: exe}
+    return exe
+}
+
 ExeIn(exe, list) {
     for e in list
         if (e = exe)
@@ -226,14 +261,13 @@ ExeIn(exe, list) {
 ; program wins over an "every program" menu on the same button.
 MenuFor(trig, &win := 0) {
     win := 0
-    exe := ""
     try {
         if IsMouseKey(KeyOf(trig))
             MouseGetPos(, , &win)
         else
             win := WinExist("A")
-        exe := WinGetProcessName("ahk_id " win)
     }
+    exe := ExeOf(win)
     fallback := 0
     for m in Menus {
         if (m.trigger != trig || !Claims(m))
@@ -288,7 +322,7 @@ LoadConfig() {
     for k in SETTING_KEYS
         Conf[k] := IniGet("Settings", k, Conf[k])
     for k in ["ShowDelay", "SubmenuDelay", "ToggleTimeout", "Confirm",
-              "ReturnPointer", "ReturnDelay", "TapMs"]
+              "ReturnPointer", "ReturnDelay", "TapMs", "YieldToRadMapper"]
         Conf[k] := ToInt(Conf[k], DefaultSettings()[k])
     secs := ""
     try secs := IniRead(CFG_FILE)
@@ -1016,8 +1050,10 @@ TrigGate(hk) {
         return TrigOwnsClick(key)
     if (IsObject(Cur) && Cur.key = key)
         return true
-    if Held.Has(key)
+    if (Held.Has(key) || EatRepeat.Has(key))
         return true
+    if RmOwned.Has(key)                      ; RadMapper's button: stay out
+        return false
     return IsObject(MenuFor(trig))
 }
 
@@ -1067,10 +1103,19 @@ TrigDown(hk) {
     if (IsObject(R) && R.mode = "toggle") {
         if (R.key = key) {                   ; tapped again: choose
             Swallow[key] := true
+            if !IsMouseKey(key)              ; a key held down past here
+                EatRepeat[key] := A_TickCount    ; must not reopen the wheel
             Choose(R.sel)
             return
         }
         CloseMenu()
+    }
+    if EatRepeat.Has(key) {
+        if (A_TickCount - EatRepeat[key] < 1000) {
+            EatRepeat[key] := A_TickCount
+            return
+        }
+        EatRepeat.Delete(key)
     }
     ; keyboard auto-repeat: repeats arrive every ~30 ms while held, so a
     ; press after a quiet second is a new press (a lost release can't
@@ -1090,13 +1135,15 @@ TrigDown(hk) {
     }
     MouseGetPos(&x, &y)
     Held[key] := {menu: m, trig: trig, x: x, y: y, win: win, pass: false,
-                  t0: A_TickCount, last: A_TickCount}
+                  opened: false, t0: A_TickCount, last: A_TickCount}
     if m.hold
-        OpenMenu(m, "hold", key, false, win)
+        Held[key].opened := OpenMenu(m, "hold", key, false, win)
 }
 
 TrigUp(hk) {
     key := SubStr(hk, 2, -3)
+    if EatRepeat.Has(key)
+        EatRepeat.Delete(key)
     if Swallow.Has(key) {
         Swallow.Delete(key)
         return
@@ -1125,7 +1172,8 @@ ReleaseKey(key) {
         Choose(R.sel)
         return
     }
-    if !h.menu.hold
+    ; a wheel that never opened (tap-only, or an empty one) is a tap
+    if (!h.menu.hold || !h.opened)
         DoTap(h, key)
 }
 
@@ -1163,10 +1211,10 @@ OpenMenu(m, mode, key := "", practice := false, win := 0) {
     if IsObject(Cur)
         CloseMenu()
     if !IsObject(m)
-        return
+        return false
     if (LiveCount(m) = 0) {
         Toast("The “" m.name "” wheel is empty. Add commands in the RadWheel window.")
-        return
+        return false
     }
     MouseGetPos(&x, &y)
     now := A_TickCount
@@ -1189,6 +1237,7 @@ OpenMenu(m, mode, key := "", practice := false, win := 0) {
     SetTimer(Tick, 10)
     if R.shown
         Paint()
+    return true
 }
 
 CloseMenu() {
@@ -1911,6 +1960,241 @@ Cleanup(*) {
     Overlay.Free()
 }
 
+; ── §11b  LIVING WITH RADMAPPER ─────────────────────────────────────────────
+;
+; RadMapper and RadWheel can run together, but never on the same button. Both
+; hook the mouse, Windows asks the newest hook first, and RadMapper puts its
+; hook back in front every 10 s while PACS is in front. Two scripts owning
+; one button would take turns winning it. So RadWheel reads RadMapper's
+; config and leaves every input RadMapper has hooked (the same set its
+; SyncHooks builds: every live row's button and layer host) to RadMapper.
+; Neither script reacts to the other's Send: both stay at SendLevel 0.
+; Setting YieldToRadMapper="0" in the settings file turns this off.
+
+RadMapperRunning() {
+    ; the single-copy mutex RadMapper holds for its whole life
+    h := DllCall("OpenMutexW", "uint", 0x00100000, "int", 0,
+        "wstr", "Local\RadMapper-single-copy", "ptr")
+    if !h
+        return false
+    DllCall("CloseHandle", "ptr", h)
+    return true
+}
+
+; %APPDATA%\RadMapper, unless the running copy is portable (its config then
+; sits beside the script, found from its hidden main window's title).
+RadMapperCfgPath() {
+    dir := A_AppData "\RadMapper"
+    dhw := A_DetectHiddenWindows
+    DetectHiddenWindows(true)
+    try {
+        for h in WinGetList("ahk_class AutoHotkey") {
+            t := ""
+            try t := WinGetTitle("ahk_id " h)
+            if RegExMatch(t, "i)^(.*)\\[^\\]*RadMapper[^\\]*\.(ahk|exe)\b", &mm) {
+                if FileExist(mm[1] "\RadMapper.portable")
+                    dir := mm[1]
+                break
+            }
+        }
+    }
+    DetectHiddenWindows(dhw)
+    return dir "\RadMapperConfig.json"
+}
+
+RmCheck() {
+    global RmSeen
+    if !(Conf["YieldToRadMapper"] && RadMapperRunning()) {
+        if RmSeen.running {
+            RmSeen.running := false
+            RmSeen.mtime := ""
+            RmSetOwned(RmEmpty())
+        }
+        return
+    }
+    if !RmSeen.running {
+        RmSeen.running := true
+        RmSeen.cfg := RadMapperCfgPath()
+        RmSeen.mtime := ""
+    }
+    mt := ""
+    try mt := FileGetTime(RmSeen.cfg, "M")
+    if (mt != "" && mt = RmSeen.mtime)
+        return
+    try {
+        owned := RmReadOwned(RmSeen.cfg)
+        RmSeen.mtime := mt
+    } catch {
+        ; mid-save or unreadable: try again next time; until the first good
+        ; read, assume RadMapper's shipped buttons
+        if RmOwned.Count
+            return
+        owned := RmEmpty()
+        for k in ["XButton1", "XButton2", "CapsLock", "``"]
+            owned[k] := 1
+    }
+    RmSetOwned(owned)
+}
+
+RmEmpty() {
+    m := Map()
+    m.CaseSense := "Off"
+    return m
+}
+
+RmGet(m, k, def := "") => (m is Map && m.Has(k)) ? m[k] : def
+
+RmName(s) {
+    s := Trim(String(s))
+    if RegExMatch(s, "^\{([^{}]+)\}$", &mm)
+        s := Trim(mm[1])
+    return s
+}
+
+; The inputs RadMapper hooks for this config. A row is display-only when it
+; is a plain native tap on its own button, everywhere, on the base layer.
+RmReadOwned(path) {
+    cfg := JsonParse(FileRead(path, "UTF-8"))
+    owned := RmEmpty()
+    for row in RmGet(cfg, "bindings", []) {
+        if !(row is Map)
+            continue
+        btn := RmName(RmGet(row, "button"))
+        act := RmGet(row, "action", 0)
+        typ := RmGet(act, "type")
+        val := RmName(RmGet(act, "value"))
+        ev := RmGet(row, "event")
+        inert := (typ = "native" || typ = "stock") && (val = "" || val = btn)
+            && ev = (RegExMatch(btn, "i)^Wheel") ? "turn" : "tap")
+            && RmGet(row, "app", "*") = "*" && RmGet(row, "layer", "*") = "*"
+            && RmGet(row, "mods") = ""
+        if (!inert && btn != "")
+            owned[btn] := 1
+        L := RmGet(row, "layer", "*")
+        if !(L = "*" || L = "" || L = "Base") {
+            for part in StrSplit(L, "/")
+                if (Trim(part) != "")
+                    owned[RmName(part)] := 1
+        }
+        if (typ = "clicklock") {
+            if IsMouseKey(val)
+                owned[val] := 1
+            else
+                for b in ["LButton", "RButton", "MButton", "XButton1", "XButton2"]
+                    owned[b] := 1
+        }
+    }
+    return owned
+}
+
+RmSetOwned(owned) {
+    global RmOwned
+    before := RmYielded()
+    RmOwned := owned
+    after := RmYielded()
+    if (after != before) {
+        if (after != "")
+            Toast("RadMapper is running and uses " after ". RadWheel leaves "
+                . "that to RadMapper.", 4000)
+        else
+            Toast("RadWheel has " before " back.", 2500)
+    }
+    if IsObject(Ed)
+        try EdSummary()
+}
+
+; RadWheel's own buttons that RadMapper holds right now, in words.
+RmYielded() {
+    out := "", seen := RmEmpty()
+    for m in Menus {
+        k := KeyOf(m.trigger)
+        if (m.trigger = "" || !Claims(m) || seen.Has(k) || !RmOwned.Has(k))
+            continue
+        seen[k] := 1
+        out .= (out = "" ? "" : ", ") RegExReplace(TriggerName(m.trigger), "\s*\(.*\)$")
+    }
+    return out
+}
+
+; A small JSON reader: objects -> Map (case-insensitive), arrays -> Array,
+; true/false -> 1/0, null -> "", numbers stay text.
+JsonParse(t) {
+    i := 1
+    v := JsonVal(t, &i)
+    if RegExMatch(t, "\G\s*\S", , i)
+        throw Error("JSON: trailing text at " i)
+    return v
+}
+
+JsonWs(t, &i) {
+    if RegExMatch(t, "\G\s+", &w, i)
+        i += w.Len
+}
+
+JsonVal(t, &i) {
+    JsonWs(t, &i)
+    c := SubStr(t, i, 1)
+    if (c = "{" || c = "[") {
+        obj := (c = "{")
+        out := obj ? RmEmpty() : []
+        close := obj ? "}" : "]"
+        i += 1
+        JsonWs(t, &i)
+        if (SubStr(t, i, 1) = close) {
+            i += 1
+            return out
+        }
+        loop {
+            if obj {
+                JsonWs(t, &i)
+                k := JsonStr(t, &i)
+                if !RegExMatch(t, "\G\s*:", &w, i)
+                    throw Error("JSON: ':' expected at " i)
+                i += w.Len
+                out[k] := JsonVal(t, &i)
+            } else
+                out.Push(JsonVal(t, &i))
+            if !RegExMatch(t, "\G\s*([,\]}])", &w, i) || (w[1] != "," && w[1] != close)
+                throw Error("JSON: ',' or '" close "' expected at " i)
+            i += w.Len
+            if (w[1] = close)
+                return out
+        }
+    }
+    if (c = '"')
+        return JsonStr(t, &i)
+    if !RegExMatch(t, "\G(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|true|false|null)", &mm, i)
+        throw Error("JSON: value expected at " i)
+    i += mm.Len
+    switch mm[1], true {
+        case "true":  return 1
+        case "false": return 0
+        case "null":  return ""
+    }
+    return mm[1]
+}
+
+JsonStr(t, &i) {
+    if !RegExMatch(t, '\G"((?:[^"\\]++|\\.)*+)"', &mm, i)
+        throw Error("JSON: string expected at " i)
+    i += mm.Len
+    s := mm[1]
+    if !InStr(s, "\")
+        return s
+    out := "", p := 1
+    while RegExMatch(s, "\\(u[0-9A-Fa-f]{4}|.)", &e, p) {
+        out .= SubStr(s, p, e.Pos - p)
+        c := e[1]
+        if (StrLen(c) = 5)
+            out .= Chr(Integer("0x" SubStr(c, 2)))
+        else
+            out .= (c == "n") ? "`n" : (c == "t") ? "`t" : (c == "r") ? "`r"
+                 : (c == "b") ? "`b" : (c == "f") ? "`f" : c
+        p := e.Pos + e.Len
+    }
+    return out SubStr(s, p)
+}
+
 ; Record a shortcut: the next key pressed, with whatever modifiers are held.
 RecordKeys(prompt := "Press the shortcut now") {
     rg := Gui("+AlwaysOnTop +ToolWindow -SysMenu", APP)
@@ -2214,7 +2498,8 @@ EdSummary() {
             default:       txt .= "A TAP runs: " SlotTitle(t) ".`n"
         }
         if !Claims(m)
-            txt .= "⚠ Neither holding nor tapping opens this wheel yet.`n"
+            txt .= "⚠ This wheel doesn't use its button yet: add a command, "
+                 . "or set what a tap does.`n"
         if (m.move = "drag" && m.hold)
             txt .= "Moving straight away drags as normal; hold still to open.`n"
         for o in Menus {
@@ -2224,6 +2509,10 @@ EdSummary() {
                 break
             }
         }
+        if (Claims(m) && RmOwned.Has(KeyOf(m.trigger)))
+            txt .= "⚠ RadMapper is running and uses this button, so RadWheel "
+                 . "leaves it alone. Pick another button here, or free it in "
+                 . "RadMapper.`n"
         if (m.trigger = "RButton" && m.hold && m.tap.type = "native")
             txt .= "The normal right-click menu still opens on a quick tap."
     }
@@ -3050,7 +3339,9 @@ Overlay.Init()
 InstallKeybdHook()
 InstallMouseHook()
 firstRun := LoadConfig()
+RmCheck()
 RegisterHotkeys()
+SetTimer(RmCheck, 3000)
 OnExit(Cleanup)
 SetTimer(PreWarm, -700)
 
