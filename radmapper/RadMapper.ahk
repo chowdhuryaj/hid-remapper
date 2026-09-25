@@ -3620,10 +3620,44 @@ AppMatches(needle) {
 }
 
 AppCacheClear() {
-    global g_AppCache
+    global g_AppCache, g_AppAtCache
     g_AppCache.hwnd := 0
     g_AppCache.tick := 0
     g_AppCache.name := ""
+    g_AppAtCache.hwnd := 0
+    g_AppAtCache.tick := 0
+    g_AppAtCache.name := ""
+}
+
+; v0.7.2: the profile owning a given top-level window (the one UNDER THE
+; POINTER, for mouse input), or "". A mouse button belongs to the window it
+; is pressed over: with PowerScribe focused on one screen and the pointer
+; over PACS on another, the PACS rows must apply. Same 100 ms per-hwnd cache
+; as ActiveAppName.
+global g_AppAtCache := {hwnd: 0, tick: 0, name: ""}
+AppNameAt(hwnd) {
+    global g_AppAtCache
+    if !hwnd
+        return ""
+    now := A_TickCount
+    d := now - g_AppAtCache.tick
+    if (hwnd = g_AppAtCache.hwnd && d >= 0 && d <= 100)
+        return g_AppAtCache.name
+    name := ""
+    for app in g_Cfg["apps"] {
+        for m in MGet(app, "match", []) {
+            try {
+                if WinExist(MatchCrit(m) " ahk_id " hwnd) {
+                    name := app["name"]
+                    break 2
+                }
+            }
+        }
+    }
+    g_AppAtCache.name := name
+    g_AppAtCache.tick := now
+    g_AppAtCache.hwnd := hwnd
+    return name
 }
 
 ; ── §4b  BINDING INDEX ──────────────────────────────────────────────────────
@@ -3823,13 +3857,17 @@ ModsHeld() {
 }
 
 ; Snapshot of everything a lookup needs. held = mapped buttons physically down.
-CurCtx() {
+; btn = the input being resolved: a MOUSE input (button or wheel) is scoped
+; by the window under the pointer, a key by the foreground window (v0.7.2).
+CurCtx(btn := "") {
     held := []
     for name, st in g_BS {
         if (st.down && !st.consumed)
             held.Push(name)
     }
-    app := !g_Idx.anyApp ? "" : ActiveAppName()
+    app := !g_Idx.anyApp ? ""
+        : (btn != "" && IsMouseInput(btn)) ? AppNameAt(RM_WinAt())
+        : ActiveAppName()
     return {app: app, mods: ModsHeld(), held: held}
 }
 
@@ -4398,7 +4436,7 @@ OnPressHK(btn, *) {
         ClearBS(btn)                       ; stale state, start fresh
     }
 
-    ctx := CurCtx()
+    ctx := CurCtx(btn)
     spec := SpecFor(btn, ctx)
     st := NewBS(btn)
     st.down := true
@@ -4789,7 +4827,7 @@ OnWheelHK(wh, *) {
         SendWheelRaw(wh, 1)
         return
     }
-    ctx := CurCtx()
+    ctx := CurCtx(wh)
     b := FindBindingFor(wh, "turn", ctx)
     if IsObject(b) {
         if (IsNativeAct(b["action"]["type"])) {
@@ -13977,7 +14015,9 @@ class Atlas {
             . "email and the answer usually falls out of it.`n`n"
             . "Mouse / Keyboard`n"
             . "Choose a button or key, then add an assignment. In program "
-            . "limits where it works. Rec records a shortcut; Keys lets you "
+            . "limits where it works: a mouse button follows the window "
+            . "under the pointer, a key follows the window you are typing "
+            . "in. Rec records a shortcut; Keys lets you "
             . "choose one without AutoHotkey syntax. Left, right and middle "
             . "are always instant clicks; a hold on them only works inside "
             . "one program.`n`n"
