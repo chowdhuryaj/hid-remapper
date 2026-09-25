@@ -97,6 +97,22 @@ syntax/scope pass found no load-time or guaranteed-runtime errors.
   ~3,574 unreachable GpGFX lines pruned (verified clean by a second
   reference check). File ~28,800 lines.
 
+## Round 6 (scope hardening, interactions, perf)
+- Program-scoped vs global: AimFg brings the scoping window forward
+  before keystroke actions; GateNative decides unbound presses NATIVE at
+  the HotIf gate (no suppress/re-send); UpClaimed for Ups; stock/none
+  carve-out in SpecFor; layer rows use the host's program (layApp);
+  ProfileOf (most specific match); AppDelete deletes rows by default.
+- Gate claims: a Down handed to the engine (g_GateClaim) keeps its Up;
+  a stale claim sends the native Up if the Down went out. Teardown
+  (ForceReleaseActive) swallows releases of held inputs (g_SwallowUp),
+  kept hooked until released. Click lock checked first at the gate.
+- Perf: Map lookups for input names, HkInput memo, FindBindingFor score,
+  hung-window guards, ListLines/KeyHistory 0.
+- Lite (no-GpGFX) build was made and then dropped at the user's request.
+- Invariants: SpecFor must build a fresh spec per press; every HotIf
+  path that returns native should clear g_GateClaim (GateNativeClear).
+
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first
 launch (expect "retired" lines for old radial rows).
