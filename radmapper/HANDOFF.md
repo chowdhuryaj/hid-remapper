@@ -82,6 +82,21 @@ syntax/scope pass found no load-time or guaranteed-runtime errors.
 - Old rows for removed actions are dropped with a Diagnostics line;
   their settings are in RETIRED_SETTINGS. Removal review: clean.
 
+## Round 5 (freezes, pass-through, cleanup)
+- Freeze fixes: watchdog sweeps only within 10 s of our own synthetic
+  input (g_SynthAt); #HotIfTimeout 150; Atlas/Chooser/switcher context keys
+  On only while their window is up (KeysOn / AppSwitchBindKeys(on));
+  HookFrontTick reinstalls once per PACS focus; layout guard async
+  SetWindowPos + IsHungAppWindow skip + 3-strike give-up; HUD toasts via
+  SetTimer.
+- Pass-through action "bypass" (g_Bypass, BypassFor/On/Off/Toggle/Expire):
+  hold = while held, tap = toggle (2 min cap); native at the HotIf gate
+  except inputs already held with a live state; src + layer hosts exempt.
+- Window/layout and settings-page sweep fixes (see git log).
+- Cleanup: version history -> CHANGELOG.md; dead app functions removed;
+  ~3,574 unreachable GpGFX lines pruned (verified clean by a second
+  reference check). File ~28,800 lines.
+
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first
 launch (expect "retired" lines for old radial rows).
