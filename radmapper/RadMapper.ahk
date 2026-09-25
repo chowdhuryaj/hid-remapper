@@ -11661,8 +11661,14 @@ class Lumi {
         ; yields -- so without this a click on a second field opened a nested
         ; loop inside the first, and whichever unwound last wrote its buffer
         ; over the other's.
-        if (Lumi.editing > 0)
+        ; v0.7.2: a click on a SECOND field ends the first (committing it)
+        ; and opens this one a moment later, once that loop has unwound --
+        ; ignoring the click typed the next entry into the first field.
+        if (Lumi.editing > 0) {
+            Lumi.EndEdit()
+            SetTimer(() => Lumi.__FieldEdit(state), -50)
             return
+        }
         ; An open option list must not stay up over the field being typed in.
         Lumi.CloseSelect()
         ; The field's OWN layer -- captured when it was built. Reading the
@@ -13151,6 +13157,8 @@ class Atlas {
                 m.Add("Delete", (*) => Atlas.MacroStepDelete())
                 m.Add("Move up", (*) => Atlas.MacroStepMove(-1))
                 m.Add("Move down", (*) => Atlas.MacroStepMove(1))
+            case "app":
+                m.Add("Edit…", (*) => Atlas.AppEdit(Atlas.SelectedRef()))
             default:
                 return
         }
@@ -14258,7 +14266,10 @@ class Atlas {
         if (i < 1 || i > Atlas.ESSENTIALS.Length)
             return
         e := Atlas.ESSENTIALS[i]
-        btn := IsMouseInput(Atlas.sel) ? Atlas.sel : "XButton1"
+        ; never the left/right/middle button or a wheel: "Set… Dictate" then
+        ; Save made every left click toggle dictation
+        btn := (IsMouseInput(Atlas.sel) && !IsPrimaryButton(Atlas.sel)
+            && !IsWheel(Atlas.sel)) ? Atlas.sel : "XButton1"
         seed := NewBinding("*", "*", "", btn, "tap", e[2], e[3])
         Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
     }
@@ -15483,7 +15494,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 112, w, h - 220, rows,
             [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
              {w: 190, kind: "mono"}],
-            Atlas.Picker(), 30,
+            Atlas.Picker("app"), 30,
             ["Program", "Recognised by", "Pointer spot", "Special"])
 
         hasSel := Atlas.HasSel(rows.Length)
@@ -15656,7 +15667,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 96, w, h - 396, rows,
             [{w: 230}, {w: 100, kind: "mute"}, {w: 120, kind: "mono"},
              {w: 80, kind: "mono"}, {w: 130, kind: "mute"}],
-            (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : 0), 30,
+            (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : Atlas.PickRow(i, dbl)), 30,
             ["Arrangement", "Windows", "Keep in place", "Now", "Saved on"])
         if (rows.Length = 0)
             Lumi.Label(x + 12, y + 122, w - 24,
@@ -15749,7 +15760,10 @@ class Atlas {
         ; in, which is the one thing the list column beside it could not be
         ; read for while the row was highlighted. The label is the CURRENT
         ; state; the line underneath names what one click does next.
-        selLay := Atlas.LayoutSel()
+        ; the list above was JUST built (its sel is restored after the panel
+        ; is drawn), so read the carried selection, not the list's
+        selLay := (Atlas.HasSel(rows.Length) && Atlas.layoutRefs.Has(Atlas.savedSel))
+            ? g_Cfg["layouts"][Atlas.layoutRefs[Atlas.savedSel]] : 0
         keepG := IsObject(selLay) ? MGet(selLay, "guard", 0) : -1
         keepNow := (keepG = 1) ? "always"
                  : (keepG = 2) ? "new windows"
@@ -15812,6 +15826,9 @@ class Atlas {
             Lumi.Toast("Type a name for it first", "warn")
             return
         }
+        if (IsObject(LayoutByName(name))
+            && !Atlas.Confirm("Replace the saved arrangement “" name "”?"))
+            return
         n := LayoutCapture(name)
         if (n = 0) {
             Lumi.Toast("Nothing to save — no movable windows are open",
@@ -15832,6 +15849,11 @@ class Atlas {
         }
         name := MGet(lay, "name", "")
         n := LayoutCapture(name)          ; same name = overwrite in place
+        if (n = 0) {
+            Lumi.Toast("Nothing to save — no movable windows are open",
+                "warn", 2600)
+            return
+        }
         Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Saved over “" name "” — " n " window"
@@ -15898,6 +15920,7 @@ class Atlas {
             LayoutGuardDisarm()
         g_Cfg["layouts"].RemoveAt(ref)
         Atlas.SaveOrWarn()
+        Atlas.selWant := 0                   ; never the row that slid up
         Atlas.Build()
         Lumi.Toast("Arrangement deleted", "magenta")
     }
@@ -16497,6 +16520,7 @@ class Atlas {
                 case "mouse": Atlas.EditRow(i)
                 case "key":   Atlas.EditRow(i, true)
                 case "step":  Atlas.MacroStepEditSel()
+                case "app":   Atlas.AppEdit(Atlas.SelectedRef())
             }
             return
         }
@@ -17220,7 +17244,15 @@ class Atlas {
             st.input := Lumi.Select(150, 126, 300, 30, inputs,
                 Atlas.IndexOfText(inputs,
                     InputLabel(IsWheel(host) ? "XButton1" : host)))
+            ; load the rows of the input actually SHOWN (the page's pick may
+            ; be left/right or a wheel, which the list falls back from)
+            host := InputCodeFromLabel(st.input.items.Has(st.input.index)
+                ? st.input.items[st.input.index] : "")
         }
+        ; what the rows below were loaded for: Save only CLEARS directions
+        ; of this input + program, never of one the dialog never showed
+        st.origHost := host
+        st.origApp := app
 
         Lumi.Rule(24, 168, w - 48)
         Lumi.Label(24, 180, w - 48,
@@ -17373,6 +17405,8 @@ class Atlas {
             for p in plan {
                 b := NewBinding(app, host, "", p.wheel, "turn", p.type, p.value)
                 if (p.type = "none") {
+                    if (host != st.origHost || app != st.origApp)
+                        continue             ; never shown: nothing to clear
                     ; Descending, so the remaining indexes stay valid --
                     ; the same discipline UpsertRow uses.
                     dups := FindDupBinding(b)
