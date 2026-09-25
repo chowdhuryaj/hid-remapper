@@ -4760,6 +4760,7 @@ MovePoll(btn, pollId, *) {
                 ? MGet(st.spec.hold["action"], "value", "") : ""
             st.passBtn := (hv != "") ? hv : btn
             ; a host that became a plain drag no longer holds its layer
+            ; (safe: SpecFor builds a fresh spec per press -- never cache it)
             if IsObject(st.spec)
                 st.spec.layerHost := false
             SendNativeDown(st.passBtn)

@@ -6,8 +6,8 @@ and lands a five-area bug sweep.
 
 **State (v0.7.2).** Branch `claude/compassionate-clarke-ffcwdy`. Not yet run
 on Windows: all verification is by reading + portable checks. Round 3
-review agents were running at last update (latest-commit regressions,
-whole-file syntax pass).
+reviews done: latest-commit regressions fixed (2a3f990); whole-file
+syntax/scope pass found no load-time or guaranteed-runtime errors.
 
 ## Completed
 - "0" labels draw (GpGFX `== 0` / `!== 0` emptiness tests); braces in Send
@@ -65,6 +65,13 @@ whole-file syntax pass).
 - Brace/paren delta of the whole session diff is 0.
 - `tests/regression.ahk` updated (radial rows dropped, key "0"); needs a
   Windows run: `AutoHotkey64.exe /ErrorStdOut tests\regression.ahk`.
+
+## Round 3
+- Wheel with our window in front activates the window under the pointer.
+- Pause row inside a layer resumes (layer judged physically).
+- Only a layer TAP marks the host used at press.
+- Primary dragmove hold drags its target; a host turned plain drag drops
+  its layer (spec is per press -- SpecFor must never cache).
 
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first
