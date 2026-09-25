@@ -2877,9 +2877,15 @@ LoadCfg() {
                     && ResetCfgOnce())
                     return
                 BackupCfg()                  ; pre-migration snapshot (v1.3)
+                before := JsonDump(loaded)
                 g_Cfg := loaded
                 NormalizeCfg()               ; backfill + validate + migrate
                 RebuildIndex()
+                ; What validation dropped or migration rewrote was only in
+                ; memory, so the same rows were dropped (and the same lines
+                ; logged) on every start until the next edit. Write it once.
+                if (JsonDump(g_Cfg) !== before)
+                    SaveCfg()
                 return
             }
             throw Error("no bindings array")
