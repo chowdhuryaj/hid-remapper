@@ -9,7 +9,7 @@ image stacks frame by frame, annotating them, and bundling them up.
 | --- | --- |
 | **Shift+F2** | Start a scroll capture on the monitor under the cursor. Focuses the window under the cursor and sends Shift+Space once; if the screen does not change, nothing is captured or saved. Then each step grabs that one monitor, keeps the frame if it changed, and scrolls the mouse wheel down. Press again or Esc to stop. Stops itself after 3 identical frames in a row. |
 | **Ctrl+Shift+F2** | Single still of the monitor under the cursor. Saved into the current capture folder, or a new `still-…` folder if none is running. |
-| **Shift+F3** | Open the annotator for the last capture folder (or pick one). |
+| **Shift+F3** | Open the annotator on the last capture; step to any other capture from there. |
 
 ## Output
 
@@ -18,7 +18,7 @@ image stacks frame by frame, annotating them, and bundling them up.
   scroll-20260101-120000\
     frame_0001.png ... frame_0042.png   (capture order, top of scroll first)
     session.txt                          (how it stopped, monitor used)
-    annotations.tsv                      (frame, tag, note)   <- after annotating
+    annotation.txt                       (title, tags, notes for the capture) <- after annotating
     README.txt                           <- after Export bundle
   still-20260101-121500\
     still_20260101-121502-431.png
@@ -28,13 +28,15 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 ## Annotator
 
-- Pick a frame in the list; the preview is scaled to fit (originals are untouched).
-- **Tag**: `start`, `end`, `duplicate`, `bad`, `still`, `stitch here`.
-- **Note**: free text (tabs and newlines are flattened to spaces).
-- **Prev / Next** step through frames. Notes are saved when you change frames,
-  when you close the window, and on export.
-- **Export bundle** writes `annotations.tsv` and `README.txt`, then zips the folder
-  into `bundles\` and opens it in Explorer.
+- **Captures:** `< Prev capture` / `Next capture >`, the capture drop-down, or
+  Ctrl+PgUp / Ctrl+PgDn move between every capture folder (oldest to newest).
+  Annotated captures are marked `[annotated]` in the drop-down.
+- **Frames:** the list, the arrow keys, or `< Prev frame` / `Next frame >` step
+  through the current capture. The preview is scaled to fit; files are untouched.
+- **Annotation is per capture:** Title, Tags and Notes (multi-line). Saved to
+  `annotation.txt` when you switch capture, close the window, or export.
+- **Export bundle** writes `README.txt`, then zips the current capture into
+  `bundles\` and opens it in Explorer.
 
 ## Settings
 
@@ -57,6 +59,13 @@ Edit the `Cfg` map at the top of the script:
   monitor; anything else is refused and the capture stops. Whatever is on that
   monitor (including any PHI overlays) is still captured, so check frames before
   bundling.
+- **You confirm PHI is hidden before anything is saved.** After Shift+Space (scroll)
+  or before a still, a dialog asks whether all PHI is hidden on that monitor. The
+  default is No; nothing is written to disk unless you answer Yes.
+- **Pointer and tooltips stay out of the frames.** For every grab the pointer is
+  parked on another monitor (or the far bottom-right pixel with one monitor) and
+  only comes back over the image for the wheel step; no tooltip is shown while a
+  capture runs. Don't move the mouse during a capture.
 - **Shift+Space is a toggle.** The script only checks that the screen changed after
   it, not which way it toggled. Start each capture with the PHI overlay *showing*;
   if it was already hidden, Shift+Space will turn it back on.
