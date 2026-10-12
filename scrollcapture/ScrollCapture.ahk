@@ -75,32 +75,41 @@ ToggleScroll() {
 
 CaptureTick() {
     global Sess, Cfg
-    if !IsObject(Sess)
-        return
-    mon := Sess["mon"]
-    tmp := Sess["dir"] "\_tmp.png"
-    if !SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], tmp) {
-        StopScroll("capture failed")
+    Critical()          ; hotkeys (Esc, Shift+F2) wait until this step is finished
+    s := Sess           ; work on a snapshot so a stop elsewhere can't clear it mid-step
+    if !IsObject(s) {
+        SetTimer(CaptureTick, 0)
         return
     }
-    if (Sess["n"] > 0 && SameFile(tmp, Sess["last"])) {
-        FileDelete(tmp)
-        Sess["same"] += 1
-    } else {
-        Sess["n"] += 1
-        Sess["same"] := 0
-        Sess["last"] := Sess["dir"] "\frame_" SubStr("0000" Sess["n"], -4) ".png"
-        FileMove(tmp, Sess["last"], true)
+    try {
+        mon := s["mon"]
+        tmp := s["dir"] "\_tmp.png"
+        if !SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], tmp) {
+            StopScroll("capture failed")
+            return
+        }
+        if (s["n"] > 0 && SameFile(tmp, s["last"])) {
+            FileDelete(tmp)
+            s["same"] += 1
+        } else {
+            s["n"] += 1
+            s["same"] := 0
+            s["last"] := s["dir"] "\frame_" SubStr("0000" s["n"], -4) ".png"
+            FileMove(tmp, s["last"], true)
+        }
+        if (s["same"] >= Cfg["StopAfterSame"]) {
+            StopScroll("end of scroll (screen stopped changing)")
+            return
+        }
+        if (s["n"] >= Cfg["MaxFrames"]) {
+            StopScroll("reached MaxFrames")
+            return
+        }
+        SendEvent("+{Space}")   ; next page / frame
+    } catch as err {
+        ; stop instead of letting the timer re-raise the same error every tick
+        StopScroll("error: " err.Message)
     }
-    if (Sess["same"] >= Cfg["StopAfterSame"]) {
-        StopScroll("end of scroll (screen stopped changing)")
-        return
-    }
-    if (Sess["n"] >= Cfg["MaxFrames"]) {
-        StopScroll("reached MaxFrames")
-        return
-    }
-    SendEvent("+{Space}")   ; next page / frame
 }
 
 StopScroll(reason) {
