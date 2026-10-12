@@ -40,9 +40,12 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 Edit the `Cfg` map at the top of the script:
 
-- `IntervalMs` (300): auto-scroll pace. The script sends Shift+Space and grabs a
-  frame every this many ms, so it scrolls by itself. Lower it to go faster. Raise it if
-  frames show a half-finished scroll.
+- `StartDelayMs` (800): after the single Shift+Space that starts the stack, wait this
+  long before the first grab.
+- `IntervalMs` (400): pace. Each step grabs a frame, then scrolls the mouse wheel down.
+  Raise it if frames show a half-finished scroll; lower it for speed.
+- `WheelNotches` (3): wheel notches per step. More = bigger jump between frames (less
+  overlap); fewer = more overlap but slower to reach the end.
 - `StopAfterSame` (3): identical frames in a row that end a scroll capture.
 - `MaxFrames` (300): hard cap per scroll capture.
 - `OutRoot`: where folders go.

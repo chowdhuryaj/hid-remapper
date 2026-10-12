@@ -26,9 +26,11 @@ DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 
 global Cfg := Map(
     "OutRoot",       A_MyDocuments "\ScrollCaptures",
-    "IntervalMs",    300,   ; auto-scroll pace: one grab + one Shift+Space every this many ms.
-                            ; Lower = faster; raise it if frames show a half-finished scroll
-                            ; or if consecutive frames overlap too little to stitch
+    "StartDelayMs",  800,   ; after the single Shift+Space, before the first grab
+    "IntervalMs",    400,   ; pace: one grab, then one wheel step, every this many ms.
+                            ; Raise it if frames show a half-finished scroll; lower it for speed
+    "WheelNotches",  3,     ; mouse-wheel notches down per step. More = bigger jump between
+                            ; frames; fewer = more overlap (easier to stitch, slower to finish)
     "StopAfterSame", 3,     ; identical frames in a row = end of scroll
     "MaxFrames",     300    ; hard limit per scroll capture
 )
@@ -72,7 +74,8 @@ ToggleScroll() {
     dir := NewCaptureDir("scroll")
     Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
     ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
-    SetTimer(CaptureTick, Cfg["IntervalMs"])   ; the script drives the scroll at this pace
+    SendEvent("+{Space}")                 ; the one Shift+Space that starts the stack
+    SetTimer(CaptureTick, -Cfg["StartDelayMs"])   ; first grab after the viewer settles, then every IntervalMs
 }
 
 CaptureTick() {
@@ -107,7 +110,10 @@ CaptureTick() {
             StopScroll("reached MaxFrames")
             return
         }
-        SendEvent("+{Space}")   ; next page / frame
+        Loop Cfg["WheelNotches"]
+            Click("WheelDown")   ; scroll the stack down for the next frame, one notch at a time
+        if (s["n"] = 1)
+            SetTimer(CaptureTick, Cfg["IntervalMs"])   ; switch from the start delay to the steady pace
     } catch as err {
         ; stop instead of letting the timer re-raise the same error every tick
         StopScroll("error: " err.Message)
@@ -128,7 +134,8 @@ StopScroll(reason) {
         . "frames: " frames "`n"
         . "stopped: " reason "`n"
         . "monitor: " mon["n"] " (" mon["w"] "x" mon["h"] " at " mon["l"] "," mon["t"] ")`n"
-        . "interval_ms: " Cfg["IntervalMs"] "`n")
+        . "interval_ms: " Cfg["IntervalMs"] "`n"
+        . "wheel_notches: " Cfg["WheelNotches"] "`n")
     ToolTip("Scroll capture done: " frames " frames`n" dir)
     SetTimer(() => ToolTip(), -3000)
 }
