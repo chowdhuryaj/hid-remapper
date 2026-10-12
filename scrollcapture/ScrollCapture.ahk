@@ -10,9 +10,13 @@
 ;                  MaxFrames, or on Esc.
 ;  Ctrl+Shift+F2   Single still of the monitor under the cursor. Goes into the
 ;                  current capture folder, or a new still folder if none runs.
-;  Shift+F3        Annotate the last capture folder: tag frames, add notes, then
-;                  "Export bundle" writes annotations.tsv + README.txt and zips
-;                  the folder into <OutRoot>\bundles\ for handing back.
+;  Shift+F3        Annotator: step through every capture and its frames, give
+;                  each capture a title, tags and notes (annotation.txt), and
+;                  "Export bundle" zips it into <OutRoot>\bundles\ for handing back.
+;
+;  The pointer is parked off the captured monitor for every grab (it only
+;  returns over the image for the wheel step), and no tooltip is shown while
+;  a capture runs, so neither ends up in the frames.
 ;
 ;  Output:  <OutRoot>\scroll-yyyyMMdd-HHmmss\frame_0001.png ...
 ;           <OutRoot>\still-yyyyMMdd-HHmmss\still_*.png
@@ -37,8 +41,6 @@ global Cfg := Map(
 global Sess := ""          ; active scroll capture (Map) or ""
 global LastDir := ""       ; folder of the most recent capture, for the annotator
 global Ann := ""           ; annotator state (Map) or ""
-global AnnTags := ["", "start", "end", "duplicate", "bad", "still", "stitch here"]
-global AnnTagLabels := ["(none)", "start", "end", "duplicate", "bad", "still", "stitch here"]
 
 ; ---- GDI+ (needed to write PNG files) ----
 global gdipToken := 0
@@ -87,9 +89,12 @@ ToggleScroll() {
         return
     }
     dir := NewCaptureDir("scroll")   ; only now does anything get written to disk
-    Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
-    ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
-    SetTimer(CaptureTick, -1)        ; first grab now; the switch to IntervalMs happens after it
+    anchor := CursorPos()            ; where the wheel goes: over the image, where you pointed
+    park := ParkPoint(mon)
+    Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "", "anchor", anchor, "park", park)
+    ToolTip()                        ; no tooltip while capturing (it would land in the frames)
+    SetCursor(park*)                 ; pointer off the image for every grab
+    SetTimer(CaptureTick, -Cfg["IntervalMs"])   ; let any hover overlay clear, then grab; then every IntervalMs
 }
 
 ; Focuses the viewer under the cursor, sends Shift+Space there, and checks the
@@ -171,8 +176,11 @@ CaptureTick() {
             StopScroll("reached MaxFrames")
             return
         }
+        SetCursor(s["anchor"]*)          ; back over the image so the wheel lands in the viewer
+        Sleep(15)
         Loop Cfg["WheelNotches"]
-            Click("WheelDown")   ; scroll the stack down for the next frame, one notch at a time
+            Click("WheelDown")           ; scroll the stack down for the next frame, one notch at a time
+        SetCursor(s["park"]*)            ; and off the image again before the next grab
         if (s["n"] = 1)
             SetTimer(CaptureTick, Cfg["IntervalMs"])   ; switch from the start delay to the steady pace
     } catch as err {
@@ -189,6 +197,7 @@ StopScroll(reason) {
     dir := Sess["dir"]
     frames := Sess["n"]
     mon := Sess["mon"]
+    SetCursor(Sess["anchor"]*)       ; give the pointer back where it was
     Sess := ""
     WriteText(dir "\session.txt"
         , "type: scroll`n"
@@ -219,12 +228,50 @@ StillCapture() {
             dir := NewCaptureDir("still")
         }
         file := dir "\still_" FormatTime(A_Now, "yyyyMMdd-HHmmss") "-" A_MSec ".png"
-        ok := SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], file)
+        if IsObject(Sess) {
+            ; a scroll capture is running: the pointer is already parked between
+            ; ticks, and a tooltip now would show up in its next frames
+            SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], file)
+            return
+        }
+        ToolTip()
+        anchor := CursorPos()
+        SetCursor(ParkPoint(mon)*)
+        Sleep(Cfg["IntervalMs"])         ; let any hover overlay clear
+        try ok := SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], file)
+        finally SetCursor(anchor*)
         ToolTip(ok ? "Still saved: " file : "Still FAILED")
     } catch as err {
-        ToolTip("Still NOT saved: " err.Message)
+        if !IsObject(Sess)
+            ToolTip("Still NOT saved: " err.Message)
     }
     SetTimer(() => ToolTip(), -2000)
+}
+
+; Pointer position / placement in physical pixels (same space as the capture).
+CursorPos() {
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    pt := Buffer(8, 0)
+    DllCall("GetCursorPos", "ptr", pt)
+    return [NumGet(pt, 0, "int"), NumGet(pt, 4, "int")]
+}
+
+SetCursor(x, y) {
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    DllCall("SetCursorPos", "int", x, "int", y)
+}
+
+; Where the pointer waits while a frame is grabbed: the centre of another
+; monitor, or with a single monitor the bottom-right pixel of this one (the
+; arrow is drawn down and right of its tip, so it is off-screen there).
+ParkPoint(mon) {
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    Loop MonitorGetCount() {
+        MonitorGet(A_Index, &l, &t, &r, &b)
+        if (l != mon["l"] || t != mon["t"])
+            return [(l + r) // 2, (t + b) // 2]
+    }
+    return [mon["l"] + mon["w"] - 1, mon["t"] + mon["h"] - 1]
 }
 
 NewCaptureDir(kind) {
@@ -383,135 +430,219 @@ WriteText(path, text) {
 }
 
 ; ============================================================================
-;  Annotator
+;  Annotator -- one annotation per capture (title, tags, notes), with
+;  navigation across every capture folder and through each capture's frames.
+;  Saved as annotation.txt in the capture folder.
 ; ============================================================================
 
 OpenAnnotator() {
-    global LastDir, Cfg
-    dir := LastDir
-    if !(dir && DirExist(dir)) {
-        dir := DirSelect(Cfg["OutRoot"], 1, "Pick a capture folder to annotate")
-        if !dir
-            return
+    global Cfg, LastDir
+    caps := ListCaptures()
+    if !caps.Length {
+        MsgBox("No captures yet in:`n" Cfg["OutRoot"])
+        return
     }
-    AnnotatorShow(dir)
+    start := caps.Length                 ; newest, unless the last capture is in the list
+    for i, d in caps {
+        if (d = LastDir)
+            start := i
+    }
+    AnnotatorShow(caps, start)
 }
 
-AnnotatorShow(dir) {
-    global Ann, AnnTags, AnnTagLabels
-    AnnClose()
+; Capture folders under OutRoot, oldest first (by the timestamp in the name).
+ListCaptures() {
+    global Cfg
+    text := ""
+    Loop Files, Cfg["OutRoot"] "\*", "D" {
+        if (A_LoopFileName = "bundles")
+            continue
+        text .= SubStr(A_LoopFileName, InStr(A_LoopFileName, "-") + 1) "|" A_LoopFileFullPath "`n"
+    }
+    caps := []
+    if (text = "")
+        return caps
+    for line in StrSplit(Sort(Trim(text, "`n")), "`n")
+        caps.Push(SubStr(line, InStr(line, "|") + 1))
+    return caps
+}
 
+FramesIn(dir) {
     text := ""
     Loop Files, dir "\*.png"
         text .= A_LoopFileName "`n"
-    if (text = "") {
-        MsgBox("No .png frames in:`n" dir)
-        return
-    }
-    text := Sort(text)
-    names := StrSplit(Trim(text, "`n"), "`n")
+    if (text = "")
+        return []
+    return StrSplit(Sort(Trim(text, "`n")), "`n")
+}
 
-    ; read annotations already saved in this folder
-    data := Map()
-    tsv := dir "\annotations.tsv"
-    if FileExist(tsv) {
-        for line in StrSplit(FileRead(tsv, "UTF-8"), "`n", "`r") {
-            p := StrSplit(line, "`t")
-            if (p.Length >= 1 && p[1] != "" && p[1] != "frame")
-                data[p[1]] := Map("tag", p.Length >= 2 ? p[2] : "", "note", p.Length >= 3 ? p[3] : "")
+CaptureLabels(caps) {
+    labels := []
+    for d in caps {
+        SplitPath(d, &base)
+        labels.Push(base (FileExist(d "\annotation.txt") ? "   [annotated]" : ""))
+    }
+    return labels
+}
+
+; annotation.txt:  "title: ...", "tags: ...", then "notes:" and the notes text.
+ReadAnnotation(dir) {
+    a := Map("title", "", "tags", "", "notes", "")
+    f := dir "\annotation.txt"
+    if !FileExist(f)
+        return a
+    inNotes := false
+    notes := ""
+    for line in StrSplit(FileRead(f, "UTF-8"), "`n", "`r") {
+        if inNotes {
+            notes .= line "`n"
+        } else if (SubStr(line, 1, 7) = "title: ") {
+            a["title"] := SubStr(line, 8)
+        } else if (SubStr(line, 1, 6) = "tags: ") {
+            a["tags"] := SubStr(line, 7)
+        } else if (line = "notes:") {
+            inNotes := true
         }
     }
-
-    g := Gui(, "Annotate")
-    g.SetFont("s10", "Segoe UI")
-    lb := g.Add("ListBox", "x10 y10 w260 h470", names)
-    pic := g.Add("Picture", "x290 y10 w640 h380")          ; preview only, scaled to this box
-    g.Add("Text", "x290 y405", "Tag")
-    tagCtl := g.Add("DropDownList", "x330 y401 w200", AnnTagLabels)
-    g.Add("Text", "x290 y440", "Note")
-    noteCtl := g.Add("Edit", "x330 y437 w600")
-    btnPrev := g.Add("Button", "x290 y475 w90", "< Prev")
-    btnNext := g.Add("Button", "x390 y475 w90", "Next >")
-    btnExport := g.Add("Button", "x490 y475 w200", "Export bundle")
-    status := g.Add("Text", "x10 y490 w920", "")
-
-    Ann := Map("g", g, "lb", lb, "pic", pic, "tag", tagCtl, "note", noteCtl, "status", status,
-               "names", names, "data", data, "dir", dir, "idx", 0)
-
-    lb.OnEvent("Change", (*) => AnnSelect(lb.Value))
-    btnPrev.OnEvent("Click", (*) => AnnStep(-1))
-    btnNext.OnEvent("Click", (*) => AnnStep(1))
-    btnExport.OnEvent("Click", (*) => AnnExport())
-    g.OnEvent("Close", (*) => AnnClose())
-    g.Show()
-    lb.Choose(1)
-    AnnSelect(1)
+    a["notes"] := RTrim(notes, "`n")
+    return a
 }
 
-AnnSelect(i) {
-    global Ann, AnnTags
-    if (!IsObject(Ann) || i < 1)
-        return
-    AnnSaveCurrent()
-    Ann["idx"] := i
-    name := Ann["names"][i]
-    Ann["pic"].Value := Ann["dir"] "\" name
-    rec := Ann["data"].Has(name) ? Ann["data"][name] : Map("tag", "", "note", "")
-    ti := 1
-    for k, t in AnnTags {
-        if (t = rec["tag"])
-            ti := k
-    }
-    Ann["tag"].Choose(ti)
-    Ann["note"].Value := rec["note"]
-    Ann["g"].Title := Format("Annotate  {1}/{2}  {3}", i, Ann["names"].Length, name)
-}
-
-AnnStep(d) {
-    global Ann
-    if !IsObject(Ann)
-        return
-    i := Min(Max(Ann["idx"] + d, 1), Ann["names"].Length)
-    Ann["lb"].Choose(i)
-    AnnSelect(i)
-}
-
-AnnSaveCurrent() {
-    global Ann, AnnTags
-    if (!IsObject(Ann) || Ann["idx"] < 1)
-        return
-    name := Ann["names"][Ann["idx"]]
-    Ann["data"][name] := Map("tag", AnnTags[Ann["tag"].Value], "note", CleanField(Ann["note"].Value))
+WriteAnnotation(dir, a) {
+    WriteText(dir "\annotation.txt"
+        , "title: " CleanField(a["title"]) "`n"
+        . "tags: " CleanField(a["tags"]) "`n"
+        . "notes:`n" a["notes"] "`n")
 }
 
 CleanField(s) {
     return StrReplace(StrReplace(StrReplace(s, "`t", " "), "`r", " "), "`n", " ")
 }
 
-; Writes annotations.tsv for the open annotator (one row per frame).
-AnnWriteTsv() {
+AnnotatorShow(caps, start) {
     global Ann
-    AnnSaveCurrent()
-    tsv := "frame`ttag`tnote`n"
-    for name in Ann["names"] {
-        rec := Ann["data"].Has(name) ? Ann["data"][name] : Map("tag", "", "note", "")
-        tsv .= name "`t" rec["tag"] "`t" rec["note"] "`n"
+    AnnClose()
+
+    g := Gui(, "Annotate")
+    g.SetFont("s10", "Segoe UI")
+    btnPrevCap := g.Add("Button", "x10 y10 w130", "< Prev capture")
+    capList := g.Add("DropDownList", "x150 y11 w400", CaptureLabels(caps))
+    btnNextCap := g.Add("Button", "x560 y10 w130", "Next capture >")
+    info := g.Add("Text", "x700 y15 w230", "")
+
+    lb := g.Add("ListBox", "x10 y50 w260 h380")
+    pic := g.Add("Picture", "x290 y50 w640 h380")          ; preview only, scaled to this box
+    btnPrevF := g.Add("Button", "x290 y438 w120", "< Prev frame")
+    btnNextF := g.Add("Button", "x420 y438 w120", "Next frame >")
+    g.Add("Text", "x550 y443 w380", "Ctrl+PgUp / Ctrl+PgDn: previous / next capture")
+
+    g.Add("Text", "x10 y482", "Title")
+    title := g.Add("Edit", "x70 y479 w860")
+    g.Add("Text", "x10 y514", "Tags")
+    tags := g.Add("Edit", "x70 y511 w860")
+    g.Add("Text", "x10 y546", "Notes")
+    notes := g.Add("Edit", "x70 y543 w860 h110 Multi WantReturn")
+    btnExport := g.Add("Button", "x70 y663 w200", "Export bundle")
+    status := g.Add("Text", "x280 y668 w650", "")
+
+    Ann := Map("g", g, "caplist", capList, "info", info, "lb", lb, "pic", pic,
+               "title", title, "tags", tags, "notes", notes, "status", status,
+               "caps", caps, "ci", 0, "dir", "", "names", [], "idx", 0, "loaded", "")
+
+    btnPrevCap.OnEvent("Click", (*) => AnnStepCapture(-1))
+    btnNextCap.OnEvent("Click", (*) => AnnStepCapture(1))
+    capList.OnEvent("Change", (*) => AnnLoadCapture(capList.Value))
+    lb.OnEvent("Change", (*) => AnnShowFrame(lb.Value))
+    btnPrevF.OnEvent("Click", (*) => AnnShowFrame(Ann["idx"] - 1))
+    btnNextF.OnEvent("Click", (*) => AnnShowFrame(Ann["idx"] + 1))
+    btnExport.OnEvent("Click", (*) => AnnExport())
+    g.OnEvent("Close", (*) => AnnClose())
+    g.Show()
+    AnnLoadCapture(start)
+}
+
+#HotIf IsObject(Ann) && WinActive("ahk_id " Ann["g"].Hwnd)
+^PgUp::AnnStepCapture(-1)
+^PgDn::AnnStepCapture(1)
+#HotIf
+
+AnnStepCapture(d) {
+    global Ann
+    if IsObject(Ann)
+        AnnLoadCapture(Min(Max(Ann["ci"] + d, 1), Ann["caps"].Length))
+}
+
+AnnLoadCapture(i) {
+    global Ann, LastDir
+    if (!IsObject(Ann) || i < 1 || i > Ann["caps"].Length)
+        return
+    AnnSaveCurrent()                     ; keep what was typed for the capture we are leaving
+    dir := Ann["caps"][i]
+    Ann["ci"] := i
+    Ann["dir"] := dir
+    LastDir := dir
+    names := FramesIn(dir)
+    Ann["names"] := names
+    Ann["lb"].Delete()
+    if names.Length
+        Ann["lb"].Add(names)
+    a := ReadAnnotation(dir)
+    Ann["loaded"] := a
+    Ann["title"].Value := a["title"]
+    Ann["tags"].Value := a["tags"]
+    Ann["notes"].Value := a["notes"]
+    Ann["caplist"].Choose(i)
+    SplitPath(dir, &base)
+    Ann["g"].Title := "Annotate - " base
+    Ann["info"].Value := Format("Capture {1} of {2}  |  {3} frames", i, Ann["caps"].Length, names.Length)
+    Ann["status"].Value := ""
+    Ann["idx"] := 0
+    if names.Length {
+        AnnShowFrame(1)
+    } else {
+        Ann["pic"].Visible := false
     }
-    WriteText(Ann["dir"] "\annotations.tsv", tsv)
+}
+
+AnnShowFrame(i) {
+    global Ann
+    if (!IsObject(Ann) || !Ann["names"].Length)
+        return
+    i := Min(Max(i, 1), Ann["names"].Length)
+    Ann["idx"] := i
+    Ann["lb"].Choose(i)
+    Ann["pic"].Value := Ann["dir"] "\" Ann["names"][i]
+    Ann["pic"].Visible := true
+}
+
+; Writes annotation.txt for the open capture if anything changed.
+AnnSaveCurrent() {
+    global Ann
+    if (!IsObject(Ann) || Ann["dir"] = "")
+        return
+    a := Map("title", Ann["title"].Value, "tags", Ann["tags"].Value
+           , "notes", RTrim(StrReplace(Ann["notes"].Value, "`r`n", "`n"), "`n"))
+    old := Ann["loaded"]
+    if (a["title"] == old["title"] && a["tags"] == old["tags"] && a["notes"] == old["notes"])
+        return
+    WriteAnnotation(Ann["dir"], a)
+    Ann["loaded"] := a
+    ; refresh the [annotated] marks in the capture list
+    Ann["caplist"].Delete()
+    Ann["caplist"].Add(CaptureLabels(Ann["caps"]))
+    Ann["caplist"].Choose(Ann["ci"])
 }
 
 AnnExport() {
     global Ann, Cfg
-    if !IsObject(Ann)
+    if (!IsObject(Ann) || Ann["dir"] = "")
         return
-    AnnWriteTsv()
+    AnnSaveCurrent()
     dir := Ann["dir"]
     WriteText(dir "\README.txt"
         , "ScrollCapture bundle`n"
         . "frames: " Ann["names"].Length " (PNG, in capture order: frame_0001 is the first grab)`n"
-        . "annotations.tsv: one row per frame -- frame, tag, note`n"
-        . "tags: start / end = top and bottom of the wanted content; duplicate = repeat frame;`n"
-        . "      bad = unusable frame; still = single screenshot; stitch here = join point`n"
+        . "annotation.txt: title, tags and notes for the whole capture`n"
         . "session.txt: how the capture ended and which monitor was used`n")
 
     SplitPath(dir, &base)
@@ -527,16 +658,15 @@ AnnExport() {
         Ann["status"].Value := "Bundle written: " zip
         Run(Format('explorer.exe /select,"{1}"', zip))
     } else {
-        Ann["status"].Value := "Zip failed -- annotations.tsv is still in the folder."
+        Ann["status"].Value := "Zip failed -- annotation.txt is still in the folder."
     }
 }
 
-; Closing (or reopening on another folder) keeps the notes: they are written to
-; annotations.tsv first, so nothing typed in the annotator is lost.
+; Closing saves the annotation first, so nothing typed is lost.
 AnnClose() {
     global Ann
     if IsObject(Ann) {
-        AnnWriteTsv()
+        AnnSaveCurrent()
         Ann["g"].Destroy()
     }
     Ann := ""
