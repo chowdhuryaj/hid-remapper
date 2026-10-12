@@ -26,8 +26,8 @@ DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 
 global Cfg := Map(
     "OutRoot",       A_MyDocuments "\ScrollCaptures",
-    "StartDelayMs",  800,   ; after the single Shift+Space, before the first grab
-    "IntervalMs",    400,   ; pace: one grab, then one wheel step, every this many ms.
+    "StartDelayMs",  300,   ; after the single Shift+Space, before the first grab
+    "IntervalMs",    150,   ; pace: one grab, then one wheel step, every this many ms.
                             ; Raise it if frames show a half-finished scroll; lower it for speed
     "WheelNotches",  3,     ; mouse-wheel notches down per step. More = bigger jump between
                             ; frames; fewer = more overlap (easier to stitch, slower to finish)
@@ -70,7 +70,12 @@ ToggleScroll() {
         return
     }
     KeyWait("Shift")   ; let go of the Shift from Shift+F2 so it doesn't mix into Shift+Space
-    mon := MonitorUnderCursor()
+    try mon := MonitorUnderCursor()
+    catch as err {
+        ToolTip("Scroll capture NOT started: " err.Message)
+        SetTimer(() => ToolTip(), -3000)
+        return
+    }
     dir := NewCaptureDir("scroll")
     Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
     ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
@@ -142,16 +147,20 @@ StopScroll(reason) {
 
 StillCapture() {
     global Sess
-    if IsObject(Sess) {
-        dir := Sess["dir"]
-        mon := Sess["mon"]
-    } else {
-        dir := NewCaptureDir("still")
-        mon := MonitorUnderCursor()
+    try {
+        if IsObject(Sess) {
+            mon := Sess["mon"]
+            dir := Sess["dir"]
+        } else {
+            mon := MonitorUnderCursor()      ; before creating a folder, so a failure leaves nothing behind
+            dir := NewCaptureDir("still")
+        }
+        file := dir "\still_" FormatTime(A_Now, "yyyyMMdd-HHmmss") "-" A_MSec ".png"
+        ok := SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], file)
+        ToolTip(ok ? "Still saved: " file : "Still FAILED")
+    } catch as err {
+        ToolTip("Still NOT saved: " err.Message)
     }
-    file := dir "\still_" FormatTime(A_Now, "yyyyMMdd-HHmmss") "-" A_MSec ".png"
-    ok := SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], file)
-    ToolTip(ok ? "Still saved: " file : "Still FAILED")
     SetTimer(() => ToolTip(), -2000)
 }
 
@@ -163,20 +172,64 @@ NewCaptureDir(kind) {
     return dir
 }
 
+; The monitor under the cursor, straight from Win32 (GetCursorPos ->
+; MonitorFromPoint -> GetMonitorInfo). The earlier MouseGetPos version used
+; AHK's default CoordMode (relative to the active window, not the screen), so
+; it could pick the wrong monitor. Everything here and in SaveRegion runs in
+; the same per-monitor DPI context, so the rectangle is in the same physical
+; pixels BitBlt uses.
 MonitorUnderCursor() {
-    MouseGetPos(&mx, &my)
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    pt := Buffer(8, 0)
+    DllCall("GetCursorPos", "ptr", pt)
+    if (A_PtrSize = 8)
+        hMon := DllCall("MonitorFromPoint", "int64", NumGet(pt, 0, "int64"), "uint", 2, "ptr")  ; MONITOR_DEFAULTTONEAREST
+    else
+        hMon := DllCall("MonitorFromPoint", "int", NumGet(pt, 0, "int"), "int", NumGet(pt, 4, "int"), "uint", 2, "ptr")
+    rc := MonitorRect(hMon)
+    if !rc
+        throw Error("Could not read the monitor under the cursor")
+    return Map("n", MonitorIndexOf(rc), "l", rc[1], "t", rc[2], "w", rc[3] - rc[1], "h", rc[4] - rc[2])
+}
+
+; [left, top, right, bottom] of a monitor handle, or 0 on failure.
+MonitorRect(hMon) {
+    if !hMon
+        return 0
+    mi := Buffer(40, 0)
+    NumPut("uint", 40, mi, 0)              ; MONITORINFO.cbSize
+    if !DllCall("GetMonitorInfoW", "ptr", hMon, "ptr", mi)
+        return 0
+    return [NumGet(mi, 4, "int"), NumGet(mi, 8, "int"), NumGet(mi, 12, "int"), NumGet(mi, 16, "int")]
+}
+
+; AHK's monitor number for a rectangle, for the tooltip and session.txt only.
+MonitorIndexOf(rc) {
     Loop MonitorGetCount() {
         MonitorGet(A_Index, &l, &t, &r, &b)
-        if (mx >= l && mx < r && my >= t && my < b)
-            return Map("n", A_Index, "l", l, "t", t, "w", r - l, "h", b - t)
+        if (l = rc[1] && t = rc[2] && r = rc[3] && b = rc[4])
+            return A_Index
     }
-    p := MonitorGetPrimary()
-    MonitorGet(p, &l, &t, &r, &b)
-    return Map("n", p, "l", l, "t", t, "w", r - l, "h", b - t)
+    return "?"
+}
+
+; True only when the rectangle lies entirely inside ONE monitor. SaveRegion
+; refuses anything else, so a capture can never include a second screen.
+RectOnOneMonitor(x, y, w, h) {
+    if (w <= 0 || h <= 0)
+        return false
+    rect := Buffer(16, 0)
+    NumPut("int", x, "int", y, "int", x + w, "int", y + h, rect)
+    hMon := DllCall("MonitorFromRect", "ptr", rect, "uint", 0, "ptr")   ; MONITOR_DEFAULTTONULL
+    rc := MonitorRect(hMon)
+    return rc && x >= rc[1] && y >= rc[2] && x + w <= rc[3] && y + h <= rc[4]
 }
 
 ; Copies a screen rectangle and writes it as PNG. Returns true on success.
 SaveRegion(x, y, w, h, path) {
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")   ; same pixel space as MonitorUnderCursor
+    if !RectOnOneMonitor(x, y, w, h)
+        throw Error("Capture refused: the area is not entirely on one monitor")
     hdc := DllCall("CreateCompatibleDC", "ptr", 0, "ptr")
     bi := Buffer(40, 0)
     NumPut("uint", 40, bi, 0)     ; biSize
@@ -255,7 +308,7 @@ AnnotatorShow(dir) {
         MsgBox("No .png frames in:`n" dir)
         return
     }
-    Sort(&text)
+    text := Sort(text)
     names := StrSplit(Trim(text, "`n"), "`n")
 
     ; read annotations already saved in this folder
