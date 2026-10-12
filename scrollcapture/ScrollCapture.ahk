@@ -26,7 +26,11 @@ DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 
 global Cfg := Map(
     "OutRoot",       A_MyDocuments "\ScrollCaptures",
-    "SettleMs",      350,   ; wait after Shift+Space before the next grab; raise if frames lag
+    "StartDelayMs",  800,   ; after the single Shift+Space, before the first grab
+    "IntervalMs",    400,   ; pace: one grab, then one wheel step, every this many ms.
+                            ; Raise it if frames show a half-finished scroll; lower it for speed
+    "WheelNotches",  3,     ; mouse-wheel notches down per step. More = bigger jump between
+                            ; frames; fewer = more overlap (easier to stitch, slower to finish)
     "StopAfterSame", 3,     ; identical frames in a row = end of scroll
     "MaxFrames",     300    ; hard limit per scroll capture
 )
@@ -70,37 +74,50 @@ ToggleScroll() {
     dir := NewCaptureDir("scroll")
     Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
     ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
-    SetTimer(CaptureTick, Cfg["SettleMs"])
+    SendEvent("+{Space}")                 ; the one Shift+Space that starts the stack
+    SetTimer(CaptureTick, -Cfg["StartDelayMs"])   ; first grab after the viewer settles, then every IntervalMs
 }
 
 CaptureTick() {
     global Sess, Cfg
-    if !IsObject(Sess)
-        return
-    mon := Sess["mon"]
-    tmp := Sess["dir"] "\_tmp.png"
-    if !SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], tmp) {
-        StopScroll("capture failed")
+    Critical()          ; hotkeys (Esc, Shift+F2) wait until this step is finished
+    s := Sess           ; work on a snapshot so a stop elsewhere can't clear it mid-step
+    if !IsObject(s) {
+        SetTimer(CaptureTick, 0)
         return
     }
-    if (Sess["n"] > 0 && SameFile(tmp, Sess["last"])) {
-        FileDelete(tmp)
-        Sess["same"] += 1
-    } else {
-        Sess["n"] += 1
-        Sess["same"] := 0
-        Sess["last"] := Sess["dir"] "\frame_" SubStr("0000" Sess["n"], -4) ".png"
-        FileMove(tmp, Sess["last"], true)
+    try {
+        mon := s["mon"]
+        tmp := s["dir"] "\_tmp.png"
+        if !SaveRegion(mon["l"], mon["t"], mon["w"], mon["h"], tmp) {
+            StopScroll("capture failed")
+            return
+        }
+        if (s["n"] > 0 && SameFile(tmp, s["last"])) {
+            FileDelete(tmp)
+            s["same"] += 1
+        } else {
+            s["n"] += 1
+            s["same"] := 0
+            s["last"] := s["dir"] "\frame_" SubStr("0000" s["n"], -4) ".png"
+            FileMove(tmp, s["last"], true)
+        }
+        if (s["same"] >= Cfg["StopAfterSame"]) {
+            StopScroll("end of scroll (screen stopped changing)")
+            return
+        }
+        if (s["n"] >= Cfg["MaxFrames"]) {
+            StopScroll("reached MaxFrames")
+            return
+        }
+        Loop Cfg["WheelNotches"]
+            Click("WheelDown")   ; scroll the stack down for the next frame, one notch at a time
+        if (s["n"] = 1)
+            SetTimer(CaptureTick, Cfg["IntervalMs"])   ; switch from the start delay to the steady pace
+    } catch as err {
+        ; stop instead of letting the timer re-raise the same error every tick
+        StopScroll("error: " err.Message)
     }
-    if (Sess["same"] >= Cfg["StopAfterSame"]) {
-        StopScroll("end of scroll (screen stopped changing)")
-        return
-    }
-    if (Sess["n"] >= Cfg["MaxFrames"]) {
-        StopScroll("reached MaxFrames")
-        return
-    }
-    SendEvent("+{Space}")   ; next page / frame
 }
 
 StopScroll(reason) {
@@ -117,7 +134,8 @@ StopScroll(reason) {
         . "frames: " frames "`n"
         . "stopped: " reason "`n"
         . "monitor: " mon["n"] " (" mon["w"] "x" mon["h"] " at " mon["l"] "," mon["t"] ")`n"
-        . "settle_ms: " Cfg["SettleMs"] "`n")
+        . "interval_ms: " Cfg["IntervalMs"] "`n"
+        . "wheel_notches: " Cfg["WheelNotches"] "`n")
     ToolTip("Scroll capture done: " frames " frames`n" dir)
     SetTimer(() => ToolTip(), -3000)
 }
