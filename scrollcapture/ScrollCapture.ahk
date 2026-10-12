@@ -70,17 +70,48 @@ ToggleScroll() {
         return
     }
     KeyWait("Shift")   ; let go of the Shift from Shift+F2 so it doesn't mix into Shift+Space
-    try mon := MonitorUnderCursor()
-    catch as err {
-        ToolTip("Scroll capture NOT started: " err.Message)
-        SetTimer(() => ToolTip(), -3000)
+    KeyWait("Ctrl")
+    ToolTip()          ; no tooltip on screen during the before/after check
+    try {
+        mon := MonitorUnderCursor()
+        PressStartKey(mon)   ; throws -- and nothing is saved -- unless Shift+Space visibly took effect
+    } catch as err {
+        ToolTip("Scroll capture NOT started (nothing saved):`n" err.Message)
+        SetTimer(() => ToolTip(), -5000)
         return
     }
-    dir := NewCaptureDir("scroll")
+    dir := NewCaptureDir("scroll")   ; only now does anything get written to disk
     Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
     ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
-    SendEvent("+{Space}")                 ; the one Shift+Space that starts the stack
-    SetTimer(CaptureTick, -Cfg["StartDelayMs"])   ; first grab after the viewer settles, then every IntervalMs
+    SetTimer(CaptureTick, -1)        ; first grab now; the switch to IntervalMs happens after it
+}
+
+; Focuses the viewer under the cursor, sends Shift+Space there, and checks the
+; monitor actually changed. If the key didn't land (wrong window focused, key
+; dropped), the screen is unchanged and this throws, so no capture starts.
+; Both comparison grabs stay in memory and are never written to disk.
+PressStartKey(mon) {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(, , &hwnd)
+    if !hwnd
+        throw Error("No window under the cursor to send Shift+Space to")
+    WinActivate("ahk_id " hwnd)
+    if !WinWaitActive("ahk_id " hwnd, , 1)
+        throw Error("Could not focus the window under the cursor")
+    Sleep(50)
+    before := GrabPixels(mon["l"], mon["t"], mon["w"], mon["h"])
+    ; held key presses: some viewers ignore an instant down/up
+    SendEvent("{Shift down}")
+    Sleep(30)
+    SendEvent("{Space down}")
+    Sleep(50)
+    SendEvent("{Space up}")
+    Sleep(30)
+    SendEvent("{Shift up}")
+    Sleep(Cfg["StartDelayMs"])
+    after := GrabPixels(mon["l"], mon["t"], mon["w"], mon["h"])
+    if SameBuffer(before, after)
+        throw Error("Shift+Space did not change the screen. Click the image viewer, then try again.")
 }
 
 CaptureTick() {
@@ -261,6 +292,43 @@ SaveRegion(x, y, w, h, path) {
 
 ; True when two files have identical bytes (PNG output is deterministic, so
 ; an unchanged screen gives an identical file).
+; Raw 32-bit pixels of a screen rectangle, in memory only (nothing on disk).
+; Same single-monitor guard as SaveRegion.
+GrabPixels(x, y, w, h) {
+    DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
+    if !RectOnOneMonitor(x, y, w, h)
+        throw Error("Capture refused: the area is not entirely on one monitor")
+    hdc := DllCall("CreateCompatibleDC", "ptr", 0, "ptr")
+    bi := Buffer(40, 0)
+    NumPut("uint", 40, bi, 0)
+    NumPut("int", w, bi, 4)
+    NumPut("int", -h, bi, 8)
+    NumPut("ushort", 1, bi, 12)
+    NumPut("ushort", 32, bi, 14)
+    pBits := 0
+    hbm := DllCall("CreateDIBSection", "ptr", hdc, "ptr", bi, "uint", 0, "ptr*", &pBits, "ptr", 0, "uint", 0, "ptr")
+    obm := DllCall("SelectObject", "ptr", hdc, "ptr", hbm, "ptr")
+    sdc := DllCall("GetDC", "ptr", 0, "ptr")
+    DllCall("gdi32\BitBlt"
+        , "ptr", hdc, "int", 0, "int", 0, "int", w, "int", h
+        , "ptr", sdc, "int", x, "int", y, "uint", 0x00CC0020 | 0x40000000)
+    DllCall("ReleaseDC", "ptr", 0, "ptr", sdc)
+    n := w * h * 4
+    buf := Buffer(n)
+    if pBits
+        DllCall("msvcrt\memcpy", "ptr", buf, "ptr", pBits, "uptr", n, "cdecl ptr")
+    DllCall("SelectObject", "ptr", hdc, "ptr", obm)
+    DllCall("DeleteObject", "ptr", hbm)
+    DllCall("DeleteDC", "ptr", hdc)
+    if !pBits
+        throw Error("Screen grab failed")
+    return buf
+}
+
+SameBuffer(a, b) {
+    return a.Size = b.Size && DllCall("msvcrt\memcmp", "ptr", a, "ptr", b, "uptr", a.Size, "int") = 0
+}
+
 SameFile(a, b) {
     if (FileGetSize(a) != FileGetSize(b))
         return false
