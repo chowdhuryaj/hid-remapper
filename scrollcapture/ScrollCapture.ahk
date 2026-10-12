@@ -152,7 +152,7 @@ MonitorUnderCursor() {
         if (mx >= l && mx < r && my >= t && my < b)
             return Map("n", A_Index, "l", l, "t", t, "w", r - l, "h", b - t)
     }
-    MonitorGetPrimary(&p)
+    p := MonitorGetPrimary()
     MonitorGet(p, &l, &t, &r, &b)
     return Map("n", p, "l", l, "t", t, "w", r - l, "h", b - t)
 }
