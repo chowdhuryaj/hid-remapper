@@ -74,10 +74,16 @@ ToggleScroll() {
     ToolTip()          ; no tooltip on screen during the before/after check
     try {
         mon := MonitorUnderCursor()
-        PressStartKey(mon)   ; throws -- and nothing is saved -- unless Shift+Space visibly took effect
+        hwnd := PressStartKey(mon)   ; throws -- and nothing is saved -- unless the screen changed
     } catch as err {
         ToolTip("Scroll capture NOT started (nothing saved):`n" err.Message)
         SetTimer(() => ToolTip(), -5000)
+        return
+    }
+    ; The pixel check only proves SOMETHING changed. You confirm the PHI is gone.
+    if !ConfirmPhiHidden(mon, hwnd) {
+        ToolTip("Scroll capture cancelled (nothing saved)")
+        SetTimer(() => ToolTip(), -3000)
         return
     }
     dir := NewCaptureDir("scroll")   ; only now does anything get written to disk
@@ -98,7 +104,7 @@ PressStartKey(mon) {
     WinActivate("ahk_id " hwnd)
     if !WinWaitActive("ahk_id " hwnd, , 1)
         throw Error("Could not focus the window under the cursor")
-    Sleep(50)
+    Sleep(250)   ; let the focus change finish repainting before the "before" grab
     before := GrabPixels(mon["l"], mon["t"], mon["w"], mon["h"])
     ; held key presses: some viewers ignore an instant down/up
     SendEvent("{Shift down}")
@@ -112,6 +118,25 @@ PressStartKey(mon) {
     after := GrabPixels(mon["l"], mon["t"], mon["w"], mon["h"])
     if SameBuffer(before, after)
         throw Error("Shift+Space did not change the screen. Click the image viewer, then try again.")
+    return hwnd
+}
+
+; Asks you to confirm, by eye, that no PHI is showing on the monitor about to
+; be captured. Default is No, so Enter cancels. Nothing has been saved yet
+; when this runs. Refocuses the viewer afterwards so the wheel lands there.
+ConfirmPhiHidden(mon, hwnd := 0) {
+    answer := MsgBox("Look at monitor " mon["n"] " now.`n`n"
+        . "Is ALL PHI hidden (name, MRN, DOB, accession, dates)?`n`n"
+        . "Yes = capture it`nNo = cancel, nothing is saved"
+        , "ScrollCapture: confirm PHI hidden", "YesNo Icon! Default2 262144")   ; 262144 = always on top
+    if (answer != "Yes")
+        return false
+    if hwnd {
+        WinActivate("ahk_id " hwnd)
+        WinWaitActive("ahk_id " hwnd, , 1)
+    }
+    Sleep(150)   ; let the dialog vanish from the screen before any grab
+    return true
 }
 
 CaptureTick() {
@@ -184,6 +209,13 @@ StillCapture() {
             dir := Sess["dir"]
         } else {
             mon := MonitorUnderCursor()      ; before creating a folder, so a failure leaves nothing behind
+            CoordMode("Mouse", "Screen")
+            MouseGetPos(, , &hwnd)
+            if !ConfirmPhiHidden(mon, hwnd) {
+                ToolTip("Still cancelled (nothing saved)")
+                SetTimer(() => ToolTip(), -2000)
+                return
+            }
             dir := NewCaptureDir("still")
         }
         file := dir "\still_" FormatTime(A_Now, "yyyyMMdd-HHmmss") "-" A_MSec ".png"

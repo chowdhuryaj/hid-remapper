@@ -57,6 +57,9 @@ Edit the `Cfg` map at the top of the script:
   monitor; anything else is refused and the capture stops. Whatever is on that
   monitor (including any PHI overlays) is still captured, so check frames before
   bundling.
+- **You confirm PHI is hidden before anything is saved.** After Shift+Space (scroll)
+  or before a still, a dialog asks whether all PHI is hidden on that monitor. The
+  default is No; nothing is written to disk unless you answer Yes.
 - **Shift+Space is a toggle.** The script only checks that the screen changed after
   it, not which way it toggled. Start each capture with the PHI overlay *showing*;
   if it was already hidden, Shift+Space will turn it back on.
