@@ -7,7 +7,7 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 | Key | Action |
 | --- | --- |
-| **Shift+F2** | Start a scroll capture on the monitor under the cursor. Sends Shift+Space once, then each step grabs that one monitor, keeps the frame if it changed, and scrolls the mouse wheel down. Press again or Esc to stop. Stops itself after 3 identical frames in a row. |
+| **Shift+F2** | Start a scroll capture on the monitor under the cursor. Focuses the window under the cursor and sends Shift+Space once; if the screen does not change, nothing is captured or saved. Then each step grabs that one monitor, keeps the frame if it changed, and scrolls the mouse wheel down. Press again or Esc to stop. Stops itself after 3 identical frames in a row. |
 | **Ctrl+Shift+F2** | Single still of the monitor under the cursor. Saved into the current capture folder, or a new `still-…` folder if none is running. |
 | **Shift+F3** | Open the annotator for the last capture folder (or pick one). |
 
@@ -57,6 +57,9 @@ Edit the `Cfg` map at the top of the script:
   monitor; anything else is refused and the capture stops. Whatever is on that
   monitor (including any PHI overlays) is still captured, so check frames before
   bundling.
+- **Shift+Space is a toggle.** The script only checks that the screen changed after
+  it, not which way it toggled. Start each capture with the PHI overlay *showing*;
+  if it was already hidden, Shift+Space will turn it back on.
 - Windows, AutoHotkey v2.0+. No other dependencies (GDI+ is in Windows).
 - Bundling uses PowerShell `Compress-Archive`, which is built into Windows.
 - Esc only stops a scroll capture while one is running; otherwise it passes through.
