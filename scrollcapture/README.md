@@ -7,7 +7,7 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 | Key | Action |
 | --- | --- |
-| **Shift+F2** | Start a scroll capture on the monitor under the cursor. Each step: grab the monitor, keep the frame if it changed, send Shift+Space. Press again or Esc to stop. Stops itself after 3 identical frames in a row. |
+| **Shift+F2** | Start a scroll capture on the monitor under the cursor. Sends Shift+Space once, then each step grabs that one monitor, keeps the frame if it changed, and scrolls the mouse wheel down. Press again or Esc to stop. Stops itself after 3 identical frames in a row. |
 | **Ctrl+Shift+F2** | Single still of the monitor under the cursor. Saved into the current capture folder, or a new `still-…` folder if none is running. |
 | **Shift+F3** | Open the annotator for the last capture folder (or pick one). |
 
@@ -40,9 +40,9 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 Edit the `Cfg` map at the top of the script:
 
-- `StartDelayMs` (800): after the single Shift+Space that starts the stack, wait this
+- `StartDelayMs` (300): after the single Shift+Space that starts the stack, wait this
   long before the first grab.
-- `IntervalMs` (400): pace. Each step grabs a frame, then scrolls the mouse wheel down.
+- `IntervalMs` (150): pace. Each step grabs a frame, then scrolls the mouse wheel down.
   Raise it if frames show a half-finished scroll; lower it for speed.
 - `WheelNotches` (3): wheel notches per step. More = bigger jump between frames (less
   overlap); fewer = more overlap but slower to reach the end.
@@ -52,10 +52,14 @@ Edit the `Cfg` map at the top of the script:
 
 ## Requirements and caveats
 
+- **Only one monitor is ever captured.** The monitor under the cursor is read from
+  Windows directly, and every capture is checked to lie entirely inside a single
+  monitor; anything else is refused and the capture stops. Whatever is on that
+  monitor (including any PHI overlays) is still captured, so check frames before
+  bundling.
 - Windows, AutoHotkey v2.0+. No other dependencies (GDI+ is in Windows).
 - Bundling uses PowerShell `Compress-Archive`, which is built into Windows.
 - Esc only stops a scroll capture while one is running; otherwise it passes through.
 - Shift+F2 waits for Shift to be released before the first grab, so the key
   combo doesn't leak into Shift+Space.
-- Not yet run on a Windows workstation. Check the first capture folder before
-  relying on it.
+- Check the first capture folder after any settings change before relying on it.
