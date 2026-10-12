@@ -349,7 +349,8 @@ AnnExport() {
     zip := bundles "\" base ".zip"
     if FileExist(zip)
         FileDelete(zip)
-    cmd := Format("powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""Compress-Archive -Path '{1}\*' -DestinationPath '{2}' -Force""", dir, zip)
+    ps := "Compress-Archive -Path '" dir "\*' -DestinationPath '" zip "' -Force"
+    cmd := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' ps '"'
     RunWait(cmd, , "Hide")
     if FileExist(zip) {
         Ann["status"].Value := "Bundle written: " zip
