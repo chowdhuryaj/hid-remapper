@@ -40,7 +40,8 @@ image stacks frame by frame, annotating them, and bundling them up.
 
 Edit the `Cfg` map at the top of the script:
 
-- `SettleMs` (350): wait after each Shift+Space before grabbing. Raise it if
+- `IntervalMs` (300): auto-scroll pace. The script sends Shift+Space and grabs a
+  frame every this many ms, so it scrolls by itself. Lower it to go faster. Raise it if
   frames show a half-finished scroll.
 - `StopAfterSame` (3): identical frames in a row that end a scroll capture.
 - `MaxFrames` (300): hard cap per scroll capture.

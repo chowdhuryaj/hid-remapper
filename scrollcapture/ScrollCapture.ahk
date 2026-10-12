@@ -26,7 +26,9 @@ DllCall("SetThreadDpiAwarenessContext", "ptr", -4, "ptr")
 
 global Cfg := Map(
     "OutRoot",       A_MyDocuments "\ScrollCaptures",
-    "SettleMs",      350,   ; wait after Shift+Space before the next grab; raise if frames lag
+    "IntervalMs",    300,   ; auto-scroll pace: one grab + one Shift+Space every this many ms.
+                            ; Lower = faster; raise it if frames show a half-finished scroll
+                            ; or if consecutive frames overlap too little to stitch
     "StopAfterSame", 3,     ; identical frames in a row = end of scroll
     "MaxFrames",     300    ; hard limit per scroll capture
 )
@@ -70,7 +72,7 @@ ToggleScroll() {
     dir := NewCaptureDir("scroll")
     Sess := Map("dir", dir, "mon", mon, "n", 0, "same", 0, "last", "")
     ToolTip("Scroll capture on monitor " mon["n"] "  (Esc to stop)")
-    SetTimer(CaptureTick, Cfg["SettleMs"])
+    SetTimer(CaptureTick, Cfg["IntervalMs"])   ; the script drives the scroll at this pace
 }
 
 CaptureTick() {
@@ -126,7 +128,7 @@ StopScroll(reason) {
         . "frames: " frames "`n"
         . "stopped: " reason "`n"
         . "monitor: " mon["n"] " (" mon["w"] "x" mon["h"] " at " mon["l"] "," mon["t"] ")`n"
-        . "settle_ms: " Cfg["SettleMs"] "`n")
+        . "interval_ms: " Cfg["IntervalMs"] "`n")
     ToolTip("Scroll capture done: " frames " frames`n" dir)
     SetTimer(() => ToolTip(), -3000)
 }
