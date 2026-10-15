@@ -4,7 +4,7 @@
 IntelliSpace) reliable. v0.7.2 removes radial menus (now a separate script)
 and lands a five-area bug sweep.
 
-**State (v0.7.2).** Branch `claude/compassionate-clarke-ffcwdy`. Not yet run
+**State (v0.7.3; 0.7.2 notes below).** Branch `claude/compassionate-clarke-ffcwdy`. Not yet run
 on Windows: all verification is by reading + portable checks. Round 3
 reviews done: latest-commit regressions fixed (2a3f990); whole-file
 syntax/scope pass found no load-time or guaranteed-runtime errors.
@@ -112,6 +112,24 @@ syntax/scope pass found no load-time or guaranteed-runtime errors.
 - Lite (no-GpGFX) build was made and then dropped at the user's request.
 - Invariants: SpecFor must build a fresh spec per press; every HotIf
   path that returns native should clear g_GateClaim (GateNativeClear).
+
+## Round 7 (v0.7.3, branch claude/epic-mayer-603v47, built on 0.7.2)
+- GUI after Totem-Flask (reference: chowdhuryaj/flask-web, branch unify):
+  Atlas.Tabs (page pills, HEADH 52 + TABH 44), Atlas.Rail (Program +
+  Layer chips, Mouse/Keyboard only; other pages full width), RailChip,
+  LayerShort, ScopeHead. kbAppIdx removed: one appIdx for both pages.
+  SlotPanel shows inherited rows (InheritedRow = FindBindingFor with a
+  synthetic ctx) with Override. KeyMap: F13-F24 KeyCap grid +
+  KeysInScope (includes All programs/Base rows) + overflow Select +
+  AddKey (RecordKeyName). BindDlg program read-only (st.app = {index}).
+  Lumi.C = Graphite with role tokens accent/accentBg/onAccent/layer/
+  hold; RAD card 12, row/field 8; Btn kind "flat". ALL_PROGRAMS label.
+- Sweep fixes: see CHANGELOG v0.7.3 (engine, actions/config, GUI).
+- Deferred from the sweeps: two held layer hosts share one layApp
+  (CurCtx); hover redraw coalescing (GpGFX Shape.Hover); DPI scaling;
+  dedupe of OnPressHK release/placeholder blocks, PSDeliverNow vs
+  AppDeliverNow; dead Lumi.Clear/ListSet/nudging; field commit on
+  unchanged value; SetCfgInt keeps old value on typo; work-area centring.
 
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first

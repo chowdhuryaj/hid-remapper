@@ -1,7 +1,16 @@
-# RadMapper 0.7.2
+# RadMapper 0.7.3
 
 A single-file mouse and keyboard remapper for the reading room (PowerScribe +
 IntelliSpace). Everything is in `RadMapper.ahk`: no installer, no folders.
+
+**The window, 0.7.3 (after Totem-Flask).** Pages are tabs along the top. On
+the Mouse and Keyboard pages a rail on the left says what you are editing:
+a **Program** (All programs, or one of them) and a **Layer** (Base, or what
+happens while a layer button is held). Both pages share that choice. An empty
+slot marked **▽** still does what All programs or Base set, and says where
+from; **Override** gives it its own setting. **F13–F24** are always on the
+Keyboard page as caps, ready to map; **+ Add a key…** records any other key.
+The colours are Flask's Graphite theme.
 
 **This is a review build.** It has been checked for syntax balance, by reading,
 and by the portable checks below, but it has not yet run on a Windows
@@ -61,9 +70,9 @@ with PowerScribe focused and the pointer over PACS, your PACS mouse settings
 apply. **Toggle engine pause** on a button or key both pauses and resumes. A **wheel deck** (hold a thumb button, turn the wheel) waits for the
 wheel to stop before it takes over, so a scroll still in motion stays a scroll.
 
-The window opens in **Simple** view: Home, Mouse, Keyboard, Settings and
-Diagnostics, with a short list of actions. The switch on Home, "Show advanced
-pages and every action", adds Macros, Apps, Windows and Pointer, the wheel
+The window opens in **Simple** view: Home, Mouse, Keyboard, Programs, Settings
+and Diagnostics, with a short list of actions. The switch on Home, "Show
+advanced pages and every action", adds Macros, Windows and Pointer, the wheel
 decks ("Scroll wheel…" on the Mouse and Keyboard pages) and the full action
 list. Nothing is lost either way.
 

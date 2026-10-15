@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.7.2 --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7.3 --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -74,7 +74,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.2"
+global RM_VERSION := "0.7.3"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -11158,7 +11158,10 @@ class Lumi {
                 px := Max(mr - state.w, ml)
         }
         prev := LayerStack.ActiveLayer
-        pop := Layer(px, py, state.w, ph, "LumiSelect")
+        ; owned EXPLICITLY by the window it drops from: an unowned layer is
+        ; owned by the first live layer -- often a toast, and Windows takes
+        ; owned windows down with their owner when the toast expires
+        pop := Layer(px, py, state.w, ph, "LumiSelect", Lumi.HwndOf(parent))
         state.pop := pop
         state.parent := parent
         LayerStack.ActiveLayer := pop
@@ -11963,6 +11966,7 @@ class Atlas {
     static panel := 1              ; active panel index
     static sel := "LButton"        ; selected input in the mouse map
     static keySel := ""            ; selected key in the Keyboard panel
+    static keysParked := false     ; context keys off while minimised (Tick)
     static appIdx := 1             ; program in the rail (both map pages)
     static layerIdx := 1           ; layer in the rail (both map pages)
     static list := 0               ; the active list view handle
@@ -11970,6 +11974,7 @@ class Atlas {
     static ticking := false
     static timerFn := 0
     static savedSel := 0           ; list selection, preserved across rebuilds
+    static savedTop := 1           ; ... and its scroll position
     ; A selection made SINCE the last frame -- a row click, a mouse-map zone,
     ; a key tile -- waiting for the rebuild it asked for. -1 = nothing new,
     ; so the old list's own sel is carried over as before. (v0.6.5)
@@ -12075,6 +12080,7 @@ class Atlas {
     static Show() {
         if IsObject(Atlas.lyr) {
             Atlas.KeysOn(true)
+            Atlas.keysParked := false
             ; Minimised is not the same as hidden: Show() alone leaves a
             ; minimised window minimised, so the tray icon would appear to do
             ; nothing once you had used the minimise button.
@@ -12143,6 +12149,7 @@ class Atlas {
     static BindEscape() {
         if Atlas.escBound {
             Atlas.KeysOn(true)
+            Atlas.keysParked := false
             return
         }
         Atlas.ctxFn := ObjBindMethod(Atlas, "IsFront")
@@ -12196,6 +12203,15 @@ class Atlas {
      * because the context test only ever looked at the main layer.
      */
     static EscKey(*) {
+        ; Escape already belongs to whatever holds the keyboard: a Rec
+        ; capture cancels on it, and a live field reverts on it. Closing
+        ; the dialog (or hiding the window) as well committed the field's
+        ; typed text and left the capture running. v0.7.3
+        if IsObject(g_RecHook)
+            return
+        Lumi.EditGuard()
+        if (Lumi.editing > 0)
+            return
         if IsObject(Lumi.openSel) {
             Lumi.CloseSelect()
             return
@@ -12291,8 +12307,10 @@ class Atlas {
         }
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperConflicts")
-        Atlas.dlg := dlg
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperConflicts", parent.hwnd)
+        dlg.TopMost(false)          ; owned by the main window, which never
+                                    ; floats over PACS (v0.7.3)
+Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -12417,7 +12435,9 @@ class Atlas {
     }
 
     static Hide(*) {
-        Atlas.StopTick()
+        if IsObject(g_RecHook)           ; a capture must not outlive the
+            try g_RecHook.Stop()         ; window (the next key in PS was
+        Atlas.StopTick()                 ; swallowed and saved as a hotkey)
         Atlas.KeysOn(false)
         Lumi.CloseSelect()               ; a floating option list must never
         if IsObject(Atlas.dlg) {         ; outlive the window that opened it
@@ -12880,6 +12900,11 @@ class Atlas {
             ; A pick made since the last frame outranks the old list's sel:
             ; the old list may belong to the input we have just navigated
             ; away from, and its sel would then select an unrelated row.
+            ; ...and its SCROLL: a list redrawn from the top moved the row
+            ; under the second click of a double-click, which then opened
+            ; another row's editor (v0.7.3). Navigation (selWant 0) resets.
+            Atlas.savedTop := (Atlas.selWant != 0 && IsObject(Atlas.list))
+                ? Atlas.list.top : 1
             if (Atlas.selWant >= 0) {
                 Atlas.savedSel := Atlas.selWant
                 Atlas.selWant := -1
@@ -12968,10 +12993,21 @@ class Atlas {
         }
         ; a 700 ms status tick must not silently drop the row you had picked
         try {
-            if (IsObject(Atlas.list) && Atlas.savedSel > 0
-                && Atlas.savedSel <= Atlas.list.rows.Length) {
-                Atlas.list.sel := Atlas.savedSel
-                Lumi.__ListPaint(Atlas.list)
+            L := Atlas.list
+            if IsObject(L) {
+                n := L.rows.Length
+                vis := Lumi.__ListVisible(L)
+                sl := (Atlas.savedSel > 0 && Atlas.savedSel <= n) ? Atlas.savedSel : 0
+                top := Min(Max(Atlas.savedTop, 1), Max(n - vis + 1, 1))
+                if (sl && sl < top)
+                    top := sl
+                else if (sl && sl >= top + vis)
+                    top := sl - vis + 1
+                if (sl || top > 1) {
+                    L.sel := sl
+                    L.top := top
+                    Lumi.__ListPaint(L)
+                }
             }
         } catch as e {
             Problem("ui", "list repaint failed: " e.Message)
@@ -13140,6 +13176,8 @@ class Atlas {
      * both of which route through Show(), which now un-minimises first.
      */
     static Minimize(*) {
+        if IsObject(g_RecHook)
+            try g_RecHook.Stop()
         Lumi.CloseSelect()
         if IsObject(Atlas.lyr) {
             try WinMinimize("ahk_id " Atlas.lyr.hwnd)
@@ -14187,7 +14225,7 @@ class Atlas {
         keys := Atlas.KeysInScope()
         if !(Atlas.HasKey(keys, Atlas.keySel) || Atlas.IsFKeyExtra(Atlas.keySel))
             Atlas.keySel := keys.Length ? keys[1] : "F13"
-        Atlas.KeyMap(x, y + 74, Min(h - 84, 520), keys)
+        Atlas.KeyMap(x, y + 74, h - 84, keys)
         Atlas.SlotPanel(x + 320, y + 64, w - 320, h - 64, Atlas.keySel, true)
     }
 
@@ -14284,6 +14322,8 @@ class Atlas {
             Lumi.Para(x + 16, oy + 24, 268, 60,
                 "None on this page yet. “+ Add a key…” records one.", "mute")
         rows := Max((by - 6 - (oy + 24)) // 36, 0)
+        if (keys.Length > rows * 2)          ; room for the overflow picker
+            rows := Max(rows - 1, 0)
         cap := rows * 2
         i := 0
         for k in keys {
@@ -14292,9 +14332,14 @@ class Atlas {
             Atlas.KeyTile(k, x + 16 + Mod(i, 2) * 138, oy + 24 + (i // 2) * 36, 130, 30)
             i += 1
         }
-        if (keys.Length > i)
-            Lumi.Label(x + 16, by - 20, 268, "+" (keys.Length - i)
-                . " more — make the window taller to see them", "mute", "left", 16)
+        if (keys.Length > i) {               ; the rest stay reachable
+            more := ["+" (keys.Length - i) " more…"]
+            j := i
+            while (j < keys.Length)
+                more.Push(keys[++j])
+            Lumi.Select(x + 16, by - 38, 268, 30, more, 1,
+                (k, t) => (k > 1 ? Atlas.PickKeyTile(t) : 0))
+        }
         Lumi.Btn(x + 16, by, 268, 32, "+ Add a key…", (*) => Atlas.AddKey(), "accent")
     }
 
@@ -14738,8 +14783,10 @@ class Atlas {
         }
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperStep")
-        Atlas.dlg := dlg
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperStep", parent.hwnd)
+        dlg.TopMost(false)          ; owned by the main window, which never
+                                    ; floats over PACS (v0.7.3)
+Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -16027,8 +16074,10 @@ class Atlas {
         }
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperEdit")
-        Atlas.dlg := dlg
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperEdit", parent.hwnd)
+        dlg.TopMost(false)          ; owned by the main window, which never
+                                    ; floats over PACS (v0.7.3)
+Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
@@ -16574,8 +16623,10 @@ class Atlas {
         }
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperWheelDeck")
-        Atlas.dlg := dlg
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperWheelDeck", parent.hwnd)
+        dlg.TopMost(false)          ; owned by the main window, which never
+                                    ; floats over PACS (v0.7.3)
+Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
@@ -16889,8 +16940,10 @@ class Atlas {
         }
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperLayerHosts")
-        Atlas.dlg := dlg
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperLayerHosts", parent.hwnd)
+        dlg.TopMost(false)          ; owned by the main window, which never
+                                    ; floats over PACS (v0.7.3)
+Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -17149,6 +17202,16 @@ class Atlas {
         ; dialog, an option list or a text field is live, hold the signature
         ; back so the rebuild happens on the first quiet tick afterwards
         ; instead of being skipped entirely.
+        ; Minimised: no rebuilds (every program switch and layer hold changes
+        ; the signature), and the window's Tab/Enter/arrow keys stand down.
+        mini := false
+        try mini := (WinGetMinMax("ahk_id " Atlas.lyr.hwnd) = -1)
+        if (mini != Atlas.keysParked) {
+            Atlas.keysParked := mini
+            Atlas.KeysOn(!mini)
+        }
+        if mini
+            return
         Lumi.EditGuard()             ; before the Busy test, not after: a
         if (IsObject(Atlas.dlg) || Lumi.Busy())   ; wedged count IS the thing
             return                   ; that would stop us ever getting here

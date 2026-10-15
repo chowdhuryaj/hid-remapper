@@ -3,6 +3,33 @@
 History moved out of the script header in 0.7.2 (verbatim).
 
 ```
+  v0.7.3 -- THE WINDOW, AFTER TOTEM-FLASK. F13-F24. BUG SWEEP.
+    * Page tabs along the top; on Mouse and Keyboard a Program / Layer
+      rail on the left (one choice for both pages, live program/layer
+      marked, + Add program, ✎ edit). The binding dialog shows program
+      and layer instead of asking for the program a second time.
+    * Inherited settings are shown: an empty slot in a program or layer
+      shows what All programs / Base still does there (▽, with source)
+      and offers Override. Keys set for All programs stay listed.
+    * F13-F24 always on the Keyboard page as caps showing their action;
+      "+ Add a key…" records any other key.
+    * Graphite theme (Flask's), rounder corners; "All programs" and
+      "program" everywhere; Programs page in Simple mode.
+    * Engine: Settings hotkeys fire once per press (auto-repeat flipped
+      pause/click lock); native wheel rows stay native; a lone Pass-through
+      hold is native; panic swallows releases still coming; live-state
+      maps ignore case; dragThreshold clamped.
+    * Actions/config: keyboard pointer N reads the right UIA slot; deleting
+      a program and keeping its rows no longer drops them; layouts skip
+      hung windows everywhere and run off the hook thread; the guard gives
+      up on max/restore fights; program-scoped macros aim first; import
+      backs up unsaved edits.
+    * GUI: dialogs and dropdowns are owned by their window (a toast
+      expiring could take a dialog down) and never float over PACS; Esc in
+      a field or during Rec no longer hides the window; Rec stops when the
+      window hides; no rebuilds while minimised; lists keep their scroll
+      (double-click opened the wrong row).
+
   v0.7.2 -- RADIAL MENUS ARE THEIR OWN SCRIPT.
     * The radial menu engine, the Menus page, the menu editor, the
       "Radial menu" action and its settings are gone from RadMapper.
