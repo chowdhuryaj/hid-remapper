@@ -2956,6 +2956,38 @@ LayerHostExists(btn, ctx) {
     return false
 }
 
+; Diagnostics for "dictate / next field does nothing on this station": the
+; input has a PowerScribe row somewhere, but this press resolved to
+; something else. Says which row won and in which program, so the cause is
+; read off the log instead of guessed. Only inputs that HAVE a ps_* row pay
+; for the loop.
+PsRowMissTrace(btn, ctx, spec) {
+    for ev in ["tap", "hold"] {
+        k := btn "|" ev
+        if !g_Idx.bind.Has(k)
+            continue
+        got := spec.%ev%
+        if (IsObject(got) && SubStr(got["action"]["type"], 1, 3) = "ps_")
+            continue
+        for row in g_Idx.bind[k] {
+            t := MGet(row["action"], "type", "")
+            if (SubStr(t, 1, 3) != "ps_")
+                continue
+            if LayerParts(row).Length        ; a layer row is MEANT not to
+                continue                     ; fire without its host held
+            why := MatchScore(row, ctx) < 0
+                ? "its program/layer/modifiers do not match here"
+                : "a more specific row won"
+            Problem("ps-miss", InputLabel(btn) " " ev ": the " t " row did"
+                . " not fire (pointer/front program: "
+                . (ctx.app = "" ? "none" : ctx.app) "; " why
+                . (IsObject(got) ? ", fired " DescribeAction(got["action"])
+                    : ", nothing bound here") ")")
+            break
+        }
+    }
+}
+
 ; Everything the state machine needs to know about btn in ctx, precomputed at
 ; press time so per-event work stays tiny.
 SpecFor(btn, ctx) {
@@ -3638,6 +3670,7 @@ OnPressHK(btn, *) {
 
     ctx := CurCtx(btn)
     spec := SpecFor(btn, ctx)
+    PsRowMissTrace(btn, ctx, spec)
     st := NewBS(btn)
     st.down := true
     st.pressTick := now
@@ -7817,6 +7850,14 @@ ElevateAtLaunch() {
 }
 
 PSFire(keys) {
+    ; A trace for "it does nothing": if this line is missing from
+    ; Diagnostics after a press, the press never reached a PowerScribe
+    ; action (the input was not seen, or another row won it), so the
+    ; delivery code is not where to look.
+    fgExe := ""
+    try fgExe := WinGetProcessName("A")
+    Problem("ps-call", "PowerScribe action requested: " keys " (in front: "
+        . (fgExe = "" ? "?" : fgExe) ")")
     RM_PSFire(keys)
 }
 
