@@ -2106,6 +2106,8 @@ CfgImport() {
             "RadMapper", "Iconx")
         return
     }
+    if g_CfgDirty                            ; the backup must hold what you
+        try SaveCfg()                        ; have now, not the last save
     BackupCfg()                              ; snapshot what's being replaced
     previous := g_Cfg
     wasDirty := g_CfgDirty
@@ -2762,7 +2764,8 @@ CurCtx(btn := "") {
 ; pointer (a click)?
 FgDelivered(a) {
     t := a["type"]
-    if (t = "keys" || t = "keysrepeat" || t = "text" || t = "moddrag")
+    if (t = "keys" || t = "keysrepeat" || t = "text" || t = "moddrag"
+        || t = "macro" || t = "winplace")        ; both act on the foreground
         return true
     v := MGet(a, "value", "")
     return IsNativeAct(t) && v != "" && IsKeyInput(v)
@@ -4452,16 +4455,18 @@ ActionFire(binding, st, ctx := 0) {
         case "appswitch":
             h := LayerHolderSt(binding)      ; the host's release commits
             AppSwitchStep(IsObject(h) ? h : st, v)
-        case "layout":
-            LayoutApply(v)
-        case "winplace":
-            WinPlace(v)
+        case "layout":                           ; off the hook thread: moving
+            SetTimer(LayoutApply.Bind(v), -1)    ; windows waits on their
+        case "winplace":                         ; threads (v0.7.3)
+            SetTimer(WinPlace.Bind(v), -1)
         case "warp":
             Warp.Toggle()
         case "macro":
             SetTimer(RunMacro.Bind(v), -1)
         case "run":
             try Run(v)
+            catch as e
+                Problem("run", "Could not start " v ": " e.Message)
         case "guiopen":
             ShowMain()
         case "bypass":
@@ -4993,7 +4998,7 @@ SyncFollowFocus() {
         try g_FollowPid := WinGetPID("ahk_id " g_FollowLast)
         g_FollowCand := 0
         g_FollowAt := 0
-        SetTimer(FollowTick, Max(Cfg("followFocusMs"), 40))
+        SetTimer(FollowTick, ClampInt(Cfg("followFocusMs"), 40, 5000, 120))
     } else
         SetTimer(FollowTick, 0)
 }
@@ -5023,7 +5028,7 @@ FollowTick(*) {
         g_FollowCandAt := now
         return
     }
-    if (now - g_FollowCandAt < Max(Cfg("followSettleMs"), 0))
+    if (now - g_FollowCandAt < ClampInt(Cfg("followSettleMs"), 0, 10000, 220))
         return
     g_FollowCand := 0
     g_FollowLast := hwnd                     ; claim it FIRST: every early
@@ -5106,7 +5111,7 @@ FollowTick(*) {
         return
     ; 8. one warp per followCooldownMs, whatever happens. A burst of app
     ;    switches moves the pointer once, at the end, not once per step.
-    if (g_FollowAt && now - g_FollowAt < Max(Cfg("followCooldownMs"), 0)
+    if (g_FollowAt && now - g_FollowAt < ClampInt(Cfg("followCooldownMs"), 0, 60000, 700)
         && now - g_FollowAt >= 0)
         return
     ; 9. a park point for this app beats the window centre: the middle of a
@@ -5343,7 +5348,9 @@ AppSwitchStep(st, v) {
     }
     g_AppSw.idx := Mod(g_AppSw.idx - 1 + d + n, n) + 1
     g_AppSw.last := A_TickCount
-    AppSwitchPaint()
+    ; painted off the wheel's Critical thread (v0.7.3); one timer object, so
+    ; a fast burst of notches paints once
+    SetTimer(AppSwitchPaint, -1)
 }
 
 AppSwitchOpen(st) {
@@ -5513,7 +5520,7 @@ AppSwitchCloseWindow() {
     if (sw.idx > sw.list.Length)
         sw.idx := sw.list.Length
     sw.last := A_TickCount                   ; tidying is activity: the Base
-    AppSwitchPaint()                         ;   idle commit must not fire
+    SetTimer(AppSwitchPaint, -1)             ;   idle commit must not fire
 }
 
 AppSwitchWatch() {
@@ -6638,8 +6645,10 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             continue
         try {
             id := "ahk_id " wnd.hwnd
-            ; a hung window would block this thread on every call below
-            if (enforce && DllCall("user32\IsHungAppWindow", "ptr", wnd.hwnd))
+            ; a hung window would block this thread on every call below --
+            ; on every path (v0.7.3): a manual apply or a station change
+            ; froze the whole script on a hung PACS just as the guard did
+            if DllCall("user32\IsHungAppWindow", "ptr", wnd.hwnd)
                 continue
             mm := WinGetMinMax(id)
             if (enforce && mm = -1)
@@ -6696,12 +6705,20 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
                     ; WinMaximize alone maximises onto whichever screen the
                     ; window is already on, which on a four-head station is
                     ; exactly the bug this feature exists to fix.
+                    ; v0.7.3: the guard gives up after three, as below -- a
+                    ; viewer that re-homes itself was restored, moved and
+                    ; re-maximised over the images every tick.
+                    if (enforce && LayoutStruck(wnd.hwnd, "max" tgt.mon.idx))
+                        continue
                     WinMaximizeOn(id, tgt.mon)
                     moved += 1
-                }
+                } else if (enforce && g_LayoutGot.Has(wnd.hwnd))
+                    g_LayoutGot.Delete(wnd.hwnd)
                 continue
             }
             if (mm = 1 || mm = -1) {
+                if (enforce && LayoutStruck(wnd.hwnd, "restore"))
+                    continue
                 ; The standing "never WinRestore PowerScribe" rule is about
                 ; restoring it INCIDENTALLY, while activating it -- doing so
                 ; un-maximises a full-screen PS. Here the user captured this
@@ -6719,14 +6736,8 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
                 ; Three guard moves in a row to the same rect and the window
                 ; is still off it: the app refuses that rect (minimum size,
                 ; DPI rounding). Moving it every 1.5 s is a fight, not a fix.
-                if enforce {
-                    tk := sx "," sy "," sw "," sh
-                    n0 := (g_LayoutGot.Has(wnd.hwnd) && g_LayoutGot[wnd.hwnd].t = tk)
-                        ? g_LayoutGot[wnd.hwnd].n : 0
-                    if (n0 >= 3)
-                        continue
-                    g_LayoutGot[wnd.hwnd] := {t: tk, n: n0 + 1}
-                }
+                if (enforce && LayoutStruck(wnd.hwnd, sx "," sy "," sw "," sh))
+                    continue
                 WinMoveSure(sx, sy, sw, sh, id, enforce)
                 moved += 1
             } else if (enforce && g_LayoutGot.Has(wnd.hwnd))
@@ -6809,6 +6820,16 @@ WinMoveSure(x, y, w, h, id, async := false) {
 ; hwnd -> {t: target rect, n: consecutive guard moves} (see LayoutApplyRows)
 global g_LayoutGot := Map()
 
+; Three guard moves in a row toward the same target and the window is still
+; not there: the app refuses it, so stop fighting (true = skip this one).
+LayoutStruck(hwnd, tk) {
+    n0 := (g_LayoutGot.Has(hwnd) && g_LayoutGot[hwnd].t = tk) ? g_LayoutGot[hwnd].n : 0
+    if (n0 >= 3)
+        return true
+    g_LayoutGot[hwnd] := {t: tk, n: n0 + 1}
+    return false
+}
+
 LayoutGuardArm(name) {
     g_LayoutGot.Clear()
     global g_LayoutGuard
@@ -6872,6 +6893,10 @@ LayoutGuardTick() {
                 g_LayoutPlaced[g_LayoutGuard].Delete(h)
         }
     }
+    for h in g_LayoutGot.Clone() {           ; recycled hwnds start afresh
+        if !WinExist("ahk_id " h)
+            g_LayoutGot.Delete(h)
+    }
     n := LayoutApplyRows(lay, true, mode = 2)
     if (n > 0) {
         g_LayoutSnaps += n
@@ -6925,7 +6950,7 @@ StationWatchStart() {
     g_StationStartup := true
     OnMessage(0x007E, OnDisplayChange)       ; WM_DISPLAYCHANGE
     SetTimer(StationPoll, 5000)
-    SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+    SetTimer(StationSettled, -ClampInt(Cfg("stationSettleMs"), 500, 60000, 2500))
 }
 
 StationWatchStop() {
@@ -6940,13 +6965,13 @@ OnDisplayChange(wParam, lParam, msg, hwnd) {
     ; button down for a drag. Take it down here rather than leave a grid
     ; drawn across a screen that no longer exists.
     try Warp.Close(true)
-    SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+    SetTimer(StationSettled, -ClampInt(Cfg("stationSettleMs"), 500, 60000, 2500))
 }
 
 StationPoll() {
     try {
         if (StationKey() != g_StationKey)
-            SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+            SetTimer(StationSettled, -ClampInt(Cfg("stationSettleMs"), 500, 60000, 2500))
     }
 }
 
@@ -6990,7 +7015,7 @@ StationSettled() {
         busy := true
     if (busy && waits < 20) {
         waits += 1
-        SetTimer(StationSettled, -Max(Cfg("stationSettleMs"), 500))
+        SetTimer(StationSettled, -ClampInt(Cfg("stationSettleMs"), 500, 60000, 2500))
         return
     }
     waits := 0
@@ -7771,7 +7796,8 @@ RunMacro(name, *) {
         Problem("macro-error", "Macro step failed: " e.Message)
         HUD("Macro error: " e.Message)
     } finally {
-        g_MacroBusy := false
+        if (g_MacroGen = gen)                ; panic already cleared it, and a
+            g_MacroBusy := false             ; newer macro may own it now
     }
 }
 
@@ -8334,7 +8360,7 @@ WatchdogSweepSafe() {
 ; AutoHotkey's physical-state table (HookChanged), and a press that
 ; straddles one would be judged on a reading that means nothing.
 HookFrontTick(*) {
-    static lastHwnd := 0, lastAt := 0, logged := false
+    static lastHwnd := 0, logged := false
     if !g_Enabled
         return
     static lastNot := 0                      ; a window already seen not PACS
@@ -8343,13 +8369,12 @@ HookFrontTick(*) {
         return
     exe := ""
     try exe := WinGetProcessName("ahk_id " fg)
-    if (exe != "IntelliSpacePACSRadiology.exe") {
-        lastHwnd := 0
+    if (exe = "" || !ImagingExes().Has(StrLower(exe))) {  ; the PACS program's
+        lastHwnd := 0                                       ; exes, not one name
         lastNot := fg
         return
     }
     lastNot := 0
-    now := A_TickCount
     ; ONCE each time PACS comes to the front. Every reinstall drops the
     ; keystrokes in its gap and wipes the physical key table; doing it every
     ; 10 s while PACS stayed in front cost more than it fixed.
@@ -8385,7 +8410,6 @@ HookFrontTick(*) {
         InstallKeybdHook(true, true)
         HookChanged()
         lastHwnd := fg
-        lastAt := now
         if !logged {                         ; once per session: proof it ran
             logged := true
             Problem("hook", "mouse and keyboard hooks moved back to the front"
@@ -8394,7 +8418,6 @@ HookFrontTick(*) {
     } catch as e {
         Problem("hook-error", "could not reinstall the input hooks: " e.Message)
         lastHwnd := fg
-        lastAt := now
     }
 }
 
@@ -9651,6 +9674,8 @@ AppDelete(row) {
     ; same key, and a left/right/middle hold cannot be global at all.
     kept := []
     dropped := 0
+    moved := Map()
+    moved.CaseSense := "Off"
     for r in g_Cfg["bindings"] {
         if (MGet(r, "app", "*") = name) {
             if !toGlobal {
@@ -9659,14 +9684,33 @@ AppDelete(row) {
             }
             g := r.Clone()
             g["app"] := "*"
+            ; a seeded system-default row is not a real collision: the row
+            ; being kept replaces it (below), it does not get dropped for it
+            blocked := false
+            for d in FindDupBinding(g) {
+                if !InertShape(g_Cfg["bindings"][d])
+                    blocked := true
+            }
             if ((IsPrimaryButton(MGet(r, "button", "")) && MGet(r, "event", "") = "hold")
-                || FindDupBinding(g).Length > 0) {
+                || blocked) {
                 dropped += 1
                 continue
             }
             r["app"] := "*"
+            moved[MGet(r, "button", "") "|" MGet(r, "event", "") "|"
+                MGet(r, "layer", "*") "|" MGet(r, "mods", "")] := 1
         }
         kept.Push(r)
+    }
+    ; ...and the seed a kept row now duplicates goes, or the two would tie
+    if moved.Count {
+        out := []
+        for r in kept {
+            if !(InertShape(r) && moved.Has(MGet(r, "button", "") "|"
+                . MGet(r, "event", "") "|*|"))
+                out.Push(r)
+        }
+        kept := out
     }
     g_Cfg["bindings"] := kept
     ; The Mouse/Keyboard program pickers index AppChoices() (Global first,
@@ -17304,8 +17348,11 @@ class Chooser {
         key := Chooser.items[i].key
         cb := Chooser.cb
         Chooser.Close()                      ; close BEFORE acting: the
-        if (cb != 0)                         ; callback may open its own window
+        if (cb != 0) {                       ; callback may open its own window
             try cb(key)
+            catch as e
+                Problem("chooser", "Chooser action failed: " e.Message)
+        }
     }
 }
 
@@ -17906,15 +17953,18 @@ class Warp {
             ComCall(7, Warp.uia, "int64", pt, "ptr*", &el)     ; ElementFromPoint
             if !el
                 return 0
-            ; IUIAutomationElement vtable, counting IUnknown's three:
-            ;   3..  SetFocus, GetRuntimeId, FindFirst, FindAll, ...
-            ;   42   get_CurrentBoundingRectangle  (a RECT of four LONGs)
-            ;   43   get_CurrentLabeledBy          (an element -- NOT a rect)
-            ; 43 was off by one: it returned an IUIAutomationElement pointer
-            ; written into rc, so the "rectangle" was a pointer's low and
-            ; high halves and N snapped to nonsense (and leaked the element).
+            ; IUIAutomationElement vtable, counting IUnknown's three
+            ; (UIAutomationClient.idl order):
+            ;   3..19 SetFocus .. GetCachedChildren
+            ;   20..  CurrentProcessId, ControlType, LocalizedControlType,
+            ;   23    get_CurrentName (used below)
+            ;   ..42  ... IsRequiredForForm (41), ItemStatus (42, a BSTR)
+            ;   43    get_CurrentBoundingRectangle  (a RECT of four LONGs)
+            ;   44    get_CurrentLabeledBy          (an element)
+            ; v0.7.3: 42 was ItemStatus -- a BSTR handle read as a rect, so
+            ; N never found a control and leaked the string every press.
             rc := Buffer(16, 0)
-            ComCall(42, el, "ptr", rc)                          ; get_CurrentBoundingRectangle
+            ComCall(43, el, "ptr", rc)                          ; get_CurrentBoundingRectangle
             name := ""
             bstr := 0
             try {
