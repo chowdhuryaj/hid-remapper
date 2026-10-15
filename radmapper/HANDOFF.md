@@ -9,6 +9,16 @@
 left-button guarantee) is NOT merged here; only its left-button idea survives
 in spirit (left/right/middle instant everywhere).
 
+## v0.7.4: PowerScribe from any window (colleagues' stations)
+Repo copy synced to AJ's live 0.7.3, then: `PSTargetHwnd` picks the PS window
+that last had the foreground (WinEvent hook, `PSNoteForeground`), not the top
+of Z-order (a floating dictation bar won there); `ForceForeground` re-lifts the
+foreground lock and escalates WinActivate -> AttachThreadInput
+SetForegroundWindow -> SwitchToThisWindow (PS and PACS-keys paths); an
+elevated PS/PACS is reported once (`ElevationCheck`) and tray > Run as
+administrator is remembered (`runElevated`). Not runnable here (no AHK on
+Linux): verify on a colleague's station that F4/Tab land from PACS.
+
 ## Completed (one commit each)
 1. Triggers are tap / hold / turn. Tap-dance engine (eager1, wait, TapTimer,
    CommitTaps, tapWindow) and the calibrator (`class Calib`) removed. Retired
