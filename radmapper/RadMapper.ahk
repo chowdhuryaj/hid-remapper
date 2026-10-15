@@ -9805,6 +9805,9 @@ BuildTray() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Settings…", (*) => ShowMain())
     A_TrayMenu.Add("Rendering self-test…", (*) => ShowGallery())
+    ; reachable when the window itself will not draw (v0.7.3)
+    A_TrayMenu.Add("Copy diagnostics", (*) => (ProblemsCopy(),
+        TrayTip("Diagnostics copied — paste them into a message", "RadMapper")))
     A_TrayMenu.Add("Enabled", (*) => ToggleEnabled())
     A_TrayMenu.Add("Panic release", (*) => PanicRelease())
     A_TrayMenu.Add()
