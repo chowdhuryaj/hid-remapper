@@ -131,6 +131,15 @@ syntax/scope pass found no load-time or guaranteed-runtime errors.
   AppDeliverNow; dead Lumi.Clear/ListSet/nudging; field commit on
   unchanged value; SetCfgInt keeps old value on typo; work-area centring.
 
+## Parse check without Windows (added after a load-time error in 0.7.3)
+AHK escapes quotes with a backtick, never a backslash. Before pushing, parse
+with thqby/vscode-autohotkey2-lsp: clone it, `npm install --ignore-scripts`,
+add `server/cli/diag.ts` (new Lexer(openFile(path,false)).parseScript(),
+print lex.diagnostics; import '../src/lexer' lower-case on Linux), build
+with `node esbuild.mjs --cli`, run `node server/cli/diag.js RadMapper.ahk`.
+Only "Unreachable code" hints are expected (the `try return x` / `return 0`
+pattern).
+
 ## Next steps
 Run on the workstation; run regression.ahk; check Diagnostics after first
 launch (expect "retired" lines for old radial rows).
