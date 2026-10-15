@@ -9646,7 +9646,7 @@ AppDlg(editRow) {
 AppOk(dlg, editRow, edName, edMatch) {
     name := Trim(edName.Value)
     if (name = "" || name = "*" || AppCodeFromDisp(name) = "*") {
-        MsgBox("Enter a program name (not * or \"" ALL_PROGRAMS "\").", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+        MsgBox("Enter a program name (not * or `"" ALL_PROGRAMS "`").", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
     matches := []
