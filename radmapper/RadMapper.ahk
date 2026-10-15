@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.7  --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7.2 --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -10,7 +10,7 @@
 ;    §1-§12   RadMapper: the engine (plus a few small native dialogs)
 ;    §13      Lumi Atlas: the design system + widget kit  (class Lumi)
 ;    §14      the Lumi Atlas front-end                    (class Atlas)
-;    §15      GpGFX 1.0.1, vendored verbatim, MIT licensed
+;    §15      GpGFX 1.0.1, vendored (unused parts pruned), MIT licensed
 ;
 ;  Tray > "Rendering self-test" puts every widget on one screen with a live
 ;  event log -- the quickest way to confirm that the graphics stack AND input
@@ -20,1282 +20,28 @@
 ;  radiology workstation. Every assignment lives in a config file and is edited
 ;  through a GUI at runtime -- no reload, no code edits.
 ;
-;  v0.7 (later) -- CAPSLOCK DICTATES; THREE LAYERS, NO MORE.
-;    * Layers are held open by button 4, button 5 or CapsLock only. Rows
-;      under any other host are dropped on load and named in Diagnostics;
-;      the hidden Layers page is gone (the tabs are the layers page).
-;    * CapsLock ships as dictation on a tap (seeded once into an existing
-;      config with no CapsLock row); its hold is the "Hold CapsLock" tab.
-;      A long press on it that uses nothing in the layer is silent.
-;    * PowerScribe/PACS keystrokes no longer leave Shift or the left button
-;      stuck: deliveries wait out a click, the watchdog releases an orphan,
-;      and Panic records what it found in Diagnostics.
-;
-;  v0.7 -- FEWER WAYS FOR A BUTTON TO SURPRISE YOU.
-;    * LAYERS ARE TABS. The Mouse and Keyboard pages carry one tab strip:
-;      Base, Hold Button 4, Hold Button 5 and Hold CapsLock -- the QMK/ZMK
-;      picture of a keymap. A tab shows what every
-;      part of the mouse does WHILE that button is held; the editor no
-;      longer asks "Only while holding", it takes the layer from the tab.
-;    * SLOTS, NOT ROWS. Click a part of the mouse and the right side shows
-;      its two slots -- Tap it, Hold it down (Turn, for the wheel) -- each
-;      with what it does, Set/Change and Clear. Rows that need a modifier
-;      held keep a short list underneath.
-;    * THE MOUSE IS REDRAWN with nothing overlapping: a sunk channel down
-;      the middle holds the wheel column (up, tilt-left, click, tilt-right,
-;      down), the main buttons stop either side of it, and the thumb
-;      buttons sit on their own shelf.
-;    (Three review rounds -- Sonnet reviewers, Opus verifying each finding
-;    against the source -- closed 30-odd holes along the way: the pause
-;    hotkey now also drops queued PowerScribe keystrokes, keystroke delivery
-;    waits while a button is down, follow-focus never warps mid-gesture,
-;    watchdog recovery never commits a menu or a window switch, the
-;    clipboard hook never blocks, a cancelled shelf drag never pastes, a
-;    stale clipboard never reaches disk, tilt notches are dropped while a
-;    menu is open, and the Conflicts report warns only about delays that
-;    really happen.)
-;    Colleagues trying 0.6.6.5 found tap-holds and held-button chords
-;    getting in the way of ordinary mouse work. This release removes the
-;    machinery behind that and points what is left at the radial menu.
-;    * TAP AND HOLD ARE THE ONLY TRIGGERS. Double-tap, triple-tap and
-;      tap-then-hold are gone from the lists, the editors and the engine
-;      (no eager first press, no tap window, no wait mode); a row that
-;      carried one is dropped on load and named in Diagnostics. A withheld
-;      press now resolves to exactly one of tap or hold (FireTap).
-;    * ONE TIMING NUMBER. The tap window and the calibrator are gone; the
-;      hold threshold is a single field on Settings with a sentence.
-;    * LAYERS ON THE THUMB BUTTONS AND CAPSLOCK ONLY, one at a time. The pairs, the CapsLock reservation and right / middle as
-;      hosts are gone: a host is silent while held, and those buttons are
-;      window/level and pan. "Only while holding" and the Layer selectors
-;      are Advanced-mode controls.
-;    * LEFT, RIGHT AND MIDDLE ARE INSTANT EVERYWHERE. A hold on them is
-;      honoured only when written for one program; an everywhere hold row
-;      is refused by the editors and dropped on load. The per-program
-;      "instant clicks" switch, its config field and the Apps-page button
-;      are retired -- it is the rule now, not an exception.
-;    * RADIAL MENUS OPEN ON HOLD ONLY. The tap-opened, rest-to-fire menu
-;      (its 6 s timeout, second-tap cancel and radialRestMs) is gone; a tap
-;      row that opened a menu becomes a hold row on load. Releasing on a
-;      door fires nothing and says how the door works.
-;    * THE WHEEL AND THE PRESETS SHIP ON THE THUMB BUTTONS IN PACS: hold 4
-;      for the PACS wheel, hold 5 for the numbered window presets -- one
-;      gesture, no door. Seeded once into an existing config that has no
-;      radial row and nothing held on either thumb button in PACS.
-;    * WHEEL DECK SETTLE (deckSettleMs, 250). A deck button pressed while
-;      the wheel is still turning -- thumb lands mid-stack -- leaves every
-;      notch of that motion native; the deck takes over once the wheel has
-;      been still for the settle time. Settings > Timing.
-;    * Simple mode's action list is eleven entries, and wheel decks (the
-;      "Scroll wheel…" button, the deck settle setting) are Advanced, as
-;      the Layers page already was. Fresh configs no longer ship the [ and
-;      ] rows.
-;
-;  v0.6.6.6 -- A HELD LAYER OUTRANKS A PROGRAM'S PLAIN ROW.
-;    * MatchScore: each held layer component is worth 16, a program match
-;      8, a modifier 1. It was 2 / 8 / 1, so in PACS "button 4 = F7"
-;      (program row, no layer) beat "hold right + button 4 = previous
-;      field" (everywhere, layer) -- the layer only worked once the same
-;      row was copied into PACS. Now: the layer row wins wherever it was
-;      written; a PACS layer row still beats an everywhere layer row; and
-;      with nothing held, PACS's plain row beats the everywhere plain row
-;      exactly as before. The Conflicts report says which row wins while
-;      a layer is held.
-;    * A live text field ends its own edit when the guard has given up on
-;      it, or after ten minutes with no keystroke, instead of running on
-;      with the program believing no field is open -- the way a dialog
-;      left open for a long time could stop taking clicks.
-;
-;  v0.6.6.5 -- CAPS LOCK HOSTS A LAYER.
-;    "Hold CapsLock" is always in the "Only while holding" list, on the
-;    Mouse page and the Keyboard page alike, whether or not CapsLock has
-;    a row of its own. Its HOLD is reserved for that layer: a key row on
-;    CapsLock cannot be given the "Hold it down" trigger (the binding
-;    editor and the classic dialog both refuse it), while tap, double-tap,
-;    triple-tap and tap-then-hold rows on CapsLock work exactly as before.
-;    A quick tap of a CapsLock that hosts a layer and has no tap row of
-;    its own still toggles Caps Lock natively; a hold that arms the layer
-;    and goes unused does nothing, as a layer host's hold should.
-;
-;  v0.6.6.4 -- THE WATCHDOG STOPS KILLING HELD LAYERS.
-;    "Hold button 4, scroll to switch windows": the switcher appeared and
-;    vanished, with "RadMapper recovered a stuck XButton1". The watchdog
-;    swept any state whose input no longer read as physically held, and
-;    AutoHotkey's physical-state table is WIPED whenever a hook is
-;    (re)installed -- which the switcher itself does the first time it
-;    binds its Delete key, and which SendInput, the tester and the radial
-;    cancel hooks do too. A held layer host then read as "up" and was
-;    released mid-gesture.
-;    * The sweep now applies ONLY to states that hold a SYNTHETIC button
-;      down (passthru, eager1, held): those are the ones a lost Up can
-;      leave stuck in the OS. A pending / armed layer host has nothing
-;      out, so a lost Up costs nothing; it gets the 30 s runaway cap only.
-;    * For the states it does sweep, a hook change since the press makes
-;      the physical reading untrustworthy (HookChanged stamps it), and an
-;      "up" reading has to persist for two ticks in a row.
-;    * A swept state is marked released (down := false) before it is
-;      cleared, so a switcher or a menu watching that holder commits
-;      cleanly instead of hanging on a state that no longer exists.
-;
-;  v0.6.6.3 -- TILT WHEEL RELIABILITY.
-;    * A tilt over one of RadMapper's own windows went native. Every wheel
-;      notch over our own window is re-sent natively so our lists scroll --
-;      right for WheelUp / WheelDown, wrong for a tilt bound to a monitor
-;      hop: the pointer lands in the MIDDLE of the next monitor, which is
-;      exactly where the settings window sits while you are testing, and
-;      the next tilt then did nothing. Tilts resolve through the bindings
-;      wherever the pointer is; only the vertical wheel stays native over
-;      our windows.
-;    * The teleport flash (five overlay windows) was built INSIDE the
-;      wheel's Critical hotkey thread, so every notch arriving during the
-;      build queued behind it. It is deferred to a timer now; the hop
-;      itself is immediate.
-;    * A notch the tilt guard drops says so in the status bar ("ignored,
-;      within the tilt guard"), so a guard set too high is visible.
-;
-;  v0.6.6.2 -- CHORDING FIXES and a CONFLICTS report.
-;    * A BUTTON THE DRIVER INJECTS. Trackball and mouse drivers that remap
-;      or chord a button (a middle click made by software, a thumb button
-;      turned into "middle") deliver it as an INJECTED event, and
-;      AutoHotkey never counts an injected press as physically held. The
-;      watchdog's "input physically up" sweep then released every hold of
-;      such a button ~750 ms in -- "recovered a stuck MButton", the native
-;      middle-drag ended, a held right button lost its layer mid-chord.
-;      A press now records whether it read as physical at all (st.physSeen);
-;      one that did not is never swept on physical state, only by the 30 s
-;      runaway cap. Key auto-repeat applies the same rule.
-;    * A USED LAYER HOST NEVER FIRES ITS OWN DANCE. Holding the right
-;      button and working the thumb buttons could still end in the right
-;      button's double-tap (a radial menu): CommitTaps now refuses to fire
-;      for a holder whose layer was used, and an eager first press that
-;      was used as a modifier does not arm a tap dance on release.
-;    * AN EXPLICIT HOLD BEATS "INSTANT CLICKS". A program profile with
-;      instant clicks dropped EVERY hold on L/R/M there, including a hold
-;      row written for that very program. A hold or tap-hold row scoped
-;      to the program in front is kept; only rows from everywhere are
-;      dropped.
-;    * CONFLICTS. Mouse, Keyboard and Diagnostics have "Conflicts…": one
-;      report of every place a button's meaning changes -- a program row
-;      that beats an everywhere row, a tap that waits because a double-tap
-;      or a hold is bound, a button that hosts a layer, a program with
-;      instant clicks, two rows for the same thing, a menu row with no
-;      menu. Copy it to send.
-;
-;  v0.6.6.1 -- FOLLOW-FOCUS EXCEPTIONS. Settings > Behaviour has a "Follow
-;  focus except in" field: programs and windows where the cursor is never
-;  moved, however they come to the front. Entries are separated by ";" --
-;  a program file name (IntelliSpacePACSRadiology.exe), "title:" and part
-;  of a window title, or "class:" and a window class. "Grab window in
-;  front" adds the program that is in front three seconds after the click.
-;  This is on top of the per-program "No pointer jump" switch on the
-;  Programs page, which Simple mode hides.
-;
-;  v0.6.6 -- the wizard is gone, the macro editor is native, the radial
-;  editor has a wheel you can drag, and deleting a row takes one key:
-;    * THE "SET A BUTTON" WIZARD IS REMOVED. Home, the Mouse page and the
-;      Keyboard page open the ordinary binding editor directly, in Simple
-;      mode as in Advanced. "Set..." on a Home essential opens that editor
-;      with the action already chosen.
-;    * Home's essentials card lists the five PowerScribe / pointer jobs;
-;      the PACS wheel and Window presets rows are gone from it (they are
-;      set up on the Menus page).
-;    * RADIAL EDITOR: "Program" and "Size" sit on the same row as "Name"
-;      with room to read, the Icon column is wide enough to show its name,
-;      and a live wheel on the right shows the menu as it will look. DRAG
-;      one wedge onto another to swap the two commands (the rows follow).
-;    * MACRO EDITOR: native. The Macros page lists macros on the left and
-;      the selected macro's steps on the right, with Add / Edit / Delete /
-;      Move up / Move down, a step dialog with Rec for key steps, and a
-;      Test run. The classic window is no longer opened for it.
-;    * DELETE A ROW FROM THE KEYBOARD: pick a row on the Mouse, Keyboard,
-;      Menus or Macros page and press Delete or Backspace. Right-click a
-;      row for Edit / Delete.
-;    * STUCK HIGHLIGHTS: the one-tick hover floor (LeaveCheck) now covers
-;      the open dialog and the open option list as well as the main window,
-;      and a rebuilt layer forgets the shape it thought was hovered.
-;    * TELEPORT vs FOLLOW FOCUS: a monitor teleport adopts the window it
-;      lands on and holds follow-focus off for a moment, so clicking there
-;      no longer bounces the pointer back to that program's pointer spot;
-;      and a pointer spot on ANOTHER monitor than the pointer is never
-;      warped to when the pointer is already inside the focused window.
-;
-;  v0.6.5 -- the reading room on the front page, a rate limiter for tilt
-;  wheels, and the row buttons that could not be pressed:
-;    * BUG (workstation): "the button rows are not always able to be edited
-;      from the main panel and cannot be deleted at all." ROOT CAUSE, and it
-;      is three lines in three places. (1) Lumi.__ListDo writes view.sel and
-;      calls the list's onPick; the Mouse and Keyboard pages passed
-;      `(i, dbl) => (dbl ? Atlas.EditRow(i) : 0)`, so a SINGLE click painted
-;      the row and did nothing else, and the Apps page passed 0. (2) Edit and
-;      Delete are drawn once per frame with `Atlas.HasSel(rows.Length)`, and
-;      HasSel reads Atlas.savedSel, which is only refreshed at the top of
-;      Build(). (3) Build() runs from Tick() ONLY when the status signature
-;      changes. So after clicking a row nothing rebuilt the buttons, they
-;      kept the "muted" kind they were born with, and Lumi.Btn's muted case
-;      sets onClick := 0 -- a button with no handler at all. Delete could
-;      therefore never be pressed, and Edit only after something unrelated
-;      (an app switch, a new problem, a scope dropdown) happened to rebuild
-;      the frame: "not always able to be edited". Nothing was wrong with
-;      DeleteSel, SelectedRef or the confirm.
-;      FIX: Atlas.Picker(mode) is the onPick every panel list now hands to
-;      Lumi.List. It records the pick in the new Atlas.selWant and rebuilds,
-;      so the buttons wake up in the same frame; a double click still opens
-;      the row. Build() prefers selWant over the outgoing list's own sel,
-;      which is what lets the mouse map and the key tiles select a row too:
-;      PickZone and PickKeyTile ask for row 1, so clicking a part of the
-;      mouse that HAS rows leaves Edit and Delete usable, instead of
-;      inheriting the previous input's selection index. Deleting a row
-;      selects nothing afterwards rather than whichever row slid up into its
-;      place. check_source.py now asserts that no page can mute its row
-;      buttons without handing its list a picker.
-;    * RAZER TILT WHEELS FIRED FOUR TIMES. A tilt wheel does not send one
-;      WheelLeft when you tilt it; it sends one every 30-50 ms for as long as
-;      the wheel is held over, exactly like a held keyboard key, so a bound
-;      tilt produced "multiple repeated inputs causing unpredictable
-;      outputs". New settings tiltRepeatMs (150 ms) and wheelRepeatMs (0 =
-;      off), clamped 0..1000 in ValidateCfg: a notch arriving within the
-;      guard of the last ACCEPTED notch for the SAME input is dropped, so a
-;      held tilt is one press and a flick left then right is still two. The
-;      decision is WheelAccept(input, now, lastMap, limitMs) -- pure apart
-;      from the map, replayed against a fake clock in regression.ahk,
-;      including the 49.7-day A_TickCount wrap. Only BOUND (non-native)
-;      directions are limited: an inert row is plain scrolling and stays
-;      byte-for-byte hardware-native. Both fields are on the Pointer page;
-;      Simple mode, which hides that page, gets the tilt one on Settings.
-;    * HOME SHOWS THE READING ROOM. A new first card, "Reading room
-;      essentials", lists the seven things this program is for -- dictate on
-;      and off, next field, previous field, pointer to the left monitor,
-;      pointer to the right monitor, the PACS wheel and the window presets --
-;      with every trigger each one has today (buttons, keys and the Settings
-;      hotkey, in plain words, joined by "or", or "not set"), a Set button
-;      that opens the wizard with question 3 already answered, and a Clear
-;      button that removes them after asking. The five hotkey rows added to
-;      Settings in v0.6.2b (hkDictate, hkNextField, hkPrevField, hkTeleLeft,
-;      hkTeleRight) are gone from that page -- the settings themselves are
-;      untouched and still registered; they are set from the card now, where
-;      the key sits next to the button that does the same job. Settings
-;      keeps the four keys that are about RadMapper itself. WizWhat learned
-;      to say these actions as sentences, so the wizard's summary reads
-;      "Button 4, when you tap it, will start or stop dictation in
-;      PowerScribe" rather than quoting the action table at itself.
-;    * ZOOM AND PAN AS NAMED OUTPUTS. In IntelliSpace, Alt held with a
-;      left-drag is zoom and Ctrl held with a left-drag is pan -- which the
-;      engine has always been able to do (moddrag) and nothing ever said out
-;      loud. No new action type: the wizard's question 3 grew two tiles,
-;      "Zoom (Alt+drag)" and "Pan (Ctrl+drag)", that set moddrag with LAlt or
-;      LCtrl (seven tiles, four to a row, which is why everything below them
-;      on that dialog sits 46 px lower); the Details dropdown says "Alt --
-;      zoom in PACS" and "Ctrl -- pan in PACS"; moddrag is on the Simple
-;      action list; and a starter pack, "PACS zoom and pan on the thumb
-;      buttons", puts both on buttons 4 and 5 scoped to the PACS profile.
-;      The pack deliberately adds NO left-button row: a native row scoped to
-;      one app is not an inert row, so it would hook the left button inside
-;      PACS and turn every click into an injected resend.
-;
-;  v0.6.4a (review pass 4) -- every item here is a fix to code that has
-;  still never run on Windows:
-;    * LOAD FIX (first workstation run): RadialIcon(name, x, y, ...) declared
-;      nested closures X/Y/S; AHK v2 treats X and the parameter x as one name
-;      and refuses to load ("conflicts with an existing parameter"). Renamed to
-;      gX/gY/gS. tests/check_source.py now asserts no nested function shares a
-;      name with an enclosing parameter.
-;    * LOAD FIX 2: Warp.Back had `if` / `try` / `else`; a try (braced or
-;      not) takes the else as its own clause. The if/else own the braces
-;      now. FIRST-RUN FIXES: names are case-insensitive -- RadialPaint used
-;      W and w as one variable (WD now), PanelPointer/PanelSettings used B
-;      and b (bands now), Warp.__Grid's local `line` shadowed the Line
-;      class it then called (hair now). check_source.py asserts all four
-;      shapes are absent file-wide.
-;
-;    * THE SCRIPT DID NOT LOAD. `class Warp` declared `static grab` beside
-;      `static Grab()` and `static SUB` beside `static Sub()`. AHK property
-;      names are case-INSENSITIVE, so each pair is ONE member declared
-;      twice: a duplicate-declaration error at load time, before a single
-;      hotkey is registered. Renamed to `grabbing` and `NINTH` (the methods
-;      keep their names -- they are what the rest of the code calls), and
-;      check_source.py now runs its case-insensitive collision check over
-;      EVERY top-level class this file declares, not just Lumi and Atlas,
-;      finding each class body by brace depth with comments and string
-;      literals stripped first. regression.ahk asserts the two members exist
-;      so a rename back shows up as a test failure rather than as a script
-;      that will not start.
-;    * A DIRECTION BELONGS TO ONE SLICE WENT TOO FAR. v0.6.4 gave every
-;      ring Kando's half-gap wedges, so at the ROOT a flick 30 degrees off
-;      north in a 4-way menu selected nothing and the press was simply
-;      lost -- and in the 9-way preset ring, where the whole circle is
-;      numbers, 20 degrees of the 40 belonged to nobody. Dead space is only
-;      worth having where a bearing that lands in it MEANS something, and
-;      the only ring where it does is a child ring, where it means back.
-;      So: a root ring and a numbered preset ring are PARTITIONS -- every
-;      slice owns its whole sector, a bearing on a shared edge going to the
-;      lower-numbered slice -- and only a child ring keeps half the gap and
-;      hands the rest to `back`. A numbered child ring keeps a zero-span
-;      `back` marker, purely so the parent node and its connector are still
-;      drawn; no bearing selects it. Cancelling is still the hub, Escape,
-;      or a click. The hairline loop now draws each boundary ONCE (on a
-;      full ring every edge is shared, and a 1 px line drawn twice is 2 px).
-;    * A WHEEL CANNOT BE LEFT BEHIND. Layer() creates a window and Draw()
-;      blits one, and both pump messages, so a hotkey thread could close or
-;      replace the menu while a paint was inside the constructor -- leaving
-;      a click-through, top-most layer over the study with nothing holding a
-;      reference to it. RadialPaint and RadialRing are Critical, the paint
-;      checks that the menu it started on is still the live one and disposes
-;      the layer if not, and every layer is registered in g_RadialLayers,
-;      which RadialClose, PanicRelease and Cleanup sweep.
-;    * A CLICK CANCELS A PRACTICE WHEEL. The trial exemption in the
-;      click-cancel gate, in RadialCancelActive and in RadialCancelHit meant
-;      a practice wheel could only be closed by Escape or by waiting out its
-;      20 s floor -- the one window in RadMapper you had to sit through.
-;      Cancelling is as much a part of the gesture as the flick is, so it is
-;      a thing to practise. It returns to the settings window through
-;      RadialClose's trial branch, exactly as Escape already did.
-;    * THE FOCUS KEYS AND THE KEYBOARD POINTER STOP FIGHTING. Warp owns Tab,
-;      Space, Enter and the arrows while it is up -- they are how it is
-;      driven -- so Atlas.DoFocusKey stands down while it is active, the way
-;      it already does for a Rec capture and a live Field. And Warp refuses
-;      to open over the settings window, which is the fourth thing (after a
-;      menu, the switcher and the calibrator) that drives itself from those
-;      same keys.
-;    * TAB SURVIVES A WIZARD ANSWER. Every wizard tile rebuilds the dialog
-;      on a new layer, and a new layer meant a new focus ring: Tab, Tab, Tab,
-;      Space and the ring jumped back to control 1. The position and whether
-;      the ring is showing at all now travel on the draft (Atlas.WizRefocus
-;      -> Lumi.Focus.Reset's new idx), clamped to whatever ring the rebuild
-;      produced. Closing a dialog that was being driven from the keyboard
-;      re-arms the page behind it. A mouse user still never sees a ring.
-;    * STEPPING THE ACTION DROPDOWN WITH THE ARROWS REOPENS THE WIZARD ONCE.
-;      Left/Right fire onChange on every press, so walking the sixteen
-;      actions crossed the Details-widget family line four or five times and
-;      tried to rebuild the dialog each time -- each rebuild disposing the
-;      dropdown the next arrow press was aimed at. Lumi.SelectNudge marks
-;      itself while it calls onChange and the rebuild is debounced 400 ms
-;      behind a cached BoundFunc; the hint still follows every press.
-;    * Atlas.IsFront IS THE #HotIf CONTEXT FOR ESCAPE, F1, FOUR RESIZE
-;      COMBOS AND ALL EIGHT FOCUS KEYS, so it is asked on every press of
-;      Tab, Space, Enter and the arrows anywhere in Windows -- while
-;      dictating, while typing a report. It answers 0 without a WinActive
-;      call when there is no settings window or it is hidden.
-;    * THE RADIAL SAFETY FLOORS MEASURE THE WHOLE MENU. The 15 s held floor
-;      and the 6 s / 20 s latched floors were measured from R.t0, which
-;      RadialRing restarts on every walk-in and walk-back -- so a gesture
-;      that kept opening rings never aged. R.openedAt is set once, in
-;      RadialOpen; t0 stays the per-ring dwell clock.
-;    * A CORNER INSIDE THE HUB OPENS NOTHING. The marking-mode corner path
-;      read a bearing from the turn point without checking it was outside
-;      the dead zone, so a stroke that curled back through the centre could
-;      open whichever door lay that way, or walk back out of the ring.
-;    * F1's MsgBox is wrapped in StopTick/StartTick, as Atlas.Confirm
-;      already was: the 700 ms status tick does not stop for a blocking box,
-;      and a Build() landing while it is up disposes the layer that owns it.
-;      Its radial paragraph, and the README's, are rewritten to say what the
-;      wedges now do; the wizard's hint moves up into the Details row's
-;      place when question 4 hides it.
-;
-;  v0.6.4 (radial menus: Kando-inspired):
-;
-;    * A DIRECTION BELONGS TO ONE SLICE, OR TO NOBODY. Selection was "the
-;      nearest slice centre", which hands every bearing to somebody: in the
-;      9-way preset ring a flick 20 degrees off north fired the NEIGHBOUR.
-;      Each slice now owns only the inner half of the gap to each neighbour
-;      (Kando's scaleWedge 0.5), it is DRAWN as that arc, hairlines mark the
-;      boundaries, and the hovered arc is washed in pink. Everything left
-;      over is nobody's: at the root it selects nothing (release = cancel),
-;      and in a second ring it -- together with the whole direction that ring
-;      was entered from -- is the way BACK, which commits nothing. Slice
-;      DIRECTIONS did not move: a root ring is the same fixed compass.
-;    * A SECOND RING OPENS WHERE THE GESTURE TURNED. Holding and flicking
-;      through a door no longer needs a pause: a sharp turn (90 px of
-;      straight stroke, then more than 20 degrees, past a 10 px jitter
-;      floor) or 100 ms of stillness opens it, re-centred on the CORNER and
-;      clamped onto the monitor with a 120 px margin. Resting on a door
-;      still works. Leaves are unchanged and still fire on release only, so
-;      no gesture can send a command mid-flight. The pointer is never
-;      warped: the button is physically down.
-;    * THE CHILD RING LEAVES THE WAY BACK A SLOT OF ITS OWN -- 360/(n+1)
-;      spacing starting one step past the parent direction (Kando
-;      computeItemAngles), with the parent drawn as a small node in its true
-;      direction and a connector line to it. The numbered preset ring is
-;      exempt: there the slot IS the number.
-;    * THE HUB SAYS WHAT IS ARMED AND WHAT IT SENDS: the hovered command's
-;      name, and under it its keys in the muted style; the menu's own name
-;      when nothing is hovered; "practice -- nothing is sent" as before.
-;    * THE WHEEL MOVES WITH THE HAND. What the pointer is near grows to
-;      1.15 over 250 ms and its neighbours ease back by angular distance,
-;      the ring fades in over 75 ms, icons sit in discs with the word
-;      outside them on the ring, a door wears one dot per command behind it,
-;      and the stroke is drawn back at you from the ring's origin, fading
-;      toward the tail. Two switches on the Menus page -- "Animate the
-;      wheel" and "Show wedges" -- turn the movement and the arcs off; with
-;      animation off the tick repaints on selection changes alone, exactly
-;      as it did before. There is no fade OUT: a closing wheel may not leave
-;      a timer behind it, and a blocking fade would sit between the release
-;      and the command.
-;
-;  v0.6.3 (setup by keyboard, mouse buttons as outputs):
-;
-;    * THE WHOLE SETTINGS WINDOW WORKS FROM THE KEYBOARD. The widget kit
-;      keeps a focus ring per layer (Lumi.Focus): every button, switch,
-;      field, dropdown, slider and list registers itself as it is built, in
-;      the order it was built. Tab and Shift+Tab walk it and draw a 2 px cyan
-;      ring around what is focused, Enter or Space presses it, Left/Right
-;      steps a dropdown, nudges a slider and flips a switch, Up/Down moves a
-;      list's selection, and Escape keeps the meaning it always had. The ring
-;      is not drawn until Tab is pressed, so nothing changes for a mouse; a
-;      dialog opens with its first control focused. Muted (nothing-selected)
-;      buttons are skipped. The keys are `~`-prefixed and inert while a Field
-;      owns the keyboard, while an option list is open and while Rec is
-;      capturing -- typing a space types a space, and the key you record is
-;      never also the key that pressed Rec.
-;    * MOUSE BUTTONS ARE OUTPUTS. The wizard's third question gained five
-;      one-click answers -- Left click, Right click, Middle click,
-;      Double-click, Click lock -- and the Simple action list gained the
-;      three actions behind them, so "make button 4 the middle button" is
-;      two clicks rather than a typed code.
-;    * CLICK LOCK IS PROGRAMMABLE FROM THE UI. The five actions that take an
-;      INPUT as their value (native, dblclick, dragmove, clicklock, moddrag)
-;      no longer show a free-text Details field: the binding editor shows a
-;      dropdown of plain names, and the wizard asks a fourth question --
-;      "Which button should it hold?" -- when Click lock is chosen. Blank
-;      still means what it always meant, and it is spelled out: "Whichever
-;      button is held" for the lock, "Same as this input" for the rest.
-;      Nothing changed in the engine: ClickLockToggle has always resolved a
-;      named input through ResolveInputValue, and the middle-button warning
-;      is about middle-button TRIGGERS, not middle-button outputs.
-;
-;  v0.6.2c (review pass 3, stations + keyboard pointer) -- everything here
-;  is a fix to v0.6.2 code that has still never run on Windows:
-;    * UIA SNAP WAS READING THE WRONG VTABLE SLOT. 43 is get_CurrentLabeledBy,
-;      not get_CurrentBoundingRectangle (42) -- N snapped to a rectangle made
-;      of the low and high halves of a leaked element pointer. The name BSTR
-;      is freed in a `finally`, and a failed call now drops the cached
-;      IUIAutomation so the next press rebuilds it instead of failing for the
-;      rest of the session.
-;    * THE LOUPE IS ALIGNED WITH ITS OWN PICTURE. The magnified bitmap is
-;      scaled to the box by the kit ("w320 h320") rather than nudged there
-;      with four bmp* offsets, and every overlay inside it (region box,
-;      thirds, letters, crosshair) is drawn at the TRUE ratio LW / sw, not at
-;      the requested zoom -- which differ, because sw is rounded.
-;    * PER-MONITOR-V2 DPI AWARENESS IS SET AT STARTUP, before the config is
-;      read. MigrateLayoutSlots derives every legacy slot's fractions from the
-;      monitor work areas and the first StationKey() stamps a station
-;      identity; on a mixed-scaling desk both were reading virtualised pixels.
-;    * A LAYOUT IS ONLY STAMPED WITH THIS STATION IF IT PLAUSIBLY BELONGS TO
-;      IT -- every slot centre on a real monitor -- and an IMPORTED config is
-;      never stamped at all. A wrong stamp means "apply pixel for pixel",
-;      which is the one thing a foreign layout must not do.
-;    * WINDOWS THAT ARE NOT ARRANGEMENT MEMBERS ARE LEFT ALONE: owned windows
-;      (dialogs, PowerScribe's signing prompts) and windows with no
-;      WS_THICKFRAME. Each slot remembers its window CLASS, and the two loose
-;      match steps stay within it, so the IntelliSpace worklist and viewer
-;      stop swapping places. A minimised or owned PowerScribe window is never
-;      restored or moved from the guard tick (skill §2's standing rule).
-;    * WARP CLICKS NO LONGER INHERIT CTRL+ALT. The pointer is reached by a
-;      modifier chord and the InputHook leaves modifiers visible, so Space
-;      was sending Ctrl+click into the study. Every click, grab and wheel
-;      puts the modifiers up first (Warp.ClearMods). The wheel is POSTED to
-;      the window under the crosshair rather than sent to the focused one.
-;    * THE GUARD IS RE-ARMED AFTER A RESTART: the flag lives on the layout,
-;      but nothing read it back at startup, so "always" was a label with no
-;      timer behind it until the layout was applied by hand.
-;    * "Place NEW windows" keeps its record PER LAYOUT, writes it only on the
-;      mode-2 path, forgets it when the guard is armed or disarmed, and
-;      prunes dead hwnds every tick (Windows recycles handles).
-;    * IMAGING SCREENS: the pixel rule is ranked against the MEDIAN screen,
-;      not the smallest, and when every screen would be reserved the rule
-;      narrows to the portrait screens, or to the largest one, instead of
-;      giving up and reserving none.
-;    * THE WINDOWS PAGE FITS AT 940 px. The three window hotkeys use the
-;      stacked row form in three 220 px columns; the arithmetic is in a
-;      comment and check_source.py asserts it. "Saved on" names the station
-;      instead of counting its screens, and the Keep button says which state
-;      the selected arrangement is IN, with the next one underneath.
-;    * STATION WATCH INTERLOCKS: the settle pass refuses while a mouse button
-;      is physically down, while our own resize grip, the keyboard pointer, a
-;      radial menu, the app switcher or the calibrator is live, and while any
-;      monitor still reports zero area. WM_DISPLAYCHANGE closes the keyboard
-;      pointer. "Screens changed" is announced even when auto-apply is off.
-;    * ValidateCfg validates LAYOUTS AND STATIONS too (guard to 0/1/2, rects
-;      to Integer, fractions to Float or the slot goes, keyless stations
-;      dropped) -- they are read from timer threads, where a thrown error is
-;      a feature that stops working with nothing on screen to say so.
-;    * Captured fractions are clamped to their own screen (an invisible
-;      resize border used to give fx = -0.004), and the fw/fh floor is 0.005
-;      instead of 0.1 -- a tenth of a 4K screen is 384 px, which was
-;      inflating every narrow tool window on every adapt.
-;    * Smaller: WinMaximizeOn sizes the window to fit before maximising;
-;      tiling compensates the DWM invisible border; the no-affinity loupe
-;      fallback hides only the layers that intersect the capture (the HUD
-;      included) and the affinity probe is answered once, not per open;
-;      Warp refuses to open over a menu, the switcher or the calibrator;
-;      StationKey is computed once per apply, not once per slot.
-;
-;  v0.6.2b (review pass 2, settings UI) -- wording, honesty and reach:
-;    * ONE VOCABULARY for the buttons: "Button 4 (thumb, back)", "Button 5
-;      (thumb, forward)", "Button 3 (wheel click)" everywhere, and the mouse
-;      map's caps are the same numbers. Events are words too -- "Tap it",
-;      "Hold it down", "Turn the wheel" -- through EVENT_LABELS.
-;    * NO FALSE SUCCESS. The wheel deck, the timing calibrator, the
-;      scratchpad, the starter packs and the wizard all report "Applied for
-;      now - not written to disk" when the save failed, instead of "Saved".
-;    * The DUPLICATE-ROW question is asked for edits too, not only for new
-;      rows, and it says the existing assignment will be deleted.
-;    * CONFIRMATIONS on the three buttons that threw work away silently:
-;      Reload from disk, Import config (which names the count and the backup
-;      folder) and deleting a scratchpad snippet. A failed import now says
-;      so instead of rolling back in silence.
-;    * SETTINGS HOTKEYS are usable: every row has a Rec button and its value
-;      spelled out underneath ("Ctrl + Alt + Shift + F9"), the PowerScribe
-;      rows are named after PowerScribe, and the two pointer teleports have
-;      keyboard rows at last.
-;    * PRACTICE is practice: the cancel keys are bound in trial mode too,
-;      the hub says "practice - nothing is sent", the latched auto-commit
-;      cannot fire, and the wheel stays up for 20 s.
-;    * Adding or duplicating a menu no longer leaves the new menu alive in
-;      memory and invisible on screen when the file cannot be written.
-;    * CONTRAST: "danger" is border-only now; its label uses the new
-;      dangerInk token. check_source.py checks eight more text/ground pairs.
-;    * Keyboard operability, minimally: Up/Down/Enter in the Chooser and in
-;      an open dropdown; F1 says where full keyboard operation lives.
-;    * Simple mode no longer offers actions whose editors it hides (macro,
-;      layout); the Keyboard page gets the same wizard the Mouse page has;
-;      buttons that need a selected row are drawn inert until there is one.
-;
-;  v0.6.2a (review pass 1) -- correctness fixes, no new features:
-;    * A held action is RELEASED, not orphaned, when a press falls through to
-;      the native path (engine paused, our own GUI, a click-lock latch).
-;    * OS keyboard auto-repeat re-fires only repeat-safe tap actions, rate
-;      limited by repeatRate; dictation, macros, Run and radial menus no
-;      longer fire dozens of times for one held key.
-;    * "Focus blocked - key delivered in background" now says the window
-;      would not come forward: ControlSend into WPF is best effort at best.
-;    * PACS "already active" no longer counts the WORKLIST as the viewer, so
-;      viewer keys stop landing in the work list.
-;    * A full delivery queue reports the dropped keypress instead of
-;      dropping it silently.
-;    * A click cancels a live radial menu instead of falling through it into
-;      the study; the three mouse buttons are hooked for the menu's lifetime.
-;    * The watchdog restores the system cursor if it is hidden with no drag
-;      scroll running, and OnError restores it too.
-;    * A hold-only row fires at the threshold, not at press, unless its
-;      action actually has a hold phase (StatefulHoldType).
-;    * Panic stops a running macro between steps.
-;    * Teardown CANCELS an open radial menu instead of committing a slice.
-;    * MButton hold / tap-hold / layer-host rows warn before saving (middle
-;      drag is how IntelliSpace pans).
-;    * The Up of a key claimed by the keyboard pointer is swallowed even
-;      after the overlay has closed.
-;    * holdThreshold and tapWindow are clamped at every timing read
-;      (HoldMs / TapMs), so a hand-edited 0 cannot spin a timer.
-;    * ValidateCfg drops wrong-shaped app noHold / noFollow / park fields.
-;    * The foreground-lock timeout is saved at startup and restored on exit.
-;    * Five HotIf binders clear their context in `finally`.
-;
-;  v0.6.0.2-preview (Codex second pass; Windows verification pending):
-;    Guided radial setup, four/eight-way direction preservation, reference-safe
-;    rename, explicit shortcut validation, foreground cancellation, reliable
-;    preview return timer, retained failed-save state and transactional import.
-;    F1 quick help, clearer Home defaults, readable hints and softer pink.
-;
-;  v0.6.2: WINDOWS THAT FOLLOW YOU BETWEEN STATIONS, and a KEYBOARD POINTER.
-;
-;    * STATION-AWARE ARRANGEMENTS. A saved window arrangement used to be a
-;      list of absolute rectangles, which is meaningless at any station but
-;      the one it was captured on. Every slot now also remembers its SCREEN
-;      (counted left to right) and its place on that screen as fractions of
-;      the work area. On the capturing station it applies pixel for pixel;
-;      anywhere else it ADAPTS: screens are mapped by relative position onto
-;      the screens that exist, imaging screens (portrait, or markedly more
-;      pixels than the smallest -- or listed by hand) are kept for the
-;      viewer and refused to everything else, and maximised stays maximised
-;      on the mapped screen. A maximised window on the WRONG screen is now
-;      corrected, too; it used to count as done.
-;    * STATIONS. The monitor set is the station's identity
-;      ("1920x1080|2048x1536|1920x1080"). Each station names the arrangement
-;      that belongs on it (the first one saved there, by default) and which
-;      screens are imaging screens. When the monitor set changes -- dock,
-;      KVM, a display waking late, logging in elsewhere -- the engine
-;      recognises the station and applies its arrangement; on launch too.
-;      "Keep in place" gained a gentle third mode, NEW WINDOWS: a window is
-;      placed once, when it first appears, and never touched again, so PACS
-;      opened after RadMapper lands on the right screen and a window you
-;      then move stays moved.
-;    * WINDOW BY KEYSTROKE. The action "Window: move / fill" sends the ACTIVE
-;      window to a screen (next, prev, here, 1-9) and/or a tile (max, left,
-;      right, top, bottom, corners). Three Settings hotkeys for the common
-;      three, unassigned by default; the Windows page has the fields.
-;    * KEYBOARD POINTER (Ctrl+Alt+G). The keyboard version of "mouseless": a
-;      lettered grid over the screen under the pointer (column letter, then
-;      row letter), then Q W E / A S D / Z X C zoom into ninths down to the
-;      pixel, with a LOUPE beside the pointer showing the region magnified
-;      and the same nine letters drawn over it -- a 14 px PACS toolbar
-;      button is picked by reading a letter off a picture of it. Space
-;      clicks, R / M / F right, middle, double; G grabs so the next moves
-;      DRAG; N snaps onto the control under the pointer (UI Automation);
-;      Tab and 1-9 change screen; arrows nudge; Esc closes. An invisible
-;      InputHook owns the keyboard while it is up (nothing typed reaches the
-;      viewer), modifiers stay live for the panic key, engine key rows are
-;      gated, and a 45 s idle timeout guarantees the keyboard comes back.
-;
-;  v0.6.1f: THE "SET A BUTTON" WIZARD. One dialog, three numbered
-;  questions -- which button (tiles: Button 4, Button 5, Button 3, or record
-;  a key), when (Tap / Hold), what (the short action list, a Details field
-;  with Rec and Keys, and a program). Save writes an ordinary row through
-;  the same validator and UpsertBinding the editor uses and lands on the
-;  page that shows it. "All options…" hands the same draft to the full
-;  editor. In Simple mode it is what Home's "Change what a mouse button
-;  does" and the Mouse page's "Set a button…" open; Advanced mode keeps
-;  the full editor there.
-;
-;  v0.6.1e: STARTER PACKS. Home > "Apply a starter pack" lists five named
-;  sets of ordinary bindings -- PowerScribe on the thumb buttons, the PACS
-;  wheel on button 4, Window presets on button 5, drag scroll on button 5,
-;  and the shipped monitor hopping -- and applies one in a click through
-;  the same UpsertBinding the editor uses. Anything a pack would replace is
-;  listed and confirmed first. There is no pack state: the result is rows
-;  on the Mouse page, editable and deletable like any other. "Test my
-;  mouse" moved off Home; it lives on the Diagnostics page.
-;
-;  v0.6.1d: SIMPLE MODE, on by default. The rail shows Home, Mouse,
-;  Keyboard, Menus, Settings and Diagnostics; the action dropdown shows the
-;  sixteen things a radiologist actually binds (plus whatever a row already
-;  uses). One switch on Home ("Show advanced pages and every action") adds
-;  Layers, Macros, Apps, Windows, Pointer and the full 32-entry table.
-;  Nothing is removed and no config changes: hidden pages keep their slot,
-;  and each dropdown carries its own code list so a row's meaning never
-;  depends on which list drew it (Atlas.ActSelect / Atlas.ActCode).
-;
-;  v0.6.1c: two things that looked broken and were.
-;    * THE RADIAL MENU BLINKED while held. Every repaint (each slice
-;      change) re-applied the window's extended styles and re-inserted it
-;      topmost; on a visible layered window that is a flash. Styles are
-;      set once when the wheel's window is created.
-;    * DRAG SCROLL "JUMPED BETWEEN TWO POINTS". That was the pin: the
-;      cursor is warped back to the anchor every 10 ms, and the hand moves
-;      it a few pixels first, so the eye sees it flicker between the two.
-;      While pinned the pointer is now HIDDEN and a small ring marks the
-;      anchor (scrollPtrHide; the ring says where the scroll is held).
-;      The system cursors are restored on stop, on panic and on exit.
-;
-;  v0.6.1b: the shipped PACS wheel now REPLACES an edited "PACS" menu too.
-;  The edited one is kept as "PACS (previous)", opened only by that name,
-;  so nothing is lost and the button that opened "PACS" opens the new one.
-;
-;  v0.6.1-preview also adds "PACS: SEND KEYS", the PowerScribe routing
-;  pointed at the viewer: from any app, PACS is brought forward by its
-;  Apps-tab profile (exe, never a handle), the keys land, and focus returns
-;  to where you were. It prefers the window whose title contains pacsWindow
-;  ("VirtualMonitor": IntelliSpace's viewer rather than its worklist), and
-;  falls back to whichever PACS window was last active. Same serialized
-;  queue as PowerScribe, so bursts land in order and panic aborts them.
-;  Available as an action, a radial slice and a macro step (pacskeys).
-;
-;  v0.6.1-preview: radial menus you can get OUT of, get INTO, and read.
-;    * SECOND TAP CANCELS. A tap-opened (latched) menu could only be left
-;      by Escape or a 6 s timeout; a hand on the mouse has neither. Tapping
-;      the same button again closes it, and a press while any menu is up
-;      closes that menu instead of stacking another.
-;    * HOLD, MOVE, RELEASE is the gesture when the menu is bound on HOLD
-;      (which "Assign a button" does). Release in the hub, or Escape, fires
-;      nothing. Bound on TAP, the menu latches and fires by resting.
-;    * MENUS INSIDE MENUS, depth two. A slice whose action is "Radial menu"
-;      is a door: rest on it while holding (radialSubMs, 340 ms) and that
-;      menu takes the wheel's place, re-centred under the cursor, still
-;      held -- hold, "Windowing", pause, "3", release. Releasing ON the
-;      door opens the same menu latched, so both habits work. Doors show
-;      a wheel glyph and a › after their name.
-;    * A 9-SLOT NUMBERED RING for window presets: the slot number is the
-;      key it sends (1-9), printed large, the preset name small beneath.
-;      It is the one exception to the 8-way limit and exists for this job.
-;    * ICONS. A slice can carry an icon name (Icon column in the editor):
-;      next, prev, delete, ruler, roi, clahe, window, magnify, series,
-;      menu, zoom, invert, reset, dictate -- vector glyphs drawn with the
-;      wheel's own primitives, recoloured with the slice state.
-;    * THE PACS MENU SHIPS FILLED: Next series F8 (up), Ruler R, ROI
-;      Shift+R, Magnify Y, Prev series F7 (down), Delete, Windowing (a
-;      door to "Window presets"), CLAHE Shift+C. The "Window presets" ring:
-;      1 Soft tissue, 2 Bone, 3 Brain, 4 C-spine soft tissue, 5 CTA,
-;      6 Infarct, 7 Liver, 8 Lung, 9 Lung wide. An existing config whose
-;      PACS menu is still the untouched eight-blank template gets the new
-;      one once; a PACS menu you have edited is left alone.
-;
-;  v0.6.0.2-preview review pass (on top of the Codex second pass):
-;    * Radial menus cancel when the foreground moves to another PROCESS,
-;      not another window handle. syngo.via, PACS viewers and browsers hand
-;      the foreground between their own top-level windows unprompted (the
-;      v0.4.9 follow-focus lesson), and a handle compare cancelled gestures
-;      exactly where the menu is wanted. Our own layers never count.
-;    * "Not saved" in the header now means a save FAILED (or is blocked),
-;      not that a 400 ms slider debounce is pending -- g_CfgSaveFailed.
-;    * Placeholder / helper ink is 9A9FBE: >= 4.5:1 on every ground and
-;      still dimmer than secondary text, so the hierarchy reads.
-;    * JSON numbers are matched in place (\G at the position) instead of
-;      copying the rest of the document per number.
-;    * Home's "Test my mouse" lands on the classic Diagnostics tab, which
-;      is where the live input monitor is; the config path has its label.
-;    * The UTF-8 byte-order mark that the second pass introduced at byte 0
-;      is removed again, so the file diffs cleanly.
-;
-;  v0.3 was a DELIBERATE SIMPLIFICATION of v0.2. Everything that made the
-;  engine hard to reason about -- the free-spin scroll engine (smoothing,
-;  acceleration, momentum, coasting), autoscroll, OS pointer-acceleration
-;  forcing, 8-way gestures + the ring overlay, and two-button chords -- was
-;  removed, and keyboard remapping (which never fired in v0.2) was fixed.
-;  v0.3.1 fixes input-to-input remapping, and adds click lock, drag scroll
-;  and a double-click output. v0.3.2 adds NumLock pause and follow-focus,
-;  and clears the load-time warnings the GpGFX bundle exposed. v0.3.3
-;  fixes the white-out and moves to the three-hue palette. v0.3.4 strips
-;  the gradients and the other generic tells, splits monitor teleport into
-;  two plain actions, and flashes the monitor the cursor lands on. v0.3.5
-;  makes the dropdowns scroll (they were truncating at 12 items and hiding
-;  half the action list) and redraws the mouse schematic to match the
-;  hardware. v0.3.6 adds per-app park points (a captured screen spot the
-;  cursor returns to, per application) and a Layers panel that shows which
-;  buttons host a hold layer and how many rows each one arms.
-;
-;  v0.3.7 is a UI repair release. Every widget now records the LAYER IT WAS
-;  BUILT INTO instead of reading the global active layer when a click
-;  arrives, which is the single root cause of both reported failures: the
-;  binding dialog's Value field would not accept a keystroke (its edit loop
-;  asked the wrong window whether it still had focus and quit on the first
-;  pass), and dropdowns inside the dialog opened at MAIN-WINDOW coordinates,
-;  detached from the control that opened them, then redrew the wrong window
-;  when picked. Only one option list can be open at a time now, it closes on
-;  focus loss or Escape, and every teardown path disposes it -- a list left
-;  floating over a rebuilt panel was a live window still writing into dead
-;  state, which is how picks landed on unrelated buttons. The three value
-;  tools the classic dialog always had -- Rec, Keys, Input -- are back in the
-;  vector dialog, alongside a live action hint. The Keyboard panel is now the
-;  Mouse panel: same App and Layer scope selectors in the same place, a key
-;  picker where the mouse map goes, the same row list, the same buttons,
-;  inert rows shown rather than hidden, and key layer hosts routed to the
-;  Keyboard tab from the Layers panel. And the mouse schematic derives its
-;  main buttons from the body outline instead of guessing at them, so they
-;  no longer hang over the shell, with the wheel and tilt column sitting on
-;  top of the L/R seam where the hardware puts it.
-;
-;  v0.3.8 makes the dropdowns SCROLL, which they have never actually done.
-;  The scroll code added in v0.3.5 was correct and simply never ran: the
-;  bundled GpGFX hit-tests WM_MOUSEWHEEL using lParam as client coordinates,
-;  but that one message carries SCREEN coordinates, so the search for a
-;  shape under the pointer always came up empty and no wheel handler fired.
-;  Fixed in place (GpGFX modification #2, §15). Popups are now also sized to
-;  the monitor rather than to a fixed 14 rows, so the 24-item action list
-;  opens whole -- which is what actually hid "Sniper speed", "Boost speed"
-;  and "Drag scroll": they are items 15, 16 and 17, the first three past the
-;  old window, and the wheel that was supposed to reach them did nothing.
-;
-;  v0.4.0 is a feature release, and the first since v0.3.5 that is not
-;  mostly UI repair.
-;
-;    * WHEEL DECKS. Hold an input, scroll for an output -- programmed in one
-;      dialog with all four directions (up, down, tilt left, tilt right) on
-;      screen at once, on both the Mouse and Keyboard panels. It writes
-;      ordinary layer-scoped wheel rows, so a deck stays editable as rows.
-;    * WINDOW SWITCHER. The built-in use for a deck: hold, scroll a list of
-;      windows that STAYS UP while you scroll (which is the thing Alt+Tab
-;      will not do), release to switch.
-;    * WINDOW LAYOUTS. Capture where every window sits across the monitors,
-;      put the whole arrangement back by name or by binding, and optionally
-;      ARM a guard that snaps windows back when an application moves or
-;      resizes them on its own. New "Windows" panel.
-;    * PASS THROUGH. An action that lets the application's own binding run,
-;      for carving one app or layer out of a broader remap.
-;    * TAP-HOLD CALIBRATOR. Measures your own taps, holds and double-taps and
-;      sets the two timing numbers from them instead of from a default.
-;    * The HUD no longer appears at the cursor. It parks in a corner --
-;      bottom-left by default -- of the monitor under the pointer.
-;    * The window can be RESIZED (corner grip, maximise toggle, size
-;      remembered) and the binding dialog can be MOVED. The Settings panel's
-;      overlapping controls are laid out on declared bands.
-;    * The design gallery is now an interactive, closeable rendering and
-;      input self-test with a live event log, and says plainly that it
-;      changes nothing.
-;
-;  v0.4.1 fixes the thing that made every previous release feel like starting
-;  over, and adds two shelves.
-;
-;    * THE CONFIG NO LONGER LIVES NEXT TO THE SCRIPT. It lived in
-;      A_ScriptDir, so a new RadMapper.ahk in a new folder found no config and
-;      wrote fresh defaults -- which is why the bindings appeared to be lost
-;      on every upgrade. Nothing ever was: the old file is still beside the
-;      old copy. It now lives in %APPDATA%\RadMapper, one place per user,
-;      found by every future version with no migration. On first run it
-;      ADOPTS the newest config it can find from an older install, a corrupt
-;      file is recovered from the newest good backup instead of being replaced
-;      by defaults, and the Settings panel shows the path at all times.
-;      Portable mode is still available: drop a file named
-;      "RadMapper.portable" beside the script.
-;    * CLIPBOARD SHELF and SCRATCHPAD, summoned to the cursor (Ctrl+Alt+C,
-;      Ctrl+Alt+N, both rebindable and bindable to any input). Click a row to
-;      paste it back where you came from, or drag a row onto any window to
-;      drop it there. The clipboard history is MEMORY ONLY and never written
-;      to disk -- this is a shared workstation and a clipboard here holds PHI.
-;      The scratchpad is saved, because saved phrases are its whole point.
-;    * DRAG ZOOM, the drag-scroll engine emitting Ctrl+wheel.
-;    * A fresh config now SHIPS WITH BINDINGS instead of a clean slate:
-;      ` dictates, the thumb buttons teleport between monitors, and [ / ]
-;      step report fields on tap with drag scroll / drag zoom on hold.
-;
-;  v0.4.2 is a one-bug crash fix. Teleporting between monitors could kill the
-;  script outright with "Critical Error: Invalid memory read/write" -- an
-;  error AutoHotkey does not let you catch. The fault was in the bundled
-;  GpGFX: LayerStack.ActiveLayer keeps an UNOWNED raw pointer, and its getter
-;  resurrected that pointer without checking it was still a live layer while
-;  its setter immediately dereferenced it. Any code that saved the active
-;  layer, created or disposed layers, then put the saved one back could
-;  therefore read freed memory -- and that idiom appears about sixty times
-;  here plus inside GpGFX. v0.4.1 made it near-certain rather than rare: a
-;  teleport builds and tears down FIVE layers, and v0.4.1 put teleport on the
-;  thumb buttons by default. Fixed at the source as GpGFX modification #3;
-;  the teleport code itself was never wrong.
-;
-;  v0.4.3 finishes click lock.
-;
-;    * A PROGRAMMABLE LOCK KEY (Ctrl+Alt+B by default, edited in the Pointer
-;      tab). It latches WHATEVER is being held, so a lock no longer has to be
-;      bound per button. The clicklock action still exists, unchanged.
-;    * THE NEXT KEYSTROKE RELEASES IT. Reaching for the keyboard is itself a
-;      statement that the sweep is over. Bare modifiers are exempt, so Ctrl
-;      or Shift can still modify a locked drag; keystrokes RadMapper itself
-;      sent are exempt, so a macro or a W/L digit does not drop it; and the
-;      key that ARMED the lock is exempt, or its own auto-repeat would.
-;    * A LOCK WITH NOTHING HELD IS A NO-OP. It used to fall through to
-;      LButton and latch a button the user was not touching -- a synthetic
-;      left-button-down out of nowhere, which on an image is a click, a drag
-;      or a measurement.
-;
-;  v0.4.4 is three reported bugs and two follow-ons.
-;
-;    * "APPLY WINDOW LAYOUT" OPENED THE CLIPBOARD. ACT_LABELS had drifted out
-;      of order against ACT_CODES: "layout" went into CODES before the two
-;      shelf codes but its LABEL went in after them, so entries 23-25 carried
-;      each other's names and picking one saved a different action. Order is
-;      the contract between those two arrays and nothing was checking it;
-;      tools/check-actions.py now does.
-;    * THE SNIPER AND BOOST SLIDERS WOULD NOT MOVE. A slider mutates the
-;      shapes it was built with as the pointer moves, and the 700 ms status
-;      tick rebuilds the panel -- disposing exactly those shapes mid-drag.
-;      Atlas.Build() now defers while the left button is physically down,
-;      which covers every drag, not just sliders.
-;    * THE CALIBRATOR DID NOTHING. Its InputHook was built as
-;      InputHook("V L0"), copied from RecordCombo -- a different kind of hook,
-;      one that collects and ends. "L" is a length limit, and a length limit
-;      on a notify-only hook ends it before a single key is seen. The window
-;      drew and the hook feeding it was already over. The same construction
-;      bug was in the v0.4.3 click-lock watcher; both are fixed, and neither
-;      swallows a start-up failure silently any more.
-;    * LAYOUTS CAN BE PICKED FROM A LIST. Bind "Apply window layout" with a
-;      BLANK value and it opens a chooser at the cursor instead of requiring
-;      the layout's name typed into the value field. One input, every layout.
-;    * The window switcher now opens AT THE CURSOR, like the shelves and the
-;      new chooser, rather than in the HUD corner.
-;
-;  v0.4.5 is window chrome and the wheel.
-;
-;    * MINIMISE EXISTS, and the three window buttons are aligned. They sat at
-;      y=44 with a height of 24 in a 64 px header, so they hung THROUGH the
-;      rule closing the header, on a different baseline from the status chips
-;      whose corner they shared. One centred row now: minimise, maximise,
-;      close.
-;    * THE RESIZE AFFORDANCE IS VISIBLE AND THE EDGES WORK. It was three
-;      hairlines in the dimmest colour in the palette, hit-tested through an
-;      invisible Container. It is now a raised corner tile you can see, plus
-;      the whole right and bottom edge, all on real drawn shapes.
-;      NOTE: the design size is the MINIMUM. The window grows; it does not
-;      shrink below 1120x720, because every panel lays out downward on a
-;      fixed grid.
-;    * FAST SCROLLING. On a hooked wheel every physical notch is suppressed
-;      and re-emitted. That re-emission ran in the script-wide Event mode,
-;      one mouse_event per notch from a Critical thread, so at trackball
-;      speed notches reached the application late and with the gaps between
-;      them stretched -- and PACS and browsers accelerate scrolling from
-;      exactly those gaps. The passthrough now uses SendInput, atomically.
-;      The wheel hotkey also gets T4: it was registered at runtime, where the
-;      #MaxThreadsPerHotkey directive does not reach, so it kept the default
-;      of one thread and DISCARDED any notch arriving mid-resolve.
-;
-;  v0.4.6 makes the window an actual window.
-;
-;    * RESIZE REALLY WORKS NOW. v0.4.5 made the grip visible, which was not
-;      the problem. The size outline was ONE LAYER THE SIZE OF THE MONITOR --
-;      a ~33 MB ARGB surface on a 4K display, reallocated and pushed through
-;      UpdateLayeredWindow every frame -- and it was built inside the drag
-;      loop's own try, so when it crawled or threw, the drag was skipped
-;      entirely and the window silently refused to resize. It is now four
-;      3 px strips, the trick TeleportSignal already used, and the outline is
-;      treated as optional feedback that cannot take the resize down with it.
-;    * ALT+TAB AND A TASKBAR BUTTON. Every GpGFX layer is created
-;      WS_EX_TOOLWINDOW -- correct for toasts and overlays, and exactly the
-;      style that hides a window from the taskbar and Alt+Tab. Layers after
-;      the first are also given an OWNER, and an owned window is excluded
-;      whatever its style says. The settings window is now disowned and
-;      marked WS_EX_APPWINDOW, with a real title. Main window only: the
-;      shelves, chooser, switcher and toasts stay tool windows.
-;
-;  v0.4.7 lets the window SHRINK, and gives the pointer a landing signal
-;  wherever it lands.
-;
-;    * THE PANELS REFLOW. Mouse, Keyboard, Layers, Macros, Apps, Windows and
-;      Diagnostics were always height-relative and reflowed for free.
-;      Settings and Pointer were built on hand-picked absolute offsets that
-;      assumed one window size, which is the whole reason the floor could not
-;      come down. They now allocate ELASTIC BANDS (Atlas.Bands: scale by
-;      ratio, clamp to a legible minimum, take the excess back from whichever
-;      band has the most slack) and derive every column and row pitch from
-;      the actual width and height. Minimum is now 940x640, from 1120x720.
-;    * THE LANDING RING follows the cursor everywhere it lands, not only on a
-;      monitor teleport: follow-focus warping into a newly focused window,
-;      and the window switcher committing a choice, now pulse the same ring.
-;      RING ONLY for those two -- outlining a whole monitor in red every time
-;      the foreground changes would be intolerable, and the ring is the part
-;      that answers "where did my pointer just go". Separate toggle
-;      (focusFlash / "Landing flash") because it fires far more often.
-;
-;  v0.4.8 adds PER-APP NO-HOLD INPUTS, for applications that run their own
-;  press-and-hold gestures on the mouse buttons.
-;
-;  syngo.via is the reported case: give MB1-3 any hold binding and it becomes
-;  unusable there. This cannot be fixed with a binding, and that is the point.
-;  The cost is the ARBITRATION, not the action -- to tell a tap from a hold
-;  the engine must WITHHOLD the press until the hold threshold elapses, so an
-;  app that begins a drag on button-DOWN sees a 200 ms dead zone at the start
-;  of every gesture, and even a row resolving to "pass through" still has to
-;  wait before it knows that is the answer.
-;
-;  So a profile can now list inputs whose hold, tap-hold and layer-host
-;  behaviour is DROPPED while it is in front, returning them to the engine's
-;  eager path: first press out natively and instantly. Taps, double-taps and
-;  triple-taps still work, because the eager path already delivers the first
-;  press natively and only the extras need a timer.
-;
-;  A Syngo.via profile with MB1-3 listed is seeded once into existing configs
-;  (and ships in new ones), and the Apps tab has a "Toggle MB1-3 no-hold"
-;  button so the same fix is one click for any other application that turns
-;  out to need it. Matched by EXE only: syngo.via's ahk_class carries a
-;  per-run token, exactly as PowerScribe's does.
-;
-;  v0.4.9 is a settings window that cannot wedge, a follow-focus that follows
-;  APPS, and a window switcher you recognise instead of read.
-;
-;    * THE SETTINGS WINDOW COULD GET STUCK SHOWING DUPLICATED, SLIGHTLY
-;      OFFSET TEXT WITH NOTHING CLICKABLE, and closing and reopening it did
-;      not help. Three separate faults, all fixed:
-;        - Build() runs from a 700 ms timer, and an uncaught error in a timer
-;          thread dies on the spot -- after lyr.Clear() has destroyed the old
-;          frame and before lyr.Draw() shows the new one. What is left on
-;          screen is the last good frame's PIXELS over the failed frame's
-;          half-built SHAPES, so clicks land nowhere near what you see. The
-;          panel build is now caught: the failure is drawn, named and logged
-;          to Diagnostics, and the header and nav still work so you can move
-;          off the broken panel.
-;        - GpGFX erases only the previous frame's bounding box, and Text is
-;          exempt from the clipping that would keep it inside its own box.
-;          A string wider than the width it was given paints outside the
-;          erase region and is never cleaned up, so it accumulates rebuild
-;          after rebuild. Every panel that rebuilds in place now forces a
-;          full-surface erase first (Lumi.FullErase).
-;        - Lumi.editing is held above zero for the length of a field edit and
-;          every rebuild defers while it is. A thread that died without
-;          unwinding left it pinned forever, and the window is HIDDEN rather
-;          than destroyed, so reopening inherited the same stuck count. The
-;          edit loop now stamps a heartbeat and Lumi.EditGuard drops a count
-;          nobody is going to decrement. Reopening the window is a repair.
-;    * FOLLOW FOCUS FOLLOWS APPLICATIONS, NOT WINDOW HANDLES. syngo.via, a
-;      PACS viewer and a browser all hand the foreground back and forth
-;      between their own top-level windows with nobody touching anything,
-;      and chasing every one of those was the "jumping around by itself".
-;      A switch now has to change PROCESS (followSameApp opts back in), the
-;      new window has to hold the foreground for followSettleMs before the
-;      cursor commits to it, tool windows and untitled helpers are not
-;      destinations, there is one warp per followCooldownMs at most, and a
-;      profile can opt out entirely ("No follow-focus" on the Apps tab).
-;    * THE WINDOW SWITCHER SHOWS THUMBNAILS. A row of names is a reading
-;      task; a wall of pictures is a recognition task, and recognition wins
-;      by a wide margin. Four across, twelve at most, captured with
-;      PrintWindow (PW_RENDERFULLCONTENT) so an occluded window still comes
-;      out right and our own overlay never appears in the picture. Captured
-;      one per tick, selection outwards, so the panel opens instantly and
-;      fills in; minimised, hung or uncapturable windows fall back to their
-;      icon. The thumbnails are memory-only and freed the moment the panel
-;      closes -- a thumbnail of a reading station is a picture of a patient.
-;
-;  v0.5.0 adds RADIAL MENUS: eight commands around the cursor, chosen by
-;  direction.
-;
-;  The problem a radial menu solves is POINTER TRAVEL, which on a reading
-;  station is measured rather than theoretical -- an eight-hour shift is
-;  roughly a mile and a half of mouse. Arranged around the cursor, every item
-;  is the same short distance away and the DIRECTION is constant, which is
-;  what makes it learnable as a gesture; a gesture costs no travel at all.
-;
-;  The design is not open. Kurtenbach and Buxton measured marking-menu error
-;  rates staying under 10% at a breadth of 8 and a depth of 2, rising sharply
-;  past either. For a reading room 10% is already too high, so: EIGHT SLICES,
-;  ONE LEVEL, and nesting deliberately not built.
-;
-;    * NOVICE AND EXPERT ARE THE SAME GESTURE. The wheel is NOT drawn on
-;      press. Flick a direction and release and it fires with nothing ever
-;      drawn; hold still past the dwell and it fades in so you can look.
-;      Because both are one physical action, using the slow form teaches the
-;      fast one. This is the property most implementations lose by always
-;      drawing, and losing it turns a marking menu back into a toolbar.
-;    * ALWAYS ABORTABLE. Releasing inside the dead zone fires nothing, and
-;      Escape cancels. A gesture that cannot be called off mid-flight will
-;      eventually fire the wrong thing into a report.
-;    * AT THE CURSOR -- the one deliberate exception to the v0.4.0 rule that
-;      moved every HUD off the pointer. That rule is about passive
-;      notifications sitting over a finding. This is modal, it lives for a few
-;      hundred milliseconds, it is there because you asked for it, and putting
-;      it anywhere else would destroy the only reason to build it.
-;
-;  A slice is an ordinary {type, value} action, so the whole action table is
-;  available with no new executor cases -- and PowerScribe slices route
-;  through PSFire automatically, because ps_* actions already do.
-;
-;  Three menus ship. Browser (4) and PowerScribe (4) are complete. PACS is
-;  eight LABELLED BLANKS on purpose: IntelliSpace shortcuts are
-;  user-configurable, so shipping guessed keys would ship wrong ones. Epic and
-;  syngo.via are not seeded at all, one step further, because their tables are
-;  site-remapped. The Menus tab is where those get filled in.
-;
-;  v0.5.1 is four reported faults, and they share one root.
-;
-;    * TYPING INTO A FIELD DID NOTHING, THE WINDOW FROZE MID-ALIGNMENT, AND
-;      CLICKS LANDED NOWHERE. All three are one bug: a dialog builder sets
-;      LayerStack.ActiveLayer to its own layer and restores nothing, because
-;      on success the dialog IS where new shapes belong. Every shape
-;      constructor reads that one global -- so an error part-way through a
-;      build leaves it pointing at a layer that was never drawn, and from
-;      then on Lumi.Own() hands that dead layer to every field built
-;      afterwards as its OWNER. __FieldMine compares the owner's hwnd against
-;      the foreground window, never matches, and the edit loop exits before
-;      the first keystroke: letters go nowhere. Meanwhile Atlas.dlg is set,
-;      so the status tick returns early forever and the main window stops
-;      repainting, and the half-built dialog window is real, on top, and not
-;      click-through, so it silently eats the clicks aimed underneath it.
-;      Every dialog now builds through Atlas.OpenDlg(), which restores the
-;      construction target in a `finally`, tears down a half-built dialog and
-;      names the error in Diagnostics. The status tick also drops a dialog
-;      whose window has gone.
-;    * THE HOVER HIGHLIGHT STAYED LIT after the pointer moved away, on the
-;      sidebar and in the panel. TrackMouseEvent's TME_LEAVE is a ONE-SHOT
-;      request; GpGFX armed it only while a flag was false and cleared that
-;      flag only in the WM_MOUSELEAVE handler. Any leave that never arrived
-;      -- window hidden and reshown, cursor leaving during a modal drag or a
-;      blocking field edit -- left tracking unarmed for the rest of the
-;      session. Re-armed on every move now (idempotent, one DllCall), with a
-;      per-tick position check as the floor under it.
-;    * CROSSED-OUT TEXT while typing. Same erase rule as v0.4.9, one layer
-;      down: the field repaint went through the shape's own RedrawLayer,
-;      which erases only the previous frame's bounding box, and Text is
-;      exempt from the clipping that keeps a shape inside its box. Text that
-;      outgrew the field painted outside the erase region, and the caret
-;      blinked over the leftovers twice a second. Field repaints now force a
-;      full-surface erase.
-;    * STILL COULD NOT RESIZE, third report. Three changes: Atlas.W/H are now
-;      taken BACK from the layer after a resize instead of being set before
-;      one and assumed -- a single failed Resize used to move the grip
-;      permanently outside the visible window; the edges went from 6 px to 14
-;      and the corner from 18 to 26; and every stage of the drag writes a
-;      line to Diagnostics, so the next report says where it stopped.
-;      There are also now TWO resize paths that do not go through a shape
-;      hit-test at all: a size button in the window chrome, and Ctrl+Alt+
-;      arrows while the window is in front.
-;    * "TRY IT NOW" hid the settings window to show a menu over something
-;      real and never brought it back -- indistinguishable from a freeze. It
-;      returns now, and a trial menu FIRES NOTHING: it says what it would
-;      have fired. A W/L preset or a close-tab going into a study because you
-;      paused on a slice is not an acceptable cost of previewing a layout.
-;
-;  v0.5.2 hardens the shared UI failure paths. Resize captures the mouse and
-;  reads Win32 asynchronous button state instead of trusting a delayed AHK
-;  state poll. RadMapper-owned vector layers erase their full surface by
-;  policy, active-layer swaps restore in finally blocks, and shape-handler
-;  failures are recorded in Diagnostics. The global error hook suppresses
-;  modal dialogs while preserving the failure record.
-;
-;  v0.6.0.1a is a PROTOTYPE for colleagues who are not technical, and a
-;  bug-fix release underneath it. The UI is the same window with a front
-;  door added; the engine is the same engine with six faults closed.
-;
-;    * HOME PAGE. The window now opens on "Start here": one sentence on
-;      what RadMapper does, whether it is on or off IN WORDS, and four
-;      large buttons for the four jobs people actually come for -- change
-;      a mouse button, change a key, test my mouse, fix a stuck button --
-;      followed by the three hotkeys that always work, spelled out
-;      ("Ctrl + Alt + Q", not "^!q"), and the path the settings are saved
-;      at. The first launch of each version opens the window on this page
-;      by itself, so nobody has to find the tray icon.
-;    * PLAIN WORDS. "Binding" is a setting, an "input" is a button or key,
-;      a "profile" is a program, "layer host" is "hold this", "park spot"
-;      is "pointer spot", the guard "keeps windows in place", "no-hold" is
-;      "instant clicks", "Panic release" is "Unstick my buttons" and it
-;      says so in a toast when it has done it. List headers read "When
-;      you / It does / Also hold". Config keys, action codes and the
-;      ACT_* tables are untouched: this is a copy change, not a schema one.
-;    * DELETING ASKS FIRST. A setting, a menu, a layout or a pointer spot
-;      is not removed until a Yes/No box says so. The status tick is
-;      paused around the box so the 700 ms rebuild cannot dispose the
-;      button whose handler is waiting on the answer.
-;    * LEGIBILITY. Body text 11 -> 13 px, small 10 -> 11, tiny 9 -> 10,
-;      checked against every fixed box height; the disabled/placeholder
-;      ink lifted from 2.6:1 to >= 3:1 on every surface (WCAG); toggles
-;      52x28 instead of 44x22; toasts stay up 2.6 s instead of 1.6.
-;    * TWO LAYOUT FAULTS FIXED. The Mouse and Keyboard panels placed four
-;      buttons summing to 486 px in a 384 px column at the minimum window
-;      size, so "Delete" and "Wheel deck..." hung off the right edge,
-;      unreachable; button rows are now sized to the column they sit in
-;      (Atlas.BtnRow). And the nav rail stepped a fixed 44 px per entry,
-;      which with eleven entries ran through the engine switch on any
-;      window under about 780 px tall -- the minimum is 640; the pitch is
-;      now derived from the space that is there.
-;    * PANELS DISPATCH BY NAME, not by number, so inserting Home at the
-;      front of the list could not open the wrong panel silently; the two
-;      places that hard-coded an index now look the name up.
-;
-;  ENGINE FIXES
-;    * The global error hook was only registered inside GpGFX's static
-;      init, after Gdip.Startup() and inside its try -- so on a machine
-;      where the graphics stack fails to start, every unhandled error
-;      raised a modal AutoHotkey dialog over the study. Registered first
-;      thing in Init() as well.
-;    * "Modifier + left-drag" released the button and the modifier in ONE
-;      Send; Send parses the whole string before emitting anything, so an
-;      unusable modifier value threw and the LButton Up was never sent --
-;      a latched left button over an image. Released in two calls, the
-;      button first.
-;    * Radial menus were missing from the list of hold actions that stay
-;      engaged until release. On a button that also hosts a layer, the
-;      menu therefore opened AT RELEASE in latched mode, with nothing
-;      held, and committed a slice by dwell. Listed.
-;    * The classic binding and key dialogs looked up an action hint with
-;      no guard; a retired action type still on disk threw mid-build and
-;      left a half-built modal over the reading screen. Guarded.
-;    * The empty membership index omitted two flags the hot path reads
-;      unguarded, so a hook thread could throw before the first rebuild.
-;    * Importing a config whose "bindings" was not an array replaced the
-;      live config and then failed outside the try. Rejected up front.
-;    * The calibrator, the shelves and the chooser restored the active
-;      construction layer only on the success path; a failed build or
-;      repaint left a dead layer as the target for every later widget
-;      (the v0.5.1 "typing does nothing" failure, in three more places).
-;      All restore in finally now. A shelf drag that threw left the shelf
-;      permanently marked busy; guarded the same way.
-;
-;  NOT DONE YET (v0.6.0 proper)
-;    * The nav entry names other than Home still use engine vocabulary
-;      (Layers, Macros, Pointer).
-;    * The classic Win32 window did not get the copy pass.
-;    * None of this has run on a workstation: this build was checked for
-;      syntax balance and by reading, not by execution. Report anything
-;      odd from the Diagnostics page.
-;
-;  FEATURES
-;    * RADIAL MENUS: hold, flick a direction, release. Eight slices, one
-;      level, dwell before drawing, always abortable
-;    * CLICK LOCK: one programmable key latches whatever button is held, and
-;      the next real keystroke releases it
-;    * WHEEL DECKS: hold an input, scroll for an output. One dialog per
-;      deck, all four wheel directions at once, on both the Mouse and the
-;      Keyboard panel. Writes plain layer-scoped "turn" rows.
-;    * WINDOW SWITCHER: hold, scroll a list that stays up, release to switch
-;    * WINDOW LAYOUTS: capture / restore window placement across monitors,
-;      with an optional guard that undoes an app's own moves and resizes
-;    * TAP-HOLD CALIBRATOR: sets tapWindow and holdThreshold from your hand
-;    * Buttons 1-5 (LButton, RButton, MButton, XButton1, XButton2) plus
-;      WheelUp / WheelDown and Tilt Wheel Left / Right as bindable inputs
-;    * KEYBOARD keys as bindable inputs, in the same rows as the mouse: any
-;      key AHK can hook (Numpad1, F8, CapsLock, ], ...), with the same app /
-;      layer / modifier scoping and the same tap dance
-;    * Key-combo recorder ("Rec"), a visual keycode picker ("Keys") and an
-;      input picker ("Input") in every action dialog, classic and vector --
-;      no Send-syntax memorization needed
-;    * Diagnostics tab: live input monitor -- every button/wheel/tilt lights a
-;      bar and counts presses; native behavior is never blocked while testing
-;    * Eager first-press passthrough: a button whose extras are only
-;      double / triple / taphold keeps its FIRST press fully native and
-;      instant (click, drag, hold), so tap dance costs no drag latency
-;    * Tap dance per input: tap, double-tap, triple-tap, hold, tap-hold
-;      (tap window default 100 ms, hold threshold default 200 ms, both live)
-;    * Button-layers: an input HOSTS a layer just by having a mapping whose
-;      "Layer (hold)" names it. Holding it arms that layer (deepest of a
-;      2-deep nest wins); its own hold action fires only if the layer went
-;      unused (the QMK mod-tap rule).
-;    * App profiles: per-app bindings override global ("*") bindings
-;    * Keyboard modifiers (Ctrl/Alt/Shift/Win) as binding conditions
-;    * Any input can be remapped to any OTHER input (a button to a button, a
-;      button to a key, a key to a button) and it behaves like that input --
-;      down on press, up on release, so drags and holds work (v0.3.1)
-;    * CLICK LOCK (v0.3.1): hold a mouse button, tap the click-lock input, and
-;      the button stays latched down until you press it again -- long
-;      window/level sweeps and measurements without holding the button
-;    * DRAG SCROLL (v0.3.1): hold the bound input and move the mouse to scroll,
-;      like a PDF hand tool; the cursor can be pinned so travel is unlimited
-;    * PAUSE ON NUMLOCK (v0.3.2): one key pauses the engine to fully native
-;    * FOLLOW FOCUS (v0.3.2, off by default): the pointer jumps to the middle
-;      of a window when it takes the foreground -- never mid-drag, never onto
-;      the shell, never when the pointer is already inside it
-;    * PARK POINTS (v0.3.6): capture one screen spot per app ("Capture park
-;      spot" on the Apps tab, 3-second countdown while the window hides).
-;      The "Park cursor (this app's spot)" action sends the pointer there,
-;      and follow-focus uses it instead of the window centre when one is set
-;    * LAYERS PANEL (v0.3.6): every input that hosts a hold layer, with the
-;      row count it arms; click one to scope its tab to that layer. Layer
-;      hosts are ringed in the mouse schematic and on the key tiles
-;    * KEYBOARD PANEL (v0.3.7): the Mouse panel for keys -- App and Layer
-;      scope selectors, a tile per key in use, per-key row lists. The engine
-;      never distinguished mouse from keyboard; now the UI does not either
-;    * Actions: send keys, auto-repeat keys, type text, native input, double
-;      click, modifier +left-drag, drag-after-move, PowerScribe dictate /
-;      next field / prev field / custom, monitor teleport, sniper / boost
-;      pointer speed, click lock, drag scroll, W/L dial step, macros, run, ...
-;    * Macros: multi-step (keys / text / sleep / focus-app / PS actions /
-;      teleport / run) with app-focus steps for app-aware sequences
-;
-;  PERFORMANCE DESIGN
-;    * An input is only hooked while at least one binding references it.
-;      With nothing bound to LButton, left click-drag is NOT intercepted at
-;      all -- it is byte-for-byte native. The same holds per KEY: a keyboard
-;      with no rows is never touched, so typing keeps its native latency.
-;    * A hooked input whose resolved context has only a plain native action
-;      takes a zero-wait fast path (synthetic down on press, up on release).
-;    * Disambiguation delays are only ever introduced by features you actually
-;      configured in that context (a double-tap row makes tap wait one tap
-;      window; nothing else does).
-;    * Event-time lookups run against a membership INDEX (g_Idx, rebuilt on
-;      every config change -- all mutations must funnel through
-;      AfterCfgChange). Resolution still happens live per event, so GUI
-;      edits keep applying instantly. Active-app detection is cached per
-;      foreground hwnd for 100 ms; modifier keys are only read when some row
-;      actually uses modifiers. Slider config saves are debounced.
-;
-;  HOTKEYS (all editable in Settings tab)
-;    Ctrl+Alt+Shift+F9     Open the RadMapper settings GUI
-;    Ctrl+Alt+Shift+F11    Enable / disable the whole engine
-;    Ctrl+Alt+Q            PANIC: force-release all buttons and modifiers
-;    PowerScribe dictate / prev field / next field and monitor-teleport
-;    hotkeys exist but ship UNASSIGNED; set them in the Settings tab.
-;
-;  FILES
-;    RadMapperConfig.json  created next to this script on first run; a
-;                          pre-v0.1 RadMouseConfig.json is adopted once; the GUI
-;                          is the intended editor but it is hand-editable
-;
-;  FIRST RUN ON THE WORKSTATION
-;    1. Install AutoHotkey v2 (https://www.autohotkey.com)
-;    2. Double-click RadMapper.ahk -- tray icon appears; every input ships
-;       UNASSIGNED, so the mouse and keyboard stay fully native until you add
-;       bindings
-;    3. Double-click the tray icon (or Ctrl+Alt+Shift+F9) to open the GUI
-;
-;  Requires AutoHotkey v2.0+. Windows 10/11.
+;  Version history: CHANGELOG.md beside this script (it used to fill the
+;  first 1,300 lines here). Working notes for the next session: HANDOFF.md.
+;
+;  v0.7.2 in one line: radial menus, the clipboard shelf, pointer speed,
+;  drag scroll and the W/L dial are gone; mouse input follows the window
+;  under the pointer; layer buttons are a setting; pass-through action;
+;  freeze and bug-sweep fixes (see CHANGELOG.md).
 ;==============================================================================
 
 #Requires AutoHotkey v2.0
 #SingleInstance Force
-#ClipboardTimeout 250       ; a clipboard read waits at most this long for the
-                            ; owning app (default 1 s); the shelf harvest is
-                            ; off the hook thread but must still be brief
+#ClipboardTimeout 250       ; a clipboard read (Copy buttons) waits at most
+                            ; this long for the owning app (default 1 s)
 #UseHook
+; A key or button with a context (#HotIf / HotIf) hotkey makes the input hook
+; WAIT for this script's main thread on every press, system-wide. The default
+; 1000 ms is longer than Windows' own hook timeout, after which Windows
+; silently REMOVES the hook -- typing lag, then dead remaps. Past 150 ms the
+; press simply goes through natively.
+#HotIfTimeout 150
+ListLines 0                 ; no per-line history on the hot paths
+KeyHistory 0                ; nor a key log
 SendMode "Event"            ; Event + zero delays: injected input flows through
 SetKeyDelay -1, -1          ; our own hooks (and is ignored by them) without
 SetMouseDelay -1            ; SendInput's temporary hook removal
@@ -1328,7 +74,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.1"
+global RM_VERSION := "0.7.2"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -1404,10 +150,13 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 ; a stranded assignment lower in the file never runs before Init (auto-exec is
 ; top-to-bottom, RM_TEST hides this because it skips Init).
 global LAYER_BASE_LABEL := "Base (no button held)"
-; The ONLY inputs that may host a layer: the two thumb buttons and CapsLock
-; (it types nothing, so holding it is free). Everything else -- left, right,
-; middle, any other key -- is refused by the editors and dropped on load.
+; The DEFAULT layer hosts: the two thumb buttons and CapsLock (it types
+; nothing, so holding it is free). v0.7.2: the live list is the config's
+; "layerHosts" (LayerHosts()), editable from the Mouse/Keyboard tab strip, so
+; a mouse without buttons 4 and 5 can use the middle or right button or a
+; key. Left is never allowed: every plain click would wait on the threshold.
 global LAYER_HOSTS := ["XButton1", "XButton2", "CapsLock"]
+global LAYER_HOSTS_MAX := 6
 
 ; Friendly display names for inputs (config/JSON always stores the codes).
 global INPUT_LABELS := Map(
@@ -1463,12 +212,10 @@ global MODDRAG_LABELS := Map("LAlt", "Alt — zoom in PACS",
 global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick", "moddrag",
     "dragmove", "ps_dictate", "ps_next", "ps_prev", "ps_keys", "pacs_keys",
     "tele_prev", "tele_next", "parkgo",
-    "sniper", "boost", "scrollptr", "zoomptr", "clicklock", "wldial", "appswitch",
-    "clipboard", "scratchpad",
+    "clicklock", "appswitch",
     "layout",
     "winplace", "warp",
-    "radial",
-    "macro", "run", "guiopen", "pausetgl", "none"]
+    "macro", "run", "guiopen", "bypass", "pausetgl", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
     "Double-click a button",
@@ -1479,26 +226,16 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "PACS: send keys",
     "Teleport cursor: previous monitor", "Teleport cursor: next monitor",
     "Park cursor (this app's spot)",
-    "Sniper speed (hold=momentary, tap=toggle)",
-    "Boost speed (hold=momentary, tap=toggle)",
-    "Drag scroll — pointer moves the wheel (hold=momentary, tap=toggle)",
-    "Drag zoom — pointer zooms with Ctrl+wheel (hold=momentary, tap=toggle)",
     "Click lock (hold a button down until pressed again)",
-    "W/L dial step (+1 / -1)",
     "Switch window (+1 / -1) — scroll a list, release to pick",
-    ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i]. These
-    ; three were transposed in v0.4.1 -- "layout" went into ACT_CODES before
-    ; the two shelf codes but its label went in after them -- so choosing
-    ; "Apply window layout" in the dropdown saved a "clipboard" row and opened
-    ; the clipboard. Nothing but the order was wrong.
-    "Open the clipboard shelf",
-    "Open the scratchpad",
+    ; ORDER IS THE CONTRACT: ACT_LABELS[i] must describe ACT_CODES[i].
     "Apply window layout",
     "Window: move / fill the active window",
     "Keyboard pointer (grid + loupe; click and drag by keys)",
-    "Radial menu (hold and flick a direction)",
     "Run macro", "Run program",
-    "Open RadMapper settings", "Toggle engine pause",
+    "Open RadMapper settings",
+    "Stand back: every other input native (hold = while held, tap = on / off)",
+    "Toggle engine pause",
     "Block it (this button does nothing at all)"]
 global ACT_HINTS := Map(
     "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
@@ -1520,15 +257,9 @@ global ACT_HINTS := Map(
     "tele_prev", "No value needed (monitors are ordered left to right)",
     "tele_next", "No value needed (monitors are ordered left to right)",
     "parkgo", "No value needed (set the spot in the Apps page) (turn on “Show advanced pages” on Home)",
-    "sniper", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
-    "boost", "No value needed (speed set in the Pointer page) (turn on “Show advanced pages” on Home)",
-    "scrollptr", "No value needed (px per notch + invert set in the Pointer page (turn on “Show advanced pages” on Home))",
-    "zoomptr", "No value needed — same engine as drag scroll, emitting "
-             . "Ctrl+wheel, so it zooms wherever Ctrl+wheel zooms",
     "clicklock", "The button it holds down until pressed again. There is "
                . "also a global lock key on the Pointer page (turn on “Show "
                . "advanced pages” on Home).",
-    "wldial", "+1 or -1 (sends W/L preset digits 1..9,0 on a ring)",
     "layout", "Leave BLANK to pick from a list at the cursor, or name one "
             . "layout from the Windows page to apply it directly (turn on “Show advanced pages” on Home)",
     "winplace", "A screen and/or a tile, e.g. next, prev, here, 2, max, "
@@ -1539,17 +270,16 @@ global ACT_HINTS := Map(
     "warp", "No value needed — opens the lettered grid on the screen under "
           . "the pointer (again closes it). Space clicks, G drags, N snaps "
           . "to the control under the pointer, Esc closes",
-    "clipboard", "No value needed — the last 25 copies, at the cursor",
-    "scratchpad", "No value needed — your saved snippets, at the cursor",
     "appswitch", "+1 or -1. Put it on the wheel inside a layer: the list "
                . "appears while the layer's input is held and stays up while "
                . "you scroll, and releasing switches to the highlighted window.",
-    "radial", "Menu name from the Menus page, or leave BLANK for the menu "
-            . "that matches the app in front. Put it on a HOLD: flick a "
-            . "direction and release. Hold still and the wheel appears.",
     "macro", "Macro name from the Macros page (turn on “Show advanced pages” on Home)",
     "run", "Program or document path / URL",
     "guiopen", "No value needed",
+    "bypass", "No value needed. While it is on, every OTHER button, key "
+            . "and the wheel does exactly what it does without RadMapper; "
+            . "the engine keeps running. Hold it: on while held. Tap it: on "
+            . "until tapped again (or 2 minutes).",
     "pausetgl", "No value needed",
     "none", "Suppresses the input entirely")
 
@@ -1558,6 +288,15 @@ global ACT_HINTS := Map(
 ; stops carrying dead knobs.
 global RETIRED_SETTINGS := ["chordWindow", "gestureThreshold", "ringOverlay",
     "tapWindow", "radialRestMs",
+    ; v0.7.2: radial menus moved to their own script
+    "radialDwellMs", "radialDead", "radialRadius", "radialSubMs",
+    "radialAnim", "radialWedges",
+    ; v0.7.2: the clipboard history and scratchpad are gone
+    "hkClipboard", "hkScratch",
+    ; v0.7.2: pointer speed modes, drag scroll/zoom and the W/L dial are gone
+    "sniperSpeed", "boostSpeed", "scrollPtrPx", "scrollPtrInvert",
+    "scrollPtrPin", "scrollPtrHide", "scrollPtrMax",
+    ; v0.3: the old scroll engine
     "sniperScrollMult", "boostScrollMult", "scrollAccel", "scrollAccelGap",
     "scrollAccelRamp", "scrollAccelMax",
     "scrollSmooth", "scrollSmoothMs", "scrollTickMs", "scrollMomentum",
@@ -1588,16 +327,6 @@ global DEFAULTS := Map(
                                ;   Pointer and show the short action list
     "welcomedVer", "",         ; last version that opened the window on
                                ;   launch; "" = never (first run)
-    "sniperSpeed", 3,          ; SPI mouse speed 1..20 while sniper active
-    "boostSpeed", 16,          ; SPI mouse speed 1..20 while boost active
-    "scrollPtrPx", 18,         ; px of pointer travel per wheel notch (drag scroll)
-    "scrollPtrInvert", 0,      ; 1 = push to scroll instead of drag the page
-    "scrollPtrPin", 1,         ; 1 = pin the cursor to the anchor while scrolling
-    "scrollPtrHide", 1,        ; 1 = hide the pointer while pinned (it is being
-                               ;   warped back every tick; seen, that reads as a
-                               ;   cursor jumping between two spots) and mark
-                               ;   the anchor with a small ring instead
-    "scrollPtrMax", 20,        ; max notches emitted per 10 ms tick (runaway cap)
     ; v0.6.5 -- WHEEL REPEAT GUARDS. A Razer tilt wheel does not send one
     ; WheelLeft when you tilt it: it sends one every 30-50 ms for as long as
     ; the wheel is held over, exactly like a held keyboard key. Bound to an
@@ -1649,33 +378,18 @@ global DEFAULTS := Map(
     "followExcept", "",
     "hkPause", "NumLock",
     "hkPanic", "^!q",
-    ; Ctrl+Alt+C / Ctrl+Alt+N. Deliberately NOT ^!s or ^!l: Epic uses
-    ; Ctrl+Alt+S to secure the workstation and Ctrl+Alt+L to log out, and a
-    ; shelf that occasionally locks the station is worse than no shelf.
+    ; Never ^!s or ^!l for a default: Epic uses Ctrl+Alt+S to secure the
+    ; workstation and Ctrl+Alt+L to log out.
     ; The programmable click-lock button: one key that latches WHATEVER is
     ; being held, so a lock does not have to be bound per input. ^!b for
     ; "button lock"; as with the others, not ^!s or ^!l (Epic).
     "hkClickLock", "^!b",
     "clickLockAutoRelease", 1, ; 1 = the next real keystroke drops the latch
-    ; Radial menus. The dwell is the novice/expert unification: move before
-    ; it elapses and the wheel is never drawn at all. The dead zone is what
-    ; makes releasing in the middle mean "cancel" rather than "whatever my
-    ; hand drifted towards".
-    "radialDwellMs", 250,
-    "radialDead", 26,
-    "radialRadius", 132,
-    "radialSubMs", 340,        ; rest this long on a slice that opens another
-                               ;   menu and that menu takes over, still held
     ; v0.7 -- WHEEL DECK SETTLE. A deck is "hold a button, turn the wheel".
     ; Pressed while the wheel is still turning (mid-way through a CT stack,
     ; say), the notches still arriving belong to the scroll, not the deck:
     ; they stay native until the wheel has been still this long. 0 = off.
     "deckSettleMs", 250,
-    ; v0.6.4. Both are about the PICTURE, never about what a direction does.
-    "radialAnim", 1,           ; 1 = grow what the pointer is near, fade in
-    "radialWedges", 1,         ; 1 = draw each slice as the arc it answers to
-    "hkClipboard", "^!c",
-    "hkScratch", "^!n",
     ; v0.6.2: stations, window placement, the keyboard pointer
     "stationAuto", 1,          ; apply a station's arrangement when its screens
                                ;   appear (launch, dock, KVM, log-in elsewhere)
@@ -1712,12 +426,6 @@ global g_Cfg := 0              ; whole config (Map), see DefaultCfg()
 global g_BS := Map()           ; per-input live state objects
 global g_Enabled := true
 global g_PollSeq := 0          ; movement-poll generation counter
-global g_SpeedSaved := ""      ; original SPI mouse speed ("" = untouched)
-global g_SpeedMods := Map()    ; "sniper"/"boost" -> 1 while active
-global g_ScrollPtr := 0        ; {ax, ay} anchor while drag scroll is engaged
-global g_ScrollPtrMom := false ; engaged momentarily (held) vs toggled
-global g_SPAccX := 0.0         ; sub-notch pointer travel not yet emitted
-global g_SPAccY := 0.0
 global g_ClickLock := 0        ; {held, src} while a button is latched down
 global g_ClickLockHook := 0    ; InputHook watching for the release keystroke
 global g_ClickLockArmed := 0   ; tick the latch engaged (auto-repeat grace)
@@ -1748,7 +456,7 @@ HookChanged() {
     g_HookChangedAt := A_TickCount
 }
 
-global g_DialFree := ""        ; dial state when not tied to a held button
+
 global g_LastEvWhat := ""      ; last event; formatted lazily by LastEventText
 global g_LastEvBind := 0
 global g_LastEvDirty := false
@@ -1799,8 +507,6 @@ global RM_KeyHeld  := (k) => GetKeyState(k, "P")  ; physical key reads
 global RM_GetPos   := RM_GetPosReal               ; pointer position reads
 global RM_AppScan  := RM_AppScanReal              ; active-app profile scan
 global RM_PSFire   := RM_PSFireReal               ; PowerScribe delivery
-global RM_GetSpeed := GetOsMouseSpeed             ; OS pointer speed
-global RM_SetSpeed := SetOsMouseSpeed
 global RM_WinAt    := RM_WinAtReal                ; top-level window under cursor
 
 RM_GetPosReal(&x, &y) {
@@ -2026,6 +732,15 @@ _JQuote(s) {
 
 ; ── §3  CONFIG (defaults / load / save / helpers) ───────────────────────────
 
+; Exact text equality. `=` and `!=` ignore case AND compare numerically when
+; both sides look numeric ("1" = "01", "0012345" = "12345"), which is wrong
+; for names and clipboard text; `==` still compares numerically.
+SameText(a, b) {
+    if (IsObject(a) || IsObject(b))
+        return false
+    return StrCompare(a, b, true) = 0
+}
+
 MGet(m, k, d := "") {
     return (m is Map && m.Has(k)) ? m[k] : d
 }
@@ -2190,20 +905,30 @@ AppCodeFromDisp(label) {
     return (label = "Global (all apps)") ? "*" : label
 }
 
+; Lookups run several times per input event: case-insensitive Maps, built
+; on first use (CaseSense must be set while a Map is still empty).
 IsWheel(code) {
-    for wh in WHEELS {
-        if (wh = code)
-            return true
+    static m := 0
+    if !m {
+        m := Map()
+        m.CaseSense := "Off"
+        for w in WHEELS
+            m[w] := 1
     }
-    return false
+    return !IsObject(code) && m.Has(code)
 }
 
 IsMouseInput(code) {
-    for b in BUTTONS {
-        if (b = code)
-            return true
+    static m := 0
+    if !m {
+        m := Map()
+        m.CaseSense := "Off"
+        for b in BUTTONS
+            m[b] := 1
+        for w in WHEELS
+            m[w] := 1
     }
-    return IsWheel(code)
+    return !IsObject(code) && m.Has(code)
 }
 
 ; Any referenced input that is not one of the five mouse buttons or four wheel
@@ -2299,13 +1024,16 @@ KeyTwin(name) {
         "Numpad3", "NumpadPgDn", "Numpad4", "NumpadLeft", "Numpad5", "NumpadClear",
         "Numpad6", "NumpadRight", "Numpad7", "NumpadHome", "Numpad8", "NumpadUp",
         "Numpad9", "NumpadPgUp", "NumpadDot", "NumpadDel")
-    for a, b in twins {
-        if (a = name)
-            return b
-        if (b = name)
-            return a
+    static t := 0
+    if !t {
+        t := Map()
+        t.CaseSense := "Off"
+        for a, b in twins {
+            t[a] := b
+            t[b] := a
+        }
     }
-    return ""
+    return (!IsObject(name) && t.Has(name)) ? t[name] : ""
 }
 
 ; The name a twin pair is STORED under, so one physical key is one row
@@ -2315,11 +1043,14 @@ CanonicalInputName(name) {
         "NumpadDown", "Numpad2", "NumpadPgDn", "Numpad3", "NumpadLeft", "Numpad4",
         "NumpadClear", "Numpad5", "NumpadRight", "Numpad6", "NumpadHome", "Numpad7",
         "NumpadUp", "Numpad8", "NumpadPgUp", "Numpad9", "NumpadDel", "NumpadDot")
-    for a, b in primary {
-        if (a = name)
-            return b
+    static p := 0
+    if !p {
+        p := Map()
+        p.CaseSense := "Off"
+        for a, b in primary
+            p[a] := b
     }
-    return name
+    return (!IsObject(name) && p.Has(name)) ? p[name] : name
 }
 
 ; Every hotkey name one bound input must be registered under.
@@ -2372,82 +1103,6 @@ NewBinding(app, layer, mods, button, event, type, value) {
     return b
 }
 
-/**
- * The menus that ship.
- *
- * Deliberately small, and built only from things that are certain to work
- * without knowing anything about your site. Slice 1 points north and they run
- * clockwise; an empty slice is a gap you can flick past safely.
- *
- * BROWSER is the one that can be proved on any machine with no site
- * information at all, which is exactly why it is the reference menu.
- *
- * POWERSCRIBE is four slices, all of them routed through PSFire by virtue of
- * being ps_* actions -- activate by exe, WinWaitActive, return focus. No
- * slice sends to PowerScribe directly.
- *
- * PACS ships as LABELLED BLANKS on purpose. IntelliSpace shortcuts are
- * user-configurable, so shipping guessed keys would ship wrong ones; the
- * labels are the commands worth having and the values are yours to fill in
- * from your own User Preferences table. syngo.via and Epic are not seeded at
- * all for the same reason, one step further: their tables are site-remapped.
- */
-SeedMenus() {
-    out := []
-
-    br := Map()
-    br["name"] := "Browser"
-    br["app"] := ""                          ; global: no browser profile ships
-    br["slices"] := [MenuSlice("New tab",     "keys", "^t"),
-                     MenuSlice("Forward",     "keys", "!{Right}"),
-                     MenuSlice("Close tab",   "keys", "^w"),
-                     MenuSlice("Back",        "keys", "!{Left}")]
-    out.Push(br)
-
-    ps := Map()
-    ps["name"] := "PowerScribe"
-    ps["app"] := "PowerScribe"
-    ps["slices"] := [MenuSlice("Dictate",     "ps_dictate", ""),
-                     MenuSlice("Next field",  "ps_next", ""),
-                     MenuSlice("Impression",  "ps_keys", "^+1"),
-                     MenuSlice("Prev field",  "ps_prev", "")]
-    out.Push(ps)
-
-    out.Push(SeedPacsMenu())
-    out.Push(SeedPresetMenu())
-    return out
-}
-
-; The PACS wheel. Up/down are next/previous series so the two most frequent
-; commands are the two easiest flicks; the measurement tools sit on the
-; right, image tools on the left, and "Windowing" is a DOOR: rest on it (or
-; release on it) and the numbered preset ring takes its place.
-SeedPacsMenu() {
-    pa := Map()
-    pa["name"] := "PACS"
-    pa["app"] := "PACS"
-    pa["slices"] := [MenuSlice("Next series",  "keys", "{F8}",      "next"),
-                     MenuSlice("Ruler",        "keys", "r",         "ruler"),
-                     MenuSlice("ROI",          "keys", "+r",        "roi"),
-                     MenuSlice("Magnify",      "keys", "y",         "magnify"),
-                     MenuSlice("Prev series",  "keys", "{F7}",      "prev"),
-                     MenuSlice("Delete",       "keys", "{Delete}",  "delete"),
-                     MenuSlice("Windowing",    "radial", "Window presets", "window"),
-                     MenuSlice("CLAHE",        "keys", "+c",        "clahe")]
-    return pa
-}
-
-; True when a menu is the shipped PACS wheel (or a rename of it): eight
-; slices, F8 up, F7 down, and a door to the preset ring on the left.
-MenuIsShippedPacs(m) {
-    sl := MGet(m, "slices", [])
-    if (sl.Length != 8)
-        return false
-    v := (i) => MGet(MGet(sl[i], "action", Map()), "value", "")
-    t := (i) => MGet(MGet(sl[i], "action", Map()), "type", "")
-    return (v(1) = "{F8}" && v(5) = "{F7}" && t(7) = "radial")
-}
-
 ; ── STARTER PACKS ────────────────────────────────────────────────────────
 ; A pack is a handful of ORDINARY bindings with a name. Applying one writes
 ; those rows through the same UpsertBinding the editor uses, so what you get
@@ -2460,15 +1115,8 @@ StarterPacks() {
          sub:  "button 4 = previous field, button 5 = next field, everywhere",
          rows: [["*", "*", "", "XButton1", "tap", "ps_prev", ""],
                 ["*", "*", "", "XButton2", "tap", "ps_next", ""]]},
-        {name: "PACS wheel on button 4",
-         sub:  "hold button 4 in PACS for the radial menu",
-         rows: [["PACS", "*", "", "XButton1", "hold", "radial", "PACS"]]},
-        {name: "Window presets on button 5",
-         sub:  "hold button 5 in PACS for the numbered preset ring",
-         rows: [["PACS", "*", "", "XButton2", "hold", "radial", "Window presets"]]},
         {name: "PACS zoom and pan on the thumb buttons",
-         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)"
-              . " (replaces the PACS wheel / Window presets packs on those buttons)",
+         sub:  "in PACS: hold 4 to zoom (Alt+drag), hold 5 to pan (Ctrl+drag)",
          ; The left button is deliberately NOT in this pack. A native row
          ; scoped to one app is not an INERT row (InertShape wants app "*"),
          ; so adding one would HOOK the left button inside PACS and turn
@@ -2479,9 +1127,6 @@ StarterPacks() {
          ; on a tap.
          rows: [["PACS", "*", "", "XButton1", "hold", "moddrag", "LAlt"],
                 ["PACS", "*", "", "XButton2", "hold", "moddrag", "LCtrl"]]},
-        {name: "Drag scroll on button 5",
-         sub:  "hold button 5 and move the mouse to scroll, everywhere",
-         rows: [["*", "*", "", "XButton2", "hold", "scrollptr", ""]]},
         {name: "Monitor hopping on the thumb buttons",
          sub:  "the shipped default: tap 4 / 5 to jump the pointer left / right",
          rows: [["*", "*", "", "XButton1", "tap", "tele_prev", ""],
@@ -2508,11 +1153,8 @@ StarterPackApply(name) {
     rows := []
     replacing := []
     for r in pk.rows {
-        b := NewBinding(r[1], r[2], r[3], r[4], r[5], r[6], r[7])
-        if (r[6] = "radial" && r[7] != "" && !MenuByName(r[7])) {
-            HUD("The menu " r[7] " is missing — add it on the Menus page first", "warn")
-            return
-        }
+        ; Packs say "PACS"; the profile may have been renamed since.
+        b := NewBinding(r[1] = "PACS" ? PacsAppName() : r[1], r[2], r[3], r[4], r[5], r[6], r[7])
         for d in FindDupBinding(b) {
             old := g_Cfg["bindings"][d]
             if !IsInertRow(old)
@@ -2542,48 +1184,6 @@ StarterPackApply(name) {
         HUD("Applied for now — not written to disk", "danger")
 }
 
-; Window presets 1-9: the slice NUMBER is the key it sends, and the label
-; is whatever the site calls that preset. Rename freely on the Menus tab.
-SeedPresetMenu() {
-    wp := Map()
-    wp["name"] := "Window presets"
-    wp["app"] := ""                          ; opened by name, never automatic
-    names := ["Soft tissue", "Bone", "Brain", "C-spine soft tissue", "CTA",
-              "Infarct", "Liver", "Lung", "Lung wide"]
-    sl := []
-    for i, nm in names
-        sl.Push(MenuSlice(nm, "keys", String(i)))
-    wp["slices"] := sl
-    return wp
-}
-
-/** One slice: a label and an ordinary {type, value} action. */
-MenuSlice(label, atype, value, icon := "") {
-    m := Map()
-    m["label"] := label
-    if (icon != "")
-        m["icon"] := icon
-    a := Map()
-    a["type"] := atype
-    a["value"] := value
-    m["action"] := a
-    return m
-}
-
-; Icon names a slice may carry (drawn as vector glyphs in the wheel by
-; RadialIcon). "" = no icon. Kept short: they sit in a 70 px dropdown.
-global RADIAL_ICONS := ["", "next", "prev", "delete", "ruler", "roi", "clahe",
-    "window", "magnify", "series", "menu", "zoom", "invert", "reset", "dictate"]
-
-/** One menu by name, or 0. */
-MenuByName(name) {
-    for m in MGet(g_Cfg, "menus", []) {
-        if (MGet(m, "name", "") = name)
-            return m
-    }
-    return 0
-}
-
 ; Default config is a clean slate (v0.3): nothing bound, every input fully
 ; native until the user adds bindings in the GUI. The site's app profiles and
 ; one demo macro are pre-created because they hook nothing on their own.
@@ -2594,6 +1194,11 @@ DefaultCfg() {
     c["settings"] := Map()
     for k, v in DEFAULTS
         c["settings"][k] := v
+    ; A fresh config already HAS what the seed-once migrations add. Without
+    ; these flags the first load after a reset re-added a CapsLock row or
+    ; the syngo.via profile that had been deleted in the meantime.
+    for f in ["seedSyngo", "seedCapsLock07", "migPanic123"]
+        c["settings"][f] := 1
 
     apps := []
     a1 := Map()
@@ -2612,6 +1217,7 @@ DefaultCfg() {
     c["apps"] := apps
 
     c["layers"] := ["Base"]
+    c["layerHosts"] := LAYER_HOSTS.Clone()
     c["bindings"] := []
 
     macros := Map()
@@ -2631,10 +1237,8 @@ DefaultCfg() {
     macros["DictateThenNextField"] := demo
     c["macros"] := macros
     c["layouts"] := []
-    c["menus"] := SeedMenus()
     ; Scratchpad snippets. The clipboard HISTORY is deliberately not here --
     ; see the S14c header: it never touches disk.
-    c["snippets"] := []
 
     c["psExes"] := ["Nuance.PowerScribe360.exe", "Nuance.PSOne.exe"]
     SeedDefaultBindings(c)
@@ -2675,7 +1279,6 @@ SeedDefaultBindings(cfg) {
     b.Push(NewBinding("*", "*", "", "XButton2", "tap", "tele_next", ""))
     ; Nothing on the keyboard beyond the backtick (v0.7): the [ and ] rows
     ; that used to ship here took two typing keys away and delayed them.
-    SeedPacsWheelRows(b, cfg["apps"])
 }
 
 ; CapsLock ships as dictation on a TAP. Its HOLD is its layer (the "Hold
@@ -2684,18 +1287,6 @@ SeedDefaultBindings(cfg) {
 ; Hooking CapsLock suppresses its native toggle, so Caps Lock stays off.
 CapsLockDictateRow() {
     return NewBinding("*", "*", "", "CapsLock", "tap", "ps_dictate", "")
-}
-
-; The radial menus, one gesture away in the viewer (v0.7): in PACS, HOLD
-; button 4 for the PACS wheel and HOLD button 5 for the numbered window
-; presets -- no door to go through for a preset. The taps still hop the
-; pointer between monitors; a hold on a thumb button waits for the
-; threshold, a tap fires on release. Scoped to PACS so nothing changes in
-; PowerScribe or anywhere else.
-SeedPacsWheelRows(b, apps := 0) {
-    app := PacsAppName(apps)
-    b.Push(NewBinding(app, "*", "", "XButton1", "hold", "radial", "PACS"))
-    b.Push(NewBinding(app, "*", "", "XButton2", "hold", "radial", "Window presets"))
 }
 
 ; The name of the profile that matches the IntelliSpace exe -- "PACS" as
@@ -2757,8 +1348,12 @@ MigrateCfg() {
             s.Delete("psBackground")
         ; v1.2.3: panic hotkey default eased ^!+F12 -> ^!q (bench E2-4).
         ; Migrate only the OLD DEFAULT; a customized binding is kept.
-        if (MGet(s, "hkPanic", "") = "^!+F12")
-            s["hkPanic"] := "^!q"
+        ; Once only: a user who picks ^!+F12 later must keep it.
+        if !s.Has("migPanic123") {
+            s["migPanic123"] := 1
+            if (MGet(s, "hkPanic", "") = "^!+F12")
+                s["hkPanic"] := "^!q"
+        }
         ; v0.3: the scroll engine, gestures and chords are gone. Their knobs
         ; are deleted so the saved file stops carrying settings nothing reads.
         for k in RETIRED_SETTINGS {
@@ -2780,91 +1375,6 @@ MigrateCfg() {
             a["match"] := ["syngo.Common.Container.exe"]
             g_Cfg["apps"].Push(a)
         }
-    }
-    ; v0.5.0: the shipped radial menus, seeded once into an existing config
-    ; so an upgrade gets them without hand-editing. Guarded by a flag rather
-    ; than by absence, so deleting a menu keeps it deleted -- same rule as
-    ; the syngo.via profile above.
-    if (IsObject(s) && !s.Has("seedMenus")) {
-        s["seedMenus"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        for m in SeedMenus() {
-            if !MenuByName(MGet(m, "name", ""))
-                g_Cfg["menus"].Push(m)
-        }
-    }
-    ; v0.6.1: the PACS menu used to ship as eight labelled BLANKS. If it is
-    ; still exactly that -- nothing filled in -- it is replaced by the real
-    ; one, and the Window presets ring is added if there is no menu of that
-    ; name. A PACS menu the user has touched is left alone. Flag-guarded so
-    ; deleting either afterwards keeps it deleted.
-    if (IsObject(s) && !s.Has("seedPacs061")) {
-        s["seedPacs061"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        for i, m in g_Cfg["menus"] {
-            if (MGet(m, "name", "") != "PACS")
-                continue
-            untouched := true
-            for sl in MGet(m, "slices", []) {
-                if (MGet(MGet(sl, "action", Map()), "type", "none") != "none")
-                    untouched := false
-            }
-            if untouched
-                g_Cfg["menus"][i] := SeedPacsMenu()
-        }
-        if !MenuByName("PACS")
-            g_Cfg["menus"].Push(SeedPacsMenu())
-        if !MenuByName("Window presets")
-            g_Cfg["menus"].Push(SeedPresetMenu())
-    }
-    ; v0.6.1b: the gentle version above only replaced an UNTOUCHED template,
-    ; and a PACS menu that had been edited kept its old blanks -- which is
-    ; not what "ship the new default" meant. Now: whatever is called "PACS"
-    ; and is not already the shipped menu is kept under "PACS (previous)",
-    ; opened only by that name, and the shipped PACS menu takes its place.
-    ; Bindings that open "PACS" by name therefore open the new one.
-    if (IsObject(s) && !s.Has("seedPacs061b")) {
-        s["seedPacs061b"] := 1
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        old := MenuByName("PACS")
-        if (IsObject(old) && !MenuIsShippedPacs(old)) {
-            nm := "PACS (previous)"
-            k := 2
-            while MenuByName(nm) {
-                nm := "PACS (previous " k ")"
-                k += 1
-            }
-            old["name"] := nm
-            old["app"] := ""                 ; by name only, never automatic
-        }
-        if !MenuByName("PACS")
-            g_Cfg["menus"].Push(SeedPacsMenu())
-        if !MenuByName("Window presets")
-            g_Cfg["menus"].Push(SeedPresetMenu())
-    }
-    ; v0.7: the PACS wheel and the Window presets ring on the thumb
-    ; buttons in PACS, seeded ONCE into a config that has no radial row and
-    ; nothing held on either thumb button in PACS. Flag-guarded, so deleting
-    ; the rows keeps them deleted.
-    if (IsObject(s) && !s.Has("seedPacsWheel067")) {
-        s["seedPacsWheel067"] := 1
-        free := true
-        pacs := PacsAppName()
-        for row in g_Cfg["bindings"] {
-            if (MGet(MGet(row, "action", Map()), "type", "") = "radial")
-                free := false
-            if ((MGet(row, "button", "") = "XButton1" || MGet(row, "button", "") = "XButton2")
-                && MGet(row, "event", "") = "hold" && MGet(row, "app", "*") = pacs)
-                free := false
-        }
-        ; ...and only when both menus are actually there to open. The
-        ; 0.6.1b block above seeds them ONCE, so a config that has deleted
-        ; one since must not gain a thumb hold that opens nothing (v0.7).
-        if (free && MenuByName("PACS") && MenuByName("Window presets"))
-            SeedPacsWheelRows(g_Cfg["bindings"])
     }
     ; v0.7: CapsLock = dictate on tap, seeded ONCE into a config with no
     ; CapsLock row at all. Flag-guarded, so deleting it keeps it deleted.
@@ -2889,7 +1399,7 @@ MigrateCfg() {
 }
 
 MigrateRow(row) {
-    if !IsObject(row)
+    if !(row is Map)
         return
     w := MGet(row, "while", "")
     if (w != "")
@@ -2970,7 +1480,7 @@ LayerParts(row) {
 CurrentLayerDisp() {
     parts := ""
     for name, st in g_BS {
-        if (st.down && !st.consumed && g_Idx.layerBind.Has(name))
+        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost)
             parts .= (parts = "" ? "" : "/") name
     }
     return parts = "" ? "Base" : parts
@@ -3111,9 +1621,15 @@ LoadCfg() {
                     && ResetCfgOnce())
                     return
                 BackupCfg()                  ; pre-migration snapshot (v1.3)
+                before := JsonDump(loaded)
                 g_Cfg := loaded
                 NormalizeCfg()               ; backfill + validate + migrate
                 RebuildIndex()
+                ; What validation dropped or migration rewrote was only in
+                ; memory, so the same rows were dropped (and the same lines
+                ; logged) on every start until the next edit. Write it once.
+                if (JsonDump(g_Cfg) !== before)
+                    SaveCfg()
                 return
             }
             throw Error("no bindings array")
@@ -3126,8 +1642,10 @@ LoadCfg() {
                 return
             preserved := CFG_PATH ".corrupt-" FormatTime(, "yyyyMMdd-HHmmss") "-" A_TickCount
             try FileCopy(CFG_PATH, preserved, 0)
-            catch
-                g_CfgRecoveryBlocked := true
+            catch {
+                if FileExist(CFG_PATH)       ; gone = already preserved
+                    g_CfgRecoveryBlocked := true
+            }
             MsgBox(CFG_NAME " could not be parsed (" e.Message ")"
                 . " and no usable backup was found.`n`n"
                 . (g_CfgRecoveryBlocked
@@ -3190,11 +1708,20 @@ RestoreNewestBackup(why) {
             ValidateCfgShape(loaded)
             if (!IsObject(loaded) || !loaded.Has("bindings"))
                 continue
+            ; Normalize BEFORE moving the bad file aside: a backup that
+            ; throws here must leave the original where it is, or the
+            ; caller's preserve-copy fails and saving gets blocked.
+            prev := g_Cfg
+            try {
+                g_Cfg := loaded
+                NormalizeCfg()
+                RebuildIndex()
+            } catch {
+                g_Cfg := prev
+                continue
+            }
             try FileMove(CFG_PATH, CFG_PATH ".corrupt-"
                 . FormatTime(, "yyyyMMdd-HHmmss"), 1)
-            g_Cfg := loaded
-            NormalizeCfg()
-            RebuildIndex()
             SaveCfg()
             Problem("config-restored", "Config was unreadable (" why
                 . "); restored from " nm)
@@ -3228,16 +1755,31 @@ NormalizeCfg(imported := false) {
         c["layouts"] := []
     if !c.Has("stations")
         c["stations"] := []
-    if !c.Has("menus")
-        c["menus"] := []
-    if !c.Has("snippets")
-        c["snippets"] := []
+    ; v0.7.2: radial menus live in their own script now. Their list goes
+    ; with them; the rows that opened one are dropped by ValidateCfg.
+    if c.Has("menus")
+        c.Delete("menus")
+    ; v0.7.2: the scratchpad is gone, and its snippets with it
+    if c.Has("snippets")
+        c.Delete("snippets")
     if !c.Has("macros")
         c["macros"] := Map()
     if !c.Has("psExes")
         c["psExes"] := DefaultCfg()["psExes"]
     if (c["layers"].Length = 0)
         c["layers"] := ["Base"]
+    ; v0.7.2: the layer hosts, BEFORE ValidateCfg reads them. A list that
+    ; is not a list at all (hand edit) falls back to the default rather than
+    ; to "no hosts", which would drop every layer row.
+    c["layerHosts"] := (MGet(c, "layerHosts", 0) is Array)
+        ? CleanLayerHosts(c["layerHosts"]) : LAYER_HOSTS.Clone()
+    ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
+    ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
+    ; as "can no longer hold a layer" instead of migrating it. Idempotent.
+    for row in c["bindings"] {
+        if (row is Map && row.Has("button"))  ; a row with no input stays
+            MigrateRow(row)                   ; invalid and is dropped
+    }
     ValidateCfg()
     MigrateCfg()                             ; v1.0: while + named layers ->
     ValidateCfg()                            ; ...and the v0.7 host rules
@@ -3249,7 +1791,7 @@ NormalizeCfg(imported := false) {
 ValidateCfgShape(c) {
     if !(c is Map) || !(MGet(c, "bindings", 0) is Array)
         throw Error("Expected a settings object with a bindings list")
-    for key in ["apps", "layers", "layouts", "menus", "snippets", "psExes",
+    for key in ["apps", "layers", "layouts", "psExes",
                 "stations"] {
         if (c.Has(key) && !(c[key] is Array))
             throw Error(key " must be a list")
@@ -3258,34 +1800,11 @@ ValidateCfgShape(c) {
         if (c.Has(key) && !(c[key] is Map))
             throw Error(key " must be an object")
     }
-    ; Menus and slices are NOT hard failures: a single malformed row must
-    ; never send the whole file to a backup or to defaults. ValidateCfg()
-    ; drops them, the same way it drops malformed bindings and apps.
 }
 
 ; Drop malformed rows from a hand-edited config file so one bad row cannot
 ; raise an error on every mouse event or break a GUI refresh.
 ValidateCfg() {
-    ; v0.7: the tap -> hold radial conversion below must not create a
-    ; SECOND hold row for a key a hand-authored hold row already owns.
-    ; RowKeyTaken only sees what has been kept SO FAR, so a rival later in
-    ; the list survived as well and FindBindingFor's later-wins tie-break
-    ; shadowed one of them with nothing in Diagnostics to say so. Scan the
-    ; whole list first, counting only the hold rows that will survive this
-    ; same pass (the two drops below).
-    rowKey(r) => MGet(r, "button", "") "|" MGet(r, "event", "") "|"
-        . MGet(r, "app", "*") "|" MGet(r, "layer", "*") "|" MGet(r, "mods", "")
-    holdKeys := Map()
-    holdKeys.CaseSense := "Off"
-    for row in g_Cfg["bindings"] {
-        if (!(row is Map) || MGet(row, "event", "") != "hold")
-            continue
-        if !LayerPathAllowed(MGet(row, "layer", "*"))
-            continue
-        if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "app", "*") = "*")
-            continue
-        holdKeys[rowKey(row)] := 1
-    }
     kept := []
     for row in g_Cfg["bindings"] {
         if !(row is Map && row.Has("button") && row.Has("event")
@@ -3299,31 +1818,38 @@ ValidateCfg() {
                 . MGet(row, "event", "") " row dropped: that trigger no longer exists")
             continue
         }
-        ; v0.7: a radial menu opens on hold only. A tap row that opened one
-        ; becomes a hold row; a wheel row that did cannot, and is dropped.
-        if (MGet(MGet(row, "action", Map()), "type", "") = "radial"
-            && MGet(row, "event", "") != "hold") {
-            if (MGet(row, "event", "") = "tap") {
-                row["event"] := "hold"
-                if (RowKeyTaken(kept, row) || holdKeys.Has(rowKey(row))) {
-                    Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
-                        . "radial menu dropped: that button already has a hold row here")
-                    continue
-                }
-                Problem("retired", InputLabel(MGet(row, "button", "")) " tap → "
-                    . "radial menu is now a HOLD: menus open while the button is held")
-            } else {
-                Problem("retired", InputLabel(MGet(row, "button", "")) " "
-                    . MGet(row, "event", "") " → radial menu row dropped: menus open on hold only")
-                continue
-            }
+        ; v0.7.2: features removed from RadMapper (pointer speed, drag
+        ; scroll, the W/L dial, the clipboard shelf, radial menus -- now a
+        ; separate script). A row using one has nothing left to run it:
+        ; dropped, and named in Diagnostics.
+        if (MGet(row, "app", "*") = "")      ; hand edit: "" means everywhere
+            row["app"] := "*"
+        t0 := MGet(MGet(row, "action", Map()), "type", "")
+        if (t0 = "sniper" || t0 = "boost" || t0 = "scrollptr"
+            || t0 = "zoomptr" || t0 = "wldial") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → " t0 " row dropped: pointer speed,"
+                . " drag scroll and the W/L dial were removed in 0.7.2")
+            continue
+        }
+        if (t0 = "clipboard" || t0 = "scratchpad") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → " t0 " row dropped: the clipboard "
+                . "history and scratchpad were removed in 0.7.2")
+            continue
+        }
+        if (t0 = "radial") {
+            Problem("retired", InputLabel(MGet(row, "button", "")) " "
+                . MGet(row, "event", "") " → radial menu row dropped: radial "
+                . "menus are a separate script now")
+            continue
         }
         ; v0.7: a layer is held open by a thumb button or CapsLock, one at
         ; a time; and left / right / middle hold only inside a program.
         if !LayerPathAllowed(MGet(row, "layer", "*")) {
             Problem("retired", InputLabel(MGet(row, "button", "")) " row dropped: "
                 . "'" MGet(row, "layer", "*") "' can no longer hold a layer "
-                . "(only button 4, button 5 or CapsLock can)")
+                . "(only " LayerHostsText() " can)")
             continue
         }
         if (IsPrimaryButton(MGet(row, "button", "")) && MGet(row, "event", "") = "hold"
@@ -3357,17 +1883,7 @@ ValidateCfg() {
         kept.Push(app)
     }
     g_Cfg["apps"] := kept
-    ; The two v0.6.4 wheel flags are read from the RADIAL TIMER, where a
-    ; hand-edited "yes" or an object would throw once a frame with nothing on
-    ; screen to say so. Anything that is not plainly 0 means 1 (the default).
     if (g_Cfg.Has("settings") && g_Cfg["settings"] is Map) {
-        for k in ["radialAnim", "radialWedges"] {
-            if g_Cfg["settings"].Has(k) {
-                v := g_Cfg["settings"][k]
-                g_Cfg["settings"][k] := (!IsObject(v) && (v = 0 || v = "0"
-                    || v = false)) ? 0 : 1
-            }
-        }
         ; The two wheel repeat guards are read from the WHEEL HOOK, once per
         ; notch, where a hand-edited "fast" or an object would throw inside a
         ; Critical thread. Clamped to 0..1000 ms here; anything unusable
@@ -3379,21 +1895,6 @@ ValidateCfg() {
                     0, 1000, DEFAULTS[k])
             }
         }
-    }
-    if (g_Cfg.Has("menus") && g_Cfg["menus"] is Array) {
-        kept := []
-        for menu in g_Cfg["menus"] {
-            if (!(menu is Map) || !(MGet(menu, "slices", 0) is Array)
-                || String(MGet(menu, "name", "")) = "")
-                continue
-            menu["name"] := String(menu["name"])
-            for i, sl in menu["slices"] {
-                if (!(sl is Map) || !(MGet(sl, "action", 0) is Map))
-                    menu["slices"][i] := MenuSlice("", "none", "")
-            }
-            kept.Push(menu)
-        }
-        g_Cfg["menus"] := kept
     }
     ValidateLayouts()
 }
@@ -3487,6 +1988,11 @@ SaveCfg() {
         return false
     }
     SetTimer(CfgFlush, 0)                    ; cancel any pending debounce
+    ; Not re-entrant: a timer or hotkey thread saving between FileAppend and
+    ; FileMove moved the shared .new away and the outer FileMove threw -- a
+    ; false "not saved" on a save that had worked.
+    wasCrit := A_IsCritical
+    Critical "On"
     try {
         txt := JsonDump(g_Cfg)
         tmp := CFG_PATH ".new"                   ; write-then-rename: the
@@ -3504,6 +2010,8 @@ SaveCfg() {
         TrayTip("Changes are not saved. Check the settings folder and retry. "
             . e.Message, "RadMapper", "Iconx")
         return false
+    } finally {
+        Critical(wasCrit)
     }
 }
 
@@ -3852,10 +2360,40 @@ AppMatches(needle) {
 }
 
 AppCacheClear() {
-    global g_AppCache
+    global g_AppCache, g_AppAtCache
     g_AppCache.hwnd := 0
     g_AppCache.tick := 0
     g_AppCache.name := ""
+    g_AppAtCache.hwnd := 0
+    g_AppAtCache.tick := 0
+    g_AppAtCache.name := ""
+}
+
+; v0.7.2: the profile owning a given top-level window (the one UNDER THE
+; POINTER, for mouse input), or "". A mouse button belongs to the window it
+; is pressed over: with PowerScribe focused on one screen and the pointer
+; over PACS on another, the PACS rows must apply. Same 100 ms per-hwnd cache
+; as ActiveAppName.
+global g_AppAtCache := {hwnd: 0, tick: 0, name: ""}
+AppNameAt(hwnd) {
+    global g_AppAtCache
+    if !hwnd
+        return ""
+    now := A_TickCount
+    d := now - g_AppAtCache.tick
+    if (hwnd = g_AppAtCache.hwnd && d >= 0 && d <= 100)
+        return g_AppAtCache.name
+    name := ProfileOf(hwnd)
+    ; an owned popup with a title-only match: judge it by its owner
+    if (name = "") {
+        o := DllCall("GetAncestor", "ptr", hwnd, "uint", 3, "ptr")
+        if (o && o != hwnd)
+            name := ProfileOf(o)
+    }
+    g_AppAtCache.name := name
+    g_AppAtCache.tick := now
+    g_AppAtCache.hwnd := hwnd
+    return name
 }
 
 ; ── §4b  BINDING INDEX ──────────────────────────────────────────────────────
@@ -3971,7 +2509,9 @@ ParkOf(name) {
         if (app["name"] != name)
             continue
         pk := MGet(app, "park", 0)
-        if (IsObject(pk) && pk.Has("x") && pk.Has("y"))
+        ; a hand-edited {"x":"left"} must not throw in FollowTick
+        if (pk is Map && pk.Has("x") && pk.Has("y")
+            && IsNumber(pk["x"]) && IsNumber(pk["y"]))
             return {x: Integer(pk["x"]), y: Integer(pk["y"])}
         return 0
     }
@@ -4021,15 +2561,35 @@ ParkNow() {
 }
 
 RM_AppScanReal() {
+    return ProfileOf(DllCall("GetForegroundWindow", "ptr"))
+}
+
+; The profile a window belongs to. The MOST SPECIFIC match wins (a title
+; match beats an exe-only one, a class adds one), config order breaks ties:
+; a "PACS viewer" profile matched by title now wins over "PACS" by exe
+; instead of never applying because PACS was listed first (v0.7.2).
+ProfileOf(hwnd) {
+    if !hwnd
+        return ""
+    best := "", bestSc := -1
     for app in g_Cfg["apps"] {
         for m in MGet(app, "match", []) {
+            crit := MatchCrit(m)
+            if (Trim(crit) = "")             ; an empty "title:" matched EVERY
+                continue                     ; window, and now outranked exes
+            sc := (SubStr(LTrim(crit), 1, 4) != "ahk_" ? 2 : 0)
+                + (InStr(crit, "ahk_class") ? 1 : 0)
+            if (sc <= bestSc)
+                continue
             try {
-                if WinActive(MatchCrit(m))
-                    return app["name"]
+                if WinExist(crit " ahk_id " hwnd) {
+                    best := app["name"]
+                    bestSc := sc
+                }
             }
         }
     }
-    return ""
+    return best
 }
 
 ; Physically-held keyboard modifiers as a "^!+#" string.
@@ -4052,15 +2612,188 @@ ModsHeld() {
     return s
 }
 
-; Snapshot of everything a lookup needs. held = mapped buttons physically down.
-CurCtx() {
-    held := []
-    for name, st in g_BS {
-        if (st.down && !st.consumed)
-            held.Push(name)
+; ── PASS-THROUGH (v0.7.2) ────────────────────────────────────────────────
+; A temporary "RadMapper, stand back" that is NOT a pause: hooks stay in,
+; the watchdog and deliveries keep running, but every press other than the
+; pass-through input itself goes out natively (OnPressHK's native path) and
+; the wheel scrolls natively. Hold the bound input for while-held; tap it to
+; toggle, with a 2-minute safety off so it can never be forgotten on.
+global g_Bypass := 0             ; {src, hosts, mom} while on
+global BYPASS_MAX_MS := 120000
+
+; The pass-through input itself and the layer host(s) its row lives under
+; keep working -- otherwise a pass-through set up inside a layer could never
+; be tapped off (its host would go native and arm nothing).
+BypassFor(btn) {
+    if (!IsObject(g_Bypass) || btn = g_Bypass.src)
+        return false
+    for h in g_Bypass.hosts {
+        if (h = btn)
+            return false
     }
-    app := !g_Idx.anyApp ? "" : ActiveAppName()
-    return {app: app, mods: ModsHeld(), held: held}
+    return true
+}
+
+BypassOn(src, mom := false, hosts := 0) {
+    global g_Bypass
+    if (src = "" || IsWheel(src)) {
+        HUD("Pass-through belongs on a button or key, not the wheel", "warn")
+        return
+    }
+    if IsObject(g_Bypass) {
+        g_Bypass.mom := mom
+        return
+    }
+    g_Bypass := {src: src, mom: mom, hosts: IsObject(hosts) ? hosts : []}
+    SetTimer(BypassExpire, mom ? 0 : -BYPASS_MAX_MS)
+    HUD("Pass-through ON — everything else is native"
+        . (mom ? " while held" : " (tap again to end)"), "warn")
+}
+
+BypassOff(quiet := false) {
+    global g_Bypass
+    SetTimer(BypassExpire, 0)
+    if !IsObject(g_Bypass)
+        return
+    g_Bypass := 0
+    if !quiet
+        HUD("Pass-through off", "jade")
+}
+
+BypassToggle(src, hosts := 0) {
+    if IsObject(g_Bypass)
+        BypassOff()
+    else
+        BypassOn(src, false, hosts)
+}
+
+BypassExpire(*) {
+    if IsObject(g_Bypass) {
+        BypassOff(true)
+        HUD("Pass-through ended after 2 minutes", "mute")
+    }
+}
+
+; Inputs whose next release belongs to a pause toggle (see OnReleaseHK).
+global g_SwallowUp := Map()
+
+; A "Toggle engine pause" row on this input that applies here, or 0. Read
+; straight from the config: while paused, the index is still built but no
+; other row may fire, so only this one type is looked for.
+PauseTglRowFor(btn) {
+    ctx := 0
+    for row in g_Cfg["bindings"] {
+        if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl")
+            continue
+        if (CanonicalInputName(NormalizeInputName(MGet(row, "button", ""))) != btn)
+            continue
+        if (MGet(row, "event", "") = "turn")
+            continue
+        ; the engine's own matcher: program, layer and modifiers all count
+        ; (a "^!p" row must not resume on a bare P).
+        if !IsObject(ctx)
+            ctx := CurCtx(btn)
+        ; program and modifiers by the matcher; the LAYER physically --
+        ; while paused no host has a state, so the matcher's layer test
+        ; could never pass and such a row paused but never resumed
+        if (MatchScore(row, ctx, false) < 0)
+            continue
+        ok := true
+        for part in LayerParts(row) {
+            if !InputHeldPhysical(part)
+                ok := false
+        }
+        if !ok
+            continue
+        return row
+    }
+    return 0
+}
+
+; Is this input the layer host of some "Toggle engine pause" row?
+PauseTglHost(btn) {
+    for row in g_Cfg["bindings"] {
+        if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl")
+            continue
+        for part in LayerParts(row) {
+            if (CanonicalInputName(NormalizeInputName(part)) = btn)
+                return true
+        }
+    }
+    return false
+}
+
+; Snapshot of everything a lookup needs. held = mapped buttons physically down.
+; btn = the input being resolved: a MOUSE input (button or wheel) is scoped
+; by the window under the pointer, a key by the foreground window (v0.7.2).
+CurCtx(btn := "") {
+    held := []
+    layApp := ""                             ; the program a held layer host
+    layWin := 0                              ; was pressed in (v0.7.2)
+    for name, st in g_BS {
+        ; only a press that was resolved AS a layer host holds a layer: a
+        ; plain passthrough of the same input must not satisfy layer rows
+        if (st.down && !st.consumed && IsObject(st.spec) && st.spec.layerHost) {
+            held.Push(name)
+            if IsObject(st.ctx) {
+                layApp := st.ctx.app
+                layWin := st.ctx.HasProp("win") ? st.ctx.win : 0
+            }
+        }
+    }
+    mouse := (btn != "" && IsMouseInput(btn))
+    win := mouse ? RM_WinAt() : 0
+    app := !g_Idx.anyApp ? "" : mouse ? AppNameAt(win) : ActiveAppName()
+    return {app: app, mods: ModsHeld(), held: held, win: win,
+        layApp: layApp, layWin: layWin}
+}
+
+; Does this action deliver to the FOREGROUND window (keystrokes, a modifier,
+; a key remap) rather than to a fixed target (ps_* / pacs_keys) or the
+; pointer (a click)?
+FgDelivered(a) {
+    t := a["type"]
+    if (t = "keys" || t = "keysrepeat" || t = "text" || t = "moddrag")
+        return true
+    v := MGet(a, "value", "")
+    return IsNativeAct(t) && v != "" && IsKeyInput(v)
+}
+
+; A PROGRAM-SCOPED row fires in the window that scoped it (v0.7.2). A mouse
+; row is scoped by the window under the pointer, but keystrokes go to the
+; foreground: with PowerScribe focused and the pointer on PACS, a PACS
+; "keys r" row typed "r" into the report. Bring that window forward first
+; (a native click would have activated it anyway); if it will not come,
+; send nothing. Global rows, and key rows (scoped by the foreground), are
+; unchanged.
+AimFg(binding, ctx) {
+    app := MGet(binding, "app", "*")
+    if (app = "*" || !IsObject(ctx))
+        return true
+    win := (LayerParts(binding).Length && ctx.HasProp("layWin") && ctx.layWin)
+        ? ctx.layWin : (ctx.HasProp("win") ? ctx.win : 0)
+    if (!win || AppNameAt(win) != app)
+        return true
+    fg := DllCall("GetForegroundWindow", "ptr")
+    if (DllCall("GetAncestor", "ptr", fg, "uint", 2, "ptr") = win)
+        return true
+    ; the program's own modal is in front of it: that is where keys belong
+    if (!DllCall("IsWindowEnabled", "ptr", win)
+        && DllCall("GetAncestor", "ptr", fg, "uint", 3, "ptr")
+         = DllCall("GetAncestor", "ptr", win, "uint", 3, "ptr"))
+        return true
+    if DllCall("user32\IsHungAppWindow", "ptr", win) {
+        Problem("aim", AppDisp(app) " is not responding; not sent: "
+            . DescribeAction(binding["action"]))
+        return false
+    }
+    try WinActivate("ahk_id " win)
+    if WinWaitActive("ahk_id " win, , 0.15)
+        return true
+    Problem("aim", AppDisp(app) " would not come forward; not sent: "
+        . DescribeAction(binding["action"]))
+    HUD(AppDisp(app) " would not come forward — nothing sent", "warn")
+    return false
 }
 
 HeldHas(ctx, btn) {
@@ -4072,17 +2805,22 @@ HeldHas(ctx, btn) {
 }
 
 ; Specificity score of a binding row against a context, or -1 if it does not
-; apply. Each held-input layer component +16 (so a depth-2 nested layer
-; outscores depth-1 outscores Base -- deepest wins, and ANY held layer row
-; outscores a program's plain row, v0.6.6.6), app exact +8, each modifier +1.
+; apply. Each held-input layer component +64 (ANY held layer row outscores
+; everything else, v0.6.6.6), each modifier +9 (a modifier row beats a plain
+; program row, v0.7.2), app exact +8.
 ; checkLayer=false skips the held-path requirement AND its score: used by the
 ; layer-host probe, which asks "could this row apply if the path were held"
 ; while deciding what a press should arm.
-MatchScore(row, ctx, checkLayer := true) {
+MatchScore(row, ctx, checkLayer := true, checkMods := true) {
     sc := 0
     app := MGet(row, "app", "*")
     if (app != "*") {
-        if (app != ctx.app)
+        ; a LAYER row's program is the one its host was pressed in, not the
+        ; one this member is pressed in (keys follow focus, mouse the
+        ; pointer: a PACS layer failed whenever they differed)
+        cmp := (checkLayer && ctx.HasProp("layApp") && ctx.held.Length
+            && LayerParts(row).Length) ? ctx.layApp : ctx.app
+        if (app != cmp)
             return -1
         sc += 8
     }
@@ -4094,17 +2832,20 @@ MatchScore(row, ctx, checkLayer := true) {
                     continue
                 if !HeldHas(ctx, part)
                     return -1
-                sc += 16
+                sc += 64
             }
         }
     }
     mods := MGet(row, "mods", "")
-    if (mods != "") {
+    if (mods != "" && checkMods) {
         loop parse mods {
             if !InStr(ctx.mods, A_LoopField)
                 return -1
         }
-        sc += StrLen(mods)
+        ; R10: 9 per modifier, so a modifier row beats a plain program row
+        ; (9 > 8) -- a global Ctrl+X row was unreachable wherever a program
+        ; row for X existed. Layers stay on top (64 > 4*9 + 8).
+        sc += 9 * StrLen(mods)
     }
     return sc
 }
@@ -4112,7 +2853,7 @@ MatchScore(row, ctx, checkLayer := true) {
 ; Best binding for (button, event) in ctx, or 0. Later rows win score ties so
 ; the GUI list order acts as a natural tiebreaker (index arrays keep config
 ; order, so >= preserves that exactly).
-FindBindingFor(btn, event, ctx) {
+FindBindingFor(btn, event, ctx, &score := -1) {
     k := btn "|" event
     if !g_Idx.bind.Has(k)
         return 0
@@ -4127,6 +2868,7 @@ FindBindingFor(btn, event, ctx) {
             best := row
         }
     }
+    score := bestScore
     return best
 }
 
@@ -4139,7 +2881,9 @@ LayerHostExists(btn, ctx) {
     if !g_Idx.layerBind.Has(btn)
         return false
     for row in g_Idx.layerBind[btn] {
-        if (MatchScore(row, ctx, false) >= 0)
+        ; modifiers are judged when the layer row fires, not at the host's
+        ; press: a Ctrl row in the layer must still make this a host
+        if (MatchScore(row, ctx, false, false) >= 0)
             return true
     }
     return false
@@ -4148,8 +2892,19 @@ LayerHostExists(btn, ctx) {
 ; Everything the state machine needs to know about btn in ctx, precomputed at
 ; press time so per-event work stays tiny.
 SpecFor(btn, ctx) {
-    tap     := FindBindingFor(btn, "tap", ctx)
-    hold    := FindBindingFor(btn, "hold", ctx)
+    ts := -1, hs := -1
+    tap     := FindBindingFor(btn, "tap", ctx, &ts)
+    hold    := FindBindingFor(btn, "hold", ctx, &hs)
+    ; A MORE SPECIFIC "Pass through" (or a tap "Block it") carves the whole
+    ; INPUT out of the less specific rows of the other event: a PACS stock
+    ; tap used to leave a global hold live in PACS (v0.7.2).
+    if (IsObject(tap) && IsObject(hold)) {
+        tt := tap["action"]["type"], ht := hold["action"]["type"]
+        if (ts > hs && (tt = "stock" || tt = "none"))
+            hold := 0
+        else if (hs > ts && ht = "stock")
+            tap := 0
+    }
     layerHost := LayerHostExists(btn, ctx)
 
     ; Left, right and middle are instant everywhere: the only hold the engine
@@ -4159,7 +2914,9 @@ SpecFor(btn, ctx) {
     if IsPrimaryButton(btn) {
         if (IsObject(hold) && MGet(hold, "app", "*") = "*")
             hold := 0
-        layerHost := false
+        ; v0.7.2: middle or right may host a layer when the user made it one
+        if !LayerHostAllowed(btn)
+            layerHost := false
     }
 
     hasAny := IsObject(tap) || IsObject(hold) || layerHost
@@ -4241,8 +2998,19 @@ BS(btn) {
 ClearBS(btn) {
     ; universal teardown funnel: release, panic, ForceReleaseActive and the
     ; watchdog all land here
-    if g_BS.Has(btn)
-        g_BS.Delete(btn)
+    if !g_BS.Has(btn)
+        return
+    st := g_BS[btn]
+    ; A switcher commits when its holder goes up. A holder dropped while
+    ; still "down" (lost Up, re-press) left the switcher open, and the
+    ; watchdog's sweeps off, until Escape.
+    ; Only a holder still DOWN is a lost Up: a normal release has already set
+    ; down := false, and AppSwitchWatch reads exactly that as the commit.
+    if (IsObject(g_AppSw) && g_AppSw.holder = st && st.down) {
+        st.down := false
+        AppSwitchClose(false)
+    }
+    g_BS.Delete(btn)
 }
 
 NewBS(btn) {
@@ -4250,7 +3018,7 @@ NewBS(btn) {
     g_PollSeq += 1
     st := {btn: btn, down: false, consumed: false, mode: "", pressTick: 0,
         gen: 0, pollId: g_PollSeq, sx: 0, sy: 0, spec: 0, ctx: 0,
-        holdBinding: 0, dragOn: false, usedAsMod: false, dial: "",
+        holdBinding: 0, dragOn: false, usedAsMod: false,
         passBtn: "", repStart: 0, polling: false,
         locked: false, physSeen: true, deckLocked: false}
     g_BS[btn] := st
@@ -4311,6 +3079,8 @@ SendNativeClick(btn, n := 1) {
 ; HUD note, never a modal error dialog. Send parses the whole string before
 ; sending anything, so a failure sends nothing (no partial Down).
 SafeSend(v) {
+    global g_SynthAt
+    g_SynthAt := A_TickCount                 ; the watchdog's sweeps key off this
     try {
         RM_Send(v)
     } catch as e {
@@ -4318,6 +3088,8 @@ SafeSend(v) {
         HUD("Send error: " e.Message)
     }
 }
+
+global g_SynthAt := 0            ; tick of RadMapper's last synthetic input
 
 ; Foreground hwnd, reused within the same millisecond: OwnGuiActive and
 ; ActiveAppName both need it on the same event, and one DllCall is enough.
@@ -4382,11 +3154,112 @@ WinClassOf(hwnd) {
 ; selection; not hooking at all is the only clean fix. Returns 1 elsewhere so the
 ; engine still processes clicks over other apps. On any error, default to 1
 ; (engine active) -- never silently disable the engine everywhere.
+; An Up is let through whenever the engine owns a live press of that input:
+; a press over PACS released over one of our windows (or a key whose action
+; brought ours to the front) otherwise lost its release, leaving the layer
+; armed or the state "down" until the watchdog's 30 s cap.
+; The input a hotkey name is for: "*XButton1 Up" -> "XButton1".
+HkInput(hk) {
+    static memo := Map()                     ; a finite set of hotkey names
+    if !memo.Has(hk)
+        memo[hk] := CanonicalInputName(RegExReplace(hk, "^[*~$]+|\s+Up$"))
+    return memo[hk]
+}
+
+UpOwned(hk) {
+    if (SubStr(hk, -3) != " Up")
+        return false
+    s := BS(HkInput(hk))
+    return (s && s.down) ? true : false
+}
+
+; A press NO row applies to here goes to Windows untouched -- decided at the
+; gate, so it is never suppressed and re-sent (v0.7.2). An input hooked only
+; for PACS used to be swallowed and re-injected everywhere else: dead over
+; elevated windows (UIPI), invisible to other AutoHotkey scripts, and every
+; click re-sent. Same pure-spec lookup OnPressHK makes.
+GateNative(btn) {
+    global g_WheelLast
+    if !g_Enabled                            ; paused: native unless it resumes
+        return IsWheel(btn) || !(PauseTglRowFor(btn) || PauseTglHost(btn))
+    if (g_Testing || Warp.active || ClickLockOwns(btn))
+        return false
+    if ((s := BS(btn)) && s.down)            ; live state: repeats, stale Ups
+        return false
+    ; an OS repeat of a KEY whose press already went native: keep it native.
+    ; Re-deciding mid-hold (a layer host pressed meanwhile) handed the
+    ; repeat to the engine, which then claimed the release -- the key stayed
+    ; down in Windows. (Logical state: down only when the press went out.)
+    if (!s && IsKeyInput(btn)) {
+        for n in InputHookNames(btn) {
+            if GetKeyState(n)
+                return true
+        }
+    }
+    try {
+        ctx := CurCtx(btn)
+        if IsWheel(btn) {
+            if IsObject(FindBindingFor(btn, "turn", ctx))
+                return false
+            g_WheelLast := A_TickCount       ; deck settle still sees the notch
+            return true
+        }
+        spec := SpecFor(btn, ctx)
+        ; a pure row inside a layer must still mark its holder used
+        return spec.pure && !(IsObject(spec.tap) && LayerParts(spec.tap).Length)
+    }
+    return false
+}
+
+; A Down the gate handed to the engine whose handler has not run yet (the
+; main thread busy, e.g. AimFg waiting on a window): its Up must still come
+; to the engine, or it goes out native and the late handler arms a state
+; nothing will ever release.
+global g_GateClaim := Map()
+
+; An Up the engine has no claim on goes through untouched too.
+GateNativeClear(inp) {                   ; a Down going out natively owns no claim
+    if g_GateClaim.Has(inp)
+        g_GateClaim.Delete(inp)
+    return 0
+}
+
+UpClaimed(hk, inp) {
+    return UpOwned(hk) || g_SwallowUp.Has(inp) || Warp.claimed.Has(inp)
+        || ClickLockHolds(inp) || g_GateClaim.Has(inp)
+}
+
+; A click lock latched this input: its physical release must be swallowed
+; (it is what keeps the button down), even when its press went through the
+; gate natively and left no state behind.
+ClickLockHolds(inp) {
+    return IsObject(g_ClickLock) && (g_ClickLock.src = inp || g_ClickLock.held = inp)
+}
+
 HookActive(hk) {
+    inp := HkInput(hk)
+    if (SubStr(hk, -3) = " Up")
+        return UpClaimed(hk, inp) ? 1 : 0
+    ; pass-through: truly native -- except an input already held with a
+    ; live state, whose repeats and release must keep reaching the engine
+    ; (else its release is claimed by UpOwned while repeats leak: stuck key)
+    ; a latched button (or its latching input) always reaches the engine,
+    ; pass-through or not: its press is how the latch is released
+    if ClickLockOwns(inp) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
+    if (IsObject(g_Bypass) && BypassFor(inp)
+        && !((s := BS(inp)) && s.down))
+        return GateNativeClear(inp)
     ours := false
     try ours := OwnWindowAt(RM_WinAt())
-    if !ours
+    if !ours {
+        if GateNative(inp)
+            return GateNativeClear(inp)
+        g_GateClaim[inp] := 1
         return 1
+    }
     ; A TILT is never gated: nothing of ours scrolls sideways, and a tilt
     ; bound to a monitor hop must hop wherever the pointer is. OnWheelHK
     ; already exempted tilts from its own-window test, but this gate runs
@@ -4397,7 +3270,7 @@ HookActive(hk) {
         TiltNote("gate", WinClassOf(RM_WinAt()))
         return 1
     }
-    return 0
+    return GateNativeClear(inp)              ; over our own window: native
 }
 
 ; Diagnostics for a bound tilt that did NOT do its job, once per reason and
@@ -4426,17 +3299,48 @@ TiltNote(why, cls) {
 ; it keeps our own Edit controls native and leaves the keys live everywhere
 ; else. Defaults to 1 (engine active) on any error, like HookActive.
 KbHookActive(hk) {
-    try return OwnGuiActive() ? 0 : 1
+    inp := HkInput(hk)
+    if (SubStr(hk, -3) = " Up")
+        return UpClaimed(hk, inp) ? 1 : 0
+    ; pass-through: truly native -- except an input already held with a
+    ; live state, whose repeats and release must keep reaching the engine
+    ; (else its release is claimed by UpOwned while repeats leak: stuck key)
+    ; a key whose release teardown still owes a swallow (it was held when
+    ; the engine paused or its row changed): its repeats must not go out
+    ; natively while that release is swallowed -- it would stick down
+    if (g_SwallowUp.Has(inp) && InputHeldPhysical(inp)) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
+    if ClickLockOwns(inp) {
+        g_GateClaim[inp] := 1
+        return 1
+    }
+    if (IsObject(g_Bypass) && BypassFor(inp)
+        && !((s := BS(inp)) && s.down))
+        return GateNativeClear(inp)
+    ; a key already held with a live state stays with the engine even if
+    ; our window came to the front mid-hold (its repeats and release)
+    try {
+        if (!((s := BS(inp)) && s.down) && (OwnGuiActive() || GateNative(inp)))
+            return GateNativeClear(inp)
+    }
+    g_GateClaim[inp] := 1
     return 1
 }
 
 OnPressHK(btn, *) {
     Critical "On"
+    if g_GateClaim.Has(btn)
+        g_GateClaim.Delete(btn)
     TestNotify(btn, 1)
     ; v0.6.2: while the keyboard pointer is up it owns every key. A bound key
     ; row is a hooked "*key" hotkey and would beat its InputHook to the key,
     ; so the row is bypassed here and the key handed over (and suppressed).
     if (Warp.active && IsKeyInput(btn)) {
+        ; the OS repeats of the key that OPENED the pointer are not letters
+        if ((p := BS(btn)) && p.down && !p.consumed)
+            return
         Warp.FromHook(btn)
         return
     }
@@ -4464,47 +3368,6 @@ OnPressHK(btn, *) {
         st.pressTick := A_TickCount
         return
     }
-    ; v0.6.2a: a live menu is MODAL, but its overlay is NoActivate and
-    ; click-through, so a mouse click during one used to fall straight into
-    ; the study underneath WITH THE WHEEL STILL UP -- a stray window/level or
-    ; a scroll through the series you were about to pick a preset for. A
-    ; click is the universal "not this" gesture: cancel, fire nothing, and
-    ; swallow the click. The holder's own button is exempt (its release is
-    ; the commit) and wheels are exempt (a notch is not a click). PRACTICE
-    ; is NOT exempt any more (v0.6.4a): a practice wheel that a click could
-    ; not dismiss was the one window in RadMapper you had to wait out, and
-    ; cancelling is as much a part of the gesture as the flick is -- so it
-    ; is a thing to practise, not a thing to suppress. A cancelled trial
-    ; goes back to the settings window through RadialClose's trial branch,
-    ; exactly as Escape already did. RadialBindCancel hooks the three mouse
-    ; buttons the config does not, so this is reached even when LButton is
-    ; otherwise fully native.
-    if (IsObject(g_Radial) && IsMouseInput(btn)
-        && !IsWheel(btn)
-        && !(IsObject(g_Radial.holder) && g_Radial.holder.btn = btn)) {
-        RadialClose(false)
-        HUD("Menu cancelled", "mute")
-        ; A still-down state here owns a synthetic down that NewBS is about
-        ; to orphan out of g_BS, where not even the watchdog can find it.
-        ; Release it first, exactly as the not-ours branch below does.
-        prev := BS(btn)
-        if prev {
-            if (prev.down && !prev.consumed) {
-                if (prev.mode = "passthru")
-                    SendNativeUp(prev.passBtn != "" ? prev.passBtn : btn)
-                else if (prev.mode = "held")
-                    ActionUp(prev.holdBinding, prev)
-            }
-            ClearBS(btn)
-        }
-        ; down+consumed, like the click-lock escape below: the matching
-        ; physical release must be inert, not a native Up with no Down.
-        st := NewBS(btn)
-        st.down := true
-        st.consumed := true
-        st.pressTick := A_TickCount
-        return
-    }
     ; A reinjected click can never change which window is the foreground one
     ; (Windows' foreground lock), so the engine must manage activation itself
     ; around its own windows. Ours-ness is POSITIONAL (window under the
@@ -4515,16 +3378,86 @@ OnPressHK(btn, *) {
     ; (lost selections / phantom clicks), and clicks returning to an inactive
     ; RadMouse window never activated it (title-bar close/minimize dead).
     isKey := IsKeyInput(btn)
+    ; The key that toggled pause is still held: these are its OS repeats,
+    ; not new presses. Without this a held pause key flipped the engine on
+    ; and off every ~30 ms.
+    if (isKey && g_SwallowUp.Has(btn) && InputHeldPhysical(btn))
+        return
+    if g_SwallowUp.Has(btn)                  ; a fresh mouse press: any old
+        g_SwallowUp.Delete(btn)              ; claim on its release is stale
+    ; an OS key repeat of a press already in hand: the absorber further down
+    ; handles it, whatever pass-through says (else CapsLock toggled at the
+    ; repeat rate while held)
+    prevSt := isKey ? BS(btn) : 0
+    rep := isKey && prevSt && prevSt.down && !prevSt.consumed
+        && InputHeldPhysical(btn)
     fgOurs := OwnGuiActive()
     ; POSITIONAL ours-ness is a MOUSE question only: a keystroke goes to the
     ; foreground window, so for keys the cursor's location is irrelevant (and
     ; using it made key remaps die whenever the pointer rested on our GUI).
     uw := (g_Enabled && !isKey) ? RM_WinAt() : 0
     ours := (uw != 0) && OwnWindowAt(uw)
-    if (ours)                                ; HotIf should have kept this native;
+    if (ours && !ClickLockOwns(btn))         ; HotIf should have kept this native;
         Problem("hookmiss", "hooked click over our own window ("
             . WinClassOf(uw) ") -- HotIf gate missed it")   ; if we got here it didn't
-    if (!g_Enabled || fgOurs || ours) {
+    ; Paused: the one thing a hooked input can still do is resume -- and the
+    ; LAYER HOST of a layered resume row is held for it, not sent to the app.
+    if (!g_Enabled && !PauseTglRowFor(btn) && PauseTglHost(btn)) {
+        ClearBS(btn)
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        st.pausedHost := true
+        return
+    }
+    if (!g_Enabled && PauseTglRowFor(btn)) {
+        ClearBS(btn)
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        g_SwallowUp[btn] := 1
+        SetTimer(ToggleEnabled, -1)
+        return
+    }
+    ; Our window in front but the click aims at a FOREIGN window: hand that
+    ; window the foreground and resolve normally -- a bound thumb button
+    ; over PowerScribe must not go native just because Settings was last
+    ; focused.
+    if (g_Enabled && fgOurs && !ours && uw && !isKey) {
+        if !DllCall("user32\IsHungAppWindow", "ptr", uw)
+            try WinActivate("ahk_id " uw)
+        fgOurs := false
+    }
+    ; --- click lock (v0.3.1) --------------------------------------------------
+    ; While a button is latched, pressing it (or the input that latched it)
+    ; RELEASES the latch and does nothing else -- the Windows ClickLock rule,
+    ; and the escape hatch that means a latch can always be undone with the
+    ; mouse alone. The state is left down+consumed so the matching physical
+    ; release is inert.
+    if ClickLockOwns(btn) {
+        ClickLockRelease()
+        old := BS(btn)
+        if old {
+            ; same orphan as the not-ours branch above: this press consumes
+            ; the input, so the old state's release never arrives
+            if (old.down && !old.consumed) {
+                if (old.mode = "passthru")
+                    SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
+                else if (old.mode = "held")
+                    ActionUp(old.holdBinding, old)
+            }
+            ClearBS(btn)
+        }
+        st := NewBS(btn)
+        st.down := true
+        st.consumed := true
+        st.pressTick := A_TickCount
+        return
+    }
+
+    if (!g_Enabled || ((fgOurs || ours || BypassFor(btn)) && !rep)) {
         if (ours && !fgOurs) {
             ; fallback: click on our own window while another app holds the
             ; foreground -- activate ourselves so the reinjected click lands
@@ -4563,33 +3496,6 @@ OnPressHK(btn, *) {
     }
     now := A_TickCount
 
-    ; --- click lock (v0.3.1) --------------------------------------------------
-    ; While a button is latched, pressing it (or the input that latched it)
-    ; RELEASES the latch and does nothing else -- the Windows ClickLock rule,
-    ; and the escape hatch that means a latch can always be undone with the
-    ; mouse alone. The state is left down+consumed so the matching physical
-    ; release is inert.
-    if ClickLockOwns(btn) {
-        ClickLockRelease()
-        old := BS(btn)
-        if old {
-            ; same orphan as the not-ours branch above: this press consumes
-            ; the input, so the old state's release never arrives
-            if (old.down && !old.consumed) {
-                if (old.mode = "passthru")
-                    SendNativeUp(old.passBtn != "" ? old.passBtn : btn)
-                else if (old.mode = "held")
-                    ActionUp(old.holdBinding, old)
-            }
-            ClearBS(btn)
-        }
-        st := NewBS(btn)
-        st.down := true
-        st.consumed := true
-        st.pressTick := now
-        return
-    }
-
     prev := BS(btn)
 
     ; --- OS keyboard auto-repeat (v0.3) -------------------------------------
@@ -4615,13 +3521,17 @@ OnPressHK(btn, *) {
             ; press. repStart is the wall clock of the last re-fire, gated by
             ; the same repeatRate the keysrepeat hold uses (it is free here:
             ; a "fired" state never runs the keysrepeat timer that owns it).
-            gap := Max(Cfg("repeatRate"), 1)
+            gap := RepeatMs()
             since := now - prev.repStart
             if (prev.repStart = 0 || since < 0 || since >= gap) {
                 prev.repStart := now
                 ActionFire(prev.spec.tap, prev)
             }
-        } else if (prev.mode = "passthru")
+        } else if (prev.mode = "passthru"
+            && IsKeyInput(prev.passBtn != "" ? prev.passBtn : btn))
+            ; Only a KEY target repeats its down. A key remapped to a MOUSE
+            ; button re-sent {LButton Down} every ~30 ms with no Up: Windows
+            ; read double-clicks and every drag restarted.
             SendNativeDown(prev.passBtn != "" ? prev.passBtn : btn)
         return
     }
@@ -4641,13 +3551,21 @@ OnPressHK(btn, *) {
         ClearBS(btn)                       ; stale state, start fresh
     }
 
-    ctx := CurCtx()
+    ctx := CurCtx(btn)
     spec := SpecFor(btn, ctx)
     st := NewBS(btn)
     st.down := true
     st.pressTick := now
     st.ctx := ctx
     st.spec := spec
+    ; Pressing an input whose row lives in a layer IS using that layer: mark
+    ; the holder now, not when the row fires, so releasing the host first
+    ; (ordinary rollover) cannot also fire the host's own tap. A no-op for
+    ; Base rows.
+    ; Only the TAP: a layer hold row may never engage (released early, the
+    ; tap may resolve to Base), and ActionDown/ActionFire mark it when it does.
+    if IsObject(spec.tap)
+        MarkLayerUsed(spec.tap)
     RM_GetPos(&sx, &sy)
     st.sx := sx
     st.sy := sy
@@ -4689,6 +3607,10 @@ OnPressHK(btn, *) {
             MarkLayerUsed(spec.tap)
         st.mode := "passthru"
         st.passBtn := spec.remap
+        if (IsKeyInput(spec.remap) && !AimFg(spec.tap, ctx)) {
+            st.consumed := true              ; nothing went out: release inert
+            return
+        }
         SendNativeDown(spec.remap)
         LastEvent(btn " -> " InputLabel(spec.remap), spec.tap)
         return
@@ -4726,6 +3648,12 @@ HoldMs() {
     return ClampInt(Cfg("holdThreshold"), 50, 2000, 200)
 }
 
+; repeatRate reaches SetTimer: 0 deletes the timer, a string throws in the
+; Critical hook thread. Clamped like the hold threshold.
+RepeatMs() {
+    return ClampInt(Cfg("repeatRate"), 10, 1000, 50)
+}
+
 ArmTimers(st) {
     st.gen += 1
     SetTimer(HoldTimer.Bind(st, st.gen), -HoldMs())
@@ -4733,7 +3661,9 @@ ArmTimers(st) {
 }
 
 StartPollIfNeeded(st) {
-    needs := false
+    ; left/right/middle withheld for a hold or as a layer host: watch for a
+    ; drag, which must reach the app (W/L, pan) rather than be swallowed
+    needs := IsPrimaryButton(st.btn) && st.mode = "pending"
     if (IsObject(st.spec.hold) && st.spec.hold["action"]["type"] = "dragmove")
         needs := true
     if (!needs && IsObject(st.holdBinding)
@@ -4749,25 +3679,22 @@ StartPollIfNeeded(st) {
 ; physical key would produce the same output again, and repeating that output
 ; is what the user asked for by holding the key. Names are ACT_CODES entries.
 ; Everything absent is a ONE-SHOT and must fire once per PRESS: ps_* and
-; pacs_keys queue a focus dance, macro/run/guiopen/layout/winplace/warp/radial
+; pacs_keys queue a focus dance, macro/run/guiopen/layout/winplace/warp
 ; open or launch something, tele_* teleports the pointer, and the toggles
-; (sniper, boost, scrollptr, zoomptr, clicklock, pausetgl) would flip on and
-; off at 30 Hz. wldial is in because a held dial SHOULD walk the ring, which
-; is the whole gesture.
+; (clicklock, bypass, pausetgl) would flip on and off at 30 Hz.
 RepeatSafeAct(t) {
     return (t = "keys" || t = "keysrepeat" || t = "text" || t = "native"
-        || t = "stock" || t = "wldial")
+        || t = "stock")
 }
 
 ; Hold-action types that ENGAGE state in ActionDown (ended by ActionUp)
 ; rather than firing one-shot -- exactly ActionDown's special cases. These
-; must never be deferred to a release-time ActionFire: the toggle types
-; would stick (sniper/boost), dragmove would mint a click that
-; never happened, and native/moddrag/keysrepeat would lose their hold phase.
+; must never be deferred to a release-time ActionFire: bypass would toggle
+; instead of holding, dragmove would mint a click that never happened, and
+; native/moddrag/keysrepeat would lose their hold phase.
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
-        || t = "dragmove" || t = "sniper" || t = "boost" || t = "scrollptr"
-        || t = "zoomptr" || t = "radial")
+        || t = "dragmove" || t = "bypass")
 }
 
 HoldTimer(st, gen, *) {
@@ -4848,9 +3775,36 @@ MovePoll(btn, pollId, *) {
     dy := cy - st.sy
     dist := Sqrt(dx * dx + dy * dy)
 
-    if (st.mode = "held" && IsObject(st.holdBinding) && !st.dragOn
-        && st.holdBinding["action"]["type"] = "dragmove"
-        && dist >= Cfg("dragThreshold")) {
+    if ((st.mode = "pending" || st.mode = "armedmod") && IsPrimaryButton(btn)) {
+        if (!st.usedAsMod && dist >= Cfg("dragThreshold")) {
+            st.gen += 1                      ; the hold timer stands down
+            st.mode := "passthru"            ; ...and the button goes out:
+            ; a drag is a drag -- of the dragmove TARGET if the hold is one
+            ; (right-drag -> middle-drag pan), else of the button itself
+            hv := (IsObject(st.spec) && IsObject(st.spec.hold)
+                && st.spec.hold["action"]["type"] = "dragmove")
+                ? MGet(st.spec.hold["action"], "value", "") : ""
+            st.passBtn := (hv != "") ? hv : btn
+            ; a host that became a plain drag no longer holds its layer
+            ; (safe: SpecFor builds a fresh spec per press -- never cache it)
+            if IsObject(st.spec)
+                st.spec.layerHost := false
+            SendNativeDown(st.passBtn)
+            st.polling := false
+            SetTimer(, 0)
+        }
+        return
+    }
+    if !(st.mode = "held" && IsObject(st.holdBinding)
+        && st.holdBinding["action"]["type"] = "dragmove") {
+        if (st.mode = "pending" && IsObject(st.spec) && IsObject(st.spec.hold)
+            && st.spec.hold["action"]["type"] = "dragmove")
+            return                           ; its hold has not engaged yet
+        st.polling := false                  ; nothing left to decide
+        SetTimer(, 0)
+        return
+    }
+    if (!st.dragOn && dist >= Cfg("dragThreshold")) {
         st.dragOn := true
         v := MGet(st.holdBinding["action"], "value", "")
         st.passBtn := (v != "") ? v : btn
@@ -4862,7 +3816,17 @@ MovePoll(btn, pollId, *) {
 
 OnReleaseHK(btn, *) {
     Critical "On"
+    gateOnly := g_GateClaim.Has(btn)         ; claimed, its press not yet run
+    if gateOnly
+        g_GateClaim.Delete(btn)
     TestNotify(btn, 0)
+    if g_SwallowUp.Has(btn) {                ; a release teardown already owns
+        g_SwallowUp.Delete(btn)
+        ClearBS(btn)
+        if !g_Enabled                        ; paused: it was hooked only to
+            SetTimer(SyncHooks, -1)          ; swallow this; let it go native
+        return
+    }
     ; A key whose PRESS was handed to the keyboard pointer must not emit a
     ; native Up here -- and "is Warp still up?" is the wrong test for that.
     ; The press that CLOSES the overlay (Esc, Space, R/M/F, V) sets
@@ -4877,6 +3841,26 @@ OnReleaseHK(btn, *) {
     st := BS(btn)
     if (Warp.active && IsKeyInput(btn) && !st)
         return                               ; press went to the keyboard pointer
+    if (!st && ClickLockHolds(btn))
+        return                               ; the latch's own release: keep it down
+    if (!st && gateOnly) {
+        ; claimed at the gate but its press never ran: the gate timed out
+        ; (the Down went through natively) or the handler was dropped. If
+        ; the Down is out, its Up must be too -- else the input sticks.
+        down := false
+        for n in InputHookNames(btn) {
+            if GetKeyState(n)
+                down := true
+        }
+        if down
+            SendNativeUp(btn)
+        return
+    }
+    if (st && st.HasProp("pausedHost") && !g_Enabled) {
+        ClearBS(btn)                         ; a host held for a resume row
+        SendNativeClick(btn)                 ; that was not used: its click
+        return
+    }
     if (!st || !st.down) {
         SendNativeUp(btn)                    ; safety: never leave one stuck
         if st
@@ -4901,7 +3885,17 @@ OnReleaseHK(btn, *) {
         return
     }
     if (mode = "held") {
+        ; A "native drag after move" hold engaged at PRESS (instantHold) on an
+        ; input whose tap is native: a quick click used to do nothing at all
+        ; (Back, the right-click menu lost). Released before the hold time
+        ; with nothing dragged, it is a click. Only dragmove: moddrag's own
+        ; tap already clicks, and sniper/boost/drag scroll TOGGLE on a tap.
+        t := IsObject(st.holdBinding) ? st.holdBinding["action"]["type"] : ""
+        quick := IsObject(st.spec) && st.spec.instantHold && (t = "dragmove")
+            && !st.dragOn && (A_TickCount - st.pressTick < HoldMs())
         ActionUp(st.holdBinding, st)
+        if quick
+            FireTap(st)
         ClearBS(btn)
         return
     }
@@ -5015,26 +4009,23 @@ OnWheelHK(wh, *) {
     ; lands the pointer in the middle of the next monitor -- under the
     ; settings window whenever it is open there (v0.6.6.3).
     tilt := (wh = "WheelLeft" || wh = "WheelRight")
-    if (!g_Enabled || (!tilt && (OwnGuiActive() || OwnWindowAt(RM_WinAt())))) {
+    if (!g_Enabled || IsObject(g_Bypass) || (!tilt && OwnWindowAt(RM_WinAt()))) {
         SendWheelRaw(wh, 1)                  ; our own lists scroll natively
         return
     }
-    ; A radial menu is up: the hand is mid-gesture on its holder, and that
-    ; holder is also a layer host. A notch now must not drive a deck, the
-    ; switcher or a dial invisibly behind the wheel (v0.7).
-    if (IsObject(g_Radial) && !g_Radial.trial) {
-        ; A VERTICAL notch still scrolls the study: the reader turned the
-        ; wheel and can see what it did. A TILT is dropped. On a trackball
-        ; the rocker sits under the same thumb that is holding the ring
-        ; open, it repeats while it is held over, and a sideways notch into
-        ; the viewer is input the reader never asked for and cannot see.
-        ; The status line, not the HUD: the menu owns the screen.
-        if tilt {
-            LastEvent(wh " dropped — the " g_Radial.name " menu is open")
-            return
+    ; Settings in front, pointer over PACS: a bound row's keys go to the
+    ; FOREGROUND, so give it to the window being scrolled first (as a press
+    ; does), or {Down} lands in a RadMapper list.
+    if (!tilt && OwnGuiActive()) {
+        ; once per window per half second, never a hung one: a notch stream
+        ; retrying a refused activation at 100+/s would couple us to it
+        static lastUw := 0, lastAt := 0
+        uw := RM_WinAt()
+        if (uw && !(uw = lastUw && A_TickCount - lastAt < 500)
+            && !DllCall("user32\IsHungAppWindow", "ptr", uw)) {
+            lastUw := uw, lastAt := A_TickCount
+            try WinActivate("ahk_id " uw)
         }
-        SendWheelRaw(wh, 1)
-        return
     }
     ; no turn binding exists for this wheel in ANY context -> nothing to
     ; resolve (v0.3: a wheel is only ever hooked when a row references it,
@@ -5043,7 +4034,7 @@ OnWheelHK(wh, *) {
         SendWheelRaw(wh, 1)
         return
     }
-    ctx := CurCtx()
+    ctx := CurCtx(wh)
     b := FindBindingFor(wh, "turn", ctx)
     if IsObject(b) {
         if (IsNativeAct(b["action"]["type"])) {
@@ -5060,9 +4051,12 @@ OnWheelHK(wh, *) {
             ; meaning; a wheel value redirects the notch.
             MarkLayerUsed(b)
             tgt := MGet(b["action"], "value", "")
-            if (tgt != "" && !IsWheel(tgt))
+            if (tgt != "" && !IsWheel(tgt)) {
+                ; a held tilt repeats: one click per guard window, not a burst
+                if !WheelAccept(wh, now, g_WheelAt, WheelLimitMs(wh))
+                    return
                 SendNativeClick(tgt)
-            else
+            } else
                 SendWheelRaw(tgt != "" ? tgt : wh, 1)
         } else {
             ; A BOUND wheel direction is rate-limited (v0.6.5). A tilt wheel
@@ -5079,6 +4073,7 @@ OnWheelHK(wh, *) {
             ; also a deck never turns the tail of a scroll into a command.
             if (IsObject(holder) && holder.deckLocked) {
                 if (sinceLast >= 0 && sinceLast < DeckSettleMs()) {
+                    holder.usedAsMod := true ; scrolling with it held is not a tap
                     SendWheelRaw(wh, 1)
                     LastEvent(wh " native — still turning when "
                         . InputLabel(holder.btn) " was pressed")
@@ -5091,7 +4086,8 @@ OnWheelHK(wh, *) {
                     . (tilt ? "tilt" : "wheel") " guard (" WheelLimitMs(wh) " ms)")
                 return
             }
-            ActionFire(b, holder)            ; ActionFire marks every lay holder used
+            ActionFire(b, holder, ctx)       ; marks every lay holder used; ctx
+                                             ; is the WHEEL's, not the holder's
         }
         lay := MGet(b, "layer", "*")
         LastEvent(wh (LayerParts(b).Length ? " (layer " lay ")" : ""), b)
@@ -5187,12 +4183,6 @@ ConflictScope(row) {
     if (mods != "")
         out .= " with " mods
     return out
-}
-
-ConflictRowText(row) {
-    return InputLabel(MGet(row, "button", "")) " · "
-        . EventLabelOf(MGet(row, "event", "")) " → "
-        . DescribeAction(MGet(row, "action", Map()))
 }
 
 ConflictReport(focus := "") {
@@ -5338,45 +4328,6 @@ ConflictReport(focus := "") {
         out.Push({kind: "info", text: txt ". While held it is silent; its own "
             . "tap or hold fires on release only if nothing in the layer "
             . "was used."})
-        ; A host that also OPENS A MENU on hold is a trap for the layer's
-        ; MOUSE rows: once the menu is up, OnPressHK reads any other mouse
-        ; button as "not this", cancels the menu and fires nothing. Key
-        ; rows in the layer are unaffected, so this is a warning, not a
-        ; refusal.
-        mouseRow := false
-        for r in hrows {
-            if IsMouseInput(MGet(r, "button", ""))
-                mouseRow := true
-        }
-        if mouseRow {
-            for r in rows {
-                if (MGet(r, "button", "") != host || MGet(r, "event", "") != "hold"
-                    || MGet(MGet(r, "action", Map()), "type", "") != "radial")
-                    continue
-                out.Push({kind: "warn", text: InputLabel(host) " hosts a layer AND "
-                    . "opens " DescribeAction(r["action"]) " on hold "
-                    . ConflictScope(r) ": once the menu is up, pressing another "
-                    . "mouse button cancels the menu instead of firing its layer "
-                    . "row. Put the layer and the menu on different buttons."})
-                break
-            }
-        }
-    }
-    ; 5. radial rows pointing at nothing
-    for row in rows {
-        a := MGet(row, "action", 0)
-        if (!IsObject(a) || MGet(a, "type", "") != "radial")
-            continue
-        if (focus != "" && MGet(row, "button", "") != focus)
-            continue
-        v := MGet(a, "value", "")
-        if (v != "" && !MenuByName(v))
-            out.Push({kind: "warn", text: ConflictRowText(row) " ("
-                . ConflictScope(row) "): there is no menu called “" v "”."})
-        else if (v = "" && MGet(row, "app", "*") = "*")
-            out.Push({kind: "info", text: ConflictRowText(row) " everywhere: "
-                . "opens whichever menu names the program in front, and nothing "
-                . "where no menu does."})
     }
     ; 6. the same PowerScribe / pointer action from several places
     ess := Map("ps_dictate", "Dictate", "ps_next", "Next field",
@@ -5430,8 +4381,8 @@ MarkLayerUsed(binding) {
 }
 
 ; The deepest currently-held holder of a layer-scoped binding's path, or 0 --
-; the state object a wheel turn passes to ActionFire so a W/L dial keeps its
-; per-holder ring position. Base rows have no holder and return 0.
+; the state object a wheel turn passes to ActionFire (the window switcher
+; hangs off it). Base rows have no holder and return 0.
 LayerHolderSt(binding) {
     st := 0
     for part in LayerParts(binding) {
@@ -5443,9 +4394,12 @@ LayerHolderSt(binding) {
 }
 
 ; One-shot execution (taps, wheel turns).
-ActionFire(binding, st) {
+ActionFire(binding, st, ctx := 0) {
     MarkLayerUsed(binding)
     a := binding["action"]
+    if (FgDelivered(a) && !AimFg(binding, IsObject(ctx) ? ctx
+        : (IsObject(st) && IsObject(st.ctx) ? st.ctx : 0)))
+        return
     t := a["type"]
     v := MGet(a, "value", "")
     switch t {
@@ -5484,43 +4438,36 @@ ActionFire(binding, st) {
             ParkNow()
         case "teleport":                         ; pre-v0.3.4 value-driven form
             DoTeleport(v)
-        case "sniper":
-            SpeedToggle("sniper")
-        case "boost":
-            SpeedToggle("boost")
-        case "scrollptr":
-            ScrollPtrToggle()
-        case "zoomptr":
-            ZoomPtrToggle()
         case "clicklock":
-            ClickLockToggle(v)
-        case "wldial":
-            DialStep(st, v)
+            ClickLockToggle(v, st)
         case "appswitch":
-            AppSwitchStep(st, v)
+            h := LayerHolderSt(binding)      ; the host's release commits
+            AppSwitchStep(IsObject(h) ? h : st, v)
         case "layout":
             LayoutApply(v)
         case "winplace":
             WinPlace(v)
         case "warp":
             Warp.Toggle()
-        case "radial":
-            ; A menu opens on HOLD only (v0.7): there is no tap-opened,
-            ; rest-to-fire menu any more. Reached from a tap row, a macro
-            ; step or a wheel notch, say why instead of doing nothing.
-            HUD("Radial menus open while a button is HELD — set the trigger "
-                . "to “Hold it down”", "warn")
-        case "clipboard":
-            Shelf.Toggle("clip")
-        case "scratchpad":
-            Shelf.Toggle("scratch")
         case "macro":
             SetTimer(RunMacro.Bind(v), -1)
         case "run":
             try Run(v)
         case "guiopen":
             ShowMain()
+        case "bypass":
+            if IsWheel(MGet(binding, "button", "")) {
+                HUD("Pass-through belongs on a button or key, not the wheel", "warn")
+                return
+            }
+            BypassToggle(IsObject(st) ? st.btn : "", LayerParts(binding))
         case "pausetgl":
+            ; Pausing clears every state, so this press's release would find
+            ; none and send a lone native Up (a Back click on button 4).
+            ; Only while it is still down: a tap fired AT release has no
+            ; release left to swallow, and would eat the next one.
+            if (IsObject(st) && st.HasProp("btn") && st.down)
+                g_SwallowUp[st.btn] := 1
             ToggleEnabled()
         case "none":
             return
@@ -5532,6 +4479,12 @@ ActionFire(binding, st) {
 ActionDown(binding, st, instant) {
     MarkLayerUsed(binding)
     a := binding["action"]
+    if (FgDelivered(a) && !AimFg(binding,
+        IsObject(st) && IsObject(st.ctx) ? st.ctx : 0)) {
+        if IsObject(st)
+            st.holdBinding := 0              ; nothing engaged: no ActionUp
+        return
+    }
     t := a["type"]
     v := MGet(a, "value", "")
     switch t {
@@ -5550,28 +4503,14 @@ ActionDown(binding, st, instant) {
             SafeSend(v)
             if IsObject(st) {
                 st.repStart := A_TickCount   ; wall-clock runaway cap anchor
-                delay := instant ? HoldMs() : Cfg("repeatRate")
+                delay := instant ? HoldMs() : RepeatMs()
                 SetTimer(RepeatKick.Bind(st, st.gen, v), -delay)
             }
+        case "bypass":
+            BypassOn(IsObject(st) ? st.btn : "", true, LayerParts(binding))
         case "dragmove":
             if IsObject(st)
                 st.dragOn := false           ; MovePoll sends the real down
-        case "sniper":
-            SpeedMod("sniper", true, true)   ; momentary: watchdog-recoverable
-        case "boost":
-            SpeedMod("boost", true, true)
-        case "scrollptr":
-            ScrollPtrStart(true)             ; momentary: watchdog-recoverable
-        case "zoomptr":
-            ScrollPtrStart(true, true)
-        case "radial":
-            ; Pressing the button again while a menu is still up (a preset
-            ; ring left open, say) closes it rather than stacking another.
-            if IsObject(g_Radial) {
-                RadialClose(false)           ; ActionUp's RadialClose(true) is
-                return                       ; then a no-op: nothing is open
-            }
-            RadialOpen(v, IsObject(st) ? st : 0)
         default:
             ActionFire(binding, st)          ; instant action bound on hold
     }
@@ -5603,20 +4542,12 @@ ActionUp(binding, st) {
             SafeSend("{Blind}{" v " Up}")
         case "keysrepeat":
             return                           ; repeat timer self-cancels
+        case "bypass":
+            if (IsObject(g_Bypass) && g_Bypass.mom)
+                BypassOff()
         case "dragmove":
             if (IsObject(st) && st.dragOn)
                 SendNativeUp(st.passBtn != "" ? st.passBtn : st.btn)
-        case "sniper":
-            SpeedMod("sniper", false)
-        case "boost":
-            SpeedMod("boost", false)
-        case "scrollptr", "zoomptr":
-            ScrollPtrStop()
-        case "radial":
-            ; release IS the commit gesture -- unless this press was the one
-            ; that cancelled a lingering menu, in which case there is
-            ; nothing to commit and RadialClose is a no-op anyway
-            RadialClose(true)
     }
 }
 
@@ -5625,7 +4556,7 @@ RepeatKick(st, gen, v, *) {
     if (!IsObject(st) || BS(st.btn) != st || st.gen != gen || !st.down
         || st.mode != "held")
         return
-    SetTimer(RepeatTick.Bind(st, gen, v), Cfg("repeatRate"))
+    SetTimer(RepeatTick.Bind(st, gen, v), RepeatMs())
 }
 
 RepeatTick(st, gen, v, *) {
@@ -5649,27 +4580,6 @@ RepeatTick(st, gen, v, *) {
     SafeSend(v)
 }
 
-; --- W/L dial -----------------------------------------------------------------
-
-DialStep(holderSt, v) {
-    global g_DialFree
-    delta := (InStr(v, "-") = 1) ? -1 : 1
-    if IsObject(holderSt) {
-        if (holderSt.dial = "")
-            holderSt.dial := 0
-        holderSt.dial := Mod(holderSt.dial + delta + 10, 10)
-        n := holderSt.dial
-    } else {
-        if (g_DialFree = "")
-            g_DialFree := 0
-        g_DialFree := Mod(g_DialFree + delta + 10, 10)
-        n := g_DialFree
-    }
-    RM_Send(String(n))
-    if Cfg("hud")
-        HUD("W/L preset " n)
-}
-
 ; --- layers -------------------------------------------------------------------
 ; v1.0 (E1): layers are button-holds now, resolved entirely through the binding
 ; index (a held layer-host button raises the specificity of its scoped rows in
@@ -5679,263 +4589,7 @@ DialStep(holderSt, v) {
 ; held, and the watchdog's stuck-button sweep already reconciles that.
 
 
-; ── §7  POINTER (speed, monitor teleport) ──────────────────────────────────
-
-GetOsMouseSpeed() {
-    spd := 0
-    DllCall("SystemParametersInfo", "UInt", 0x70, "UInt", 0, "UInt*", &spd, "UInt", 0)
-    return spd
-}
-
-SetOsMouseSpeed(spd) {
-    DllCall("SystemParametersInfo", "UInt", 0x71, "UInt", 0, "Ptr", spd, "UInt", 0)
-}
-
-; mom marks a momentary engage (held button) vs a toggle: the watchdog may
-; auto-release an orphaned momentary mod, but toggled ones belong to the user
-; (panic clears them).
-SpeedMod(name, on, mom := false) {
-    global g_SpeedSaved
-    if on
-        g_SpeedMods[name] := mom ? "m" : 1
-    else if g_SpeedMods.Has(name)
-        g_SpeedMods.Delete(name)
-    if (g_SpeedMods.Count > 0) {
-        if (g_SpeedSaved = "")
-            g_SpeedSaved := RM_GetSpeed()
-        target := g_SpeedMods.Has("boost") ? Cfg("boostSpeed") : Cfg("sniperSpeed")
-        RM_SetSpeed(target)
-        if Cfg("hud")
-            HUD(g_SpeedMods.Has("boost") ? "Boost speed" : "Sniper speed")
-    } else if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-        if Cfg("hud")
-            HUD("Normal speed")
-    }
-}
-
-SpeedToggle(name) {
-    SpeedMod(name, !g_SpeedMods.Has(name))
-}
-
-; --- drag scroll (v0.3.1) --------------------------------------------------------
-; Pointer movement becomes wheel notches: hold the bound input and move the
-; mouse to scroll, like a PDF hand tool. Deliberately NOT the v0.2 engine --
-; no velocity tracking, no momentum, no coasting, no per-app modes. One timer,
-; one accumulator per axis, whole notches out.
-;
-; With scrollPtrPin on (default) the cursor is put back on its anchor every
-; tick, so travel is unlimited and the pointer never drifts off the image;
-; with it off the pointer moves freely and each tick measures the step.
-; Direction follows the hand-tool convention -- drag DOWN and the page comes
-; down with you (a wheel-up notch). scrollPtrInvert flips that to push-to-
-; scroll.
-
-/**
- * Drag scroll, and its one variant.
- *
- * zoom = true emits Ctrl+wheel instead of wheel, which is "drag zoom": the
- * same pointer-to-notch engine pointed at whatever the application does with
- * a Ctrl-wheel. It is a FLAG on the same anchor rather than a second engine
- * and a second timer, so the two can never both be running and fighting over
- * the same pointer -- and every guard that already covers drag scroll (the
- * runaway cap, the pin, the watchdog recovery, the panic release) covers the
- * zoom for free.
- */
-ScrollPtrStart(mom := false, zoom := false) {
-    global g_ScrollPtr, g_ScrollPtrMom, g_SPAccX, g_SPAccY
-    if IsObject(g_ScrollPtr)
-        return                               ; already engaged: hold + toggle
-    RM_GetPos(&x, &y)                        ; must not stack two anchors
-    g_ScrollPtr := {ax: x, ay: y, zoom: zoom}
-    g_ScrollPtrMom := mom
-    g_SPAccX := 0.0
-    g_SPAccY := 0.0
-    if (Cfg("scrollPtrPin") && Cfg("scrollPtrHide")) {
-        SysCursorHide()
-        SPMarkerShow(x, y)
-    }
-    SetTimer(SPTick, 10)
-    if Cfg("hud")
-        HUD(zoom ? "Drag zoom — move to zoom" : "Drag scroll — move to scroll")
-}
-
-ScrollPtrStop() {
-    global g_ScrollPtr, g_ScrollPtrMom, g_SPAccX, g_SPAccY
-    if !IsObject(g_ScrollPtr)
-        return
-    SetTimer(SPTick, 0)
-    g_ScrollPtr := 0
-    g_ScrollPtrMom := false
-    g_SPAccX := 0.0
-    g_SPAccY := 0.0
-    SPMarkerHide()
-    SysCursorShow()
-    if Cfg("hud")
-        HUD("Drag scroll off")
-}
-
-; ── the pointer during a pinned drag scroll ──────────────────────────────
-; Pinning warps the cursor back to the anchor every 10 ms. The hand still
-; moves it a few pixels first, so what the eye sees is a cursor flickering
-; between the anchor and wherever the hand just was. Hide it for the
-; duration and show a small ring at the anchor instead, so the spot the
-; scroll is "held" at is still visible. The system cursors are restored
-; from the registry (SPI_SETCURSORS) on stop, on panic and on exit.
-global g_SysCursorHidden := false
-global g_SPMarker := 0
-
-SysCursorHide() {
-    global g_SysCursorHidden
-    if g_SysCursorHidden
-        return
-    ; a 32x32 cursor whose AND mask is all 1 and XOR mask all 0 draws nothing
-    andMask := Buffer(128, 0xFF)
-    xorMask := Buffer(128, 0)
-    for id in [32512, 32513, 32514, 32515, 32516, 32642, 32643, 32644,
-               32645, 32646, 32648, 32649, 32650, 32651] {
-        h := DllCall("CreateCursor", "ptr", 0, "int", 0, "int", 0, "int", 32,
-            "int", 32, "ptr", andMask, "ptr", xorMask, "ptr")
-        if h
-            DllCall("SetSystemCursor", "ptr", h, "uint", id)   ; takes ownership
-    }
-    g_SysCursorHidden := true
-}
-
-SysCursorShow() {
-    global g_SysCursorHidden
-    if !g_SysCursorHidden
-        return
-    g_SysCursorHidden := false
-    DllCall("SystemParametersInfo", "uint", 0x57, "uint", 0, "ptr", 0, "uint", 0)
-}
-
-SPMarkerShow(x, y) {
-    global g_SPMarker, g_PassThru
-    SPMarkerHide()
-    if (!IsSet(Lumi) || !IsSet(Layer))
-        return
-    prev := LayerStack.ActiveLayer
-    try {
-        r := 11
-        L := Layer(x - r, y - r, r * 2, r * 2, "RadScrollAnchor")
-        LayerStack.ActiveLayer := L
-        Ellipse(2, 2, r * 2 - 4, r * 2 - 4, Lumi.C["cyan"], false)
-        Ellipse(3, 3, r * 2 - 6, r * 2 - 6, Lumi.C["cyan"], false)
-        Ellipse(r - 2, r - 2, 4, 4, Lumi.C["cyan"], true)
-        L.ClickThrough := true
-        L.NoActivate()
-        L.TopMost(true)
-        g_PassThru[L.hwnd] := 1
-        L.Draw()
-        g_SPMarker := L
-    } catch as e {
-        Problem("scrollptr", "anchor marker failed: " e.Message)
-    } finally {
-        if IsObject(prev)
-            LayerStack.ActiveLayer := prev
-    }
-}
-
-SPMarkerHide() {
-    global g_SPMarker, g_PassThru
-    if !IsObject(g_SPMarker)
-        return
-    try g_PassThru.Delete(g_SPMarker.hwnd)
-    try g_SPMarker.Dispose()
-    g_SPMarker := 0
-}
-
-ScrollPtrToggle() {
-    if IsObject(g_ScrollPtr)
-        ScrollPtrStop()
-    else
-        ScrollPtrStart(false)
-}
-
-ZoomPtrToggle() {
-    if IsObject(g_ScrollPtr)
-        ScrollPtrStop()
-    else
-        ScrollPtrStart(false, true)
-}
-
-/**
- * One notch of zoom.
- *
- * Ctrl is pressed and released AROUND EACH NOTCH rather than held down for
- * the whole drag. Holding it would be smoother in the handful of apps that
- * accumulate, but it means a synthetic Ctrl Down whose Up depends on the
- * drag ending cleanly -- and a stuck Ctrl on a reading workstation turns
- * every subsequent keystroke into a shortcut. Per-notch cannot stick.
- */
-SendZoomRaw(dir) {
-    SafeSend("{Blind}^{" dir " 1}")
-}
-
-SPTick(*) {
-    Critical "On"                            ; shares g_ScrollPtr/g_SPAcc* with
-    global g_SPAccX, g_SPAccY                ; the hook threads (cf. MovePoll,
-    if !IsObject(g_ScrollPtr) {              ; Watchdog): a stop mid-tick used
-                                             ; to leave this dereferencing 0
-        SetTimer(, 0)                        ; the timer outlived its state
-        return
-    }
-    RM_GetPos(&x, &y)
-    dx := x - g_ScrollPtr.ax
-    dy := y - g_ScrollPtr.ay
-    if (dx = 0 && dy = 0)
-        return
-    zoom := g_ScrollPtr.HasProp("zoom") && g_ScrollPtr.zoom
-    if Cfg("scrollPtrPin")
-        DllCall("SetCursorPos", "int", g_ScrollPtr.ax, "int", g_ScrollPtr.ay)
-    else {
-        g_ScrollPtr.ax := x                  ; free cursor: each tick measures
-        g_ScrollPtr.ay := y                  ; the step, not the total offset
-    }
-    px := Max(Cfg("scrollPtrPx"), 1)
-    inv := Cfg("scrollPtrInvert") ? -1 : 1
-    g_SPAccY += dy * inv
-    g_SPAccX += dx * inv
-    cap := Max(Cfg("scrollPtrMax"), 1)       ; a teleport or a lost tick must
-    n := 0                                   ; never dump 300 notches at once
-    while (Abs(g_SPAccY) >= px && n < cap) {
-        if (g_SPAccY > 0) {                  ; moved DOWN -> page follows the
-            if zoom                          ; hand -> wheel up
-                SendZoomRaw("WheelUp")
-            else
-                SendWheelRaw("WheelUp", 1)
-            g_SPAccY -= px
-        } else {
-            if zoom
-                SendZoomRaw("WheelDown")
-            else
-                SendWheelRaw("WheelDown", 1)
-            g_SPAccY += px
-        }
-        n += 1
-    }
-    if zoom {
-        g_SPAccX := 0.0                      ; there is no sideways zoom
-        return
-    }
-    n := 0
-    while (Abs(g_SPAccX) >= px && n < cap) {
-        if (g_SPAccX > 0) {
-            SendWheelRaw("WheelLeft", 1)
-            g_SPAccX -= px
-        } else {
-            SendWheelRaw("WheelRight", 1)
-            g_SPAccX += px
-        }
-        n += 1
-    }
-    if (Abs(g_SPAccY) > px * cap)            ; drop what the cap could not
-        g_SPAccY := 0.0                      ; emit rather than owing it
-    if (Abs(g_SPAccX) > px * cap)
-        g_SPAccX := 0.0
-}
+; ── §7  POINTER (click lock, monitor teleport) ──────────────────────────────────
 
 ; --- click lock (v0.3.1) ---------------------------------------------------------
 ; Hold a mouse button, tap the input bound to "Click lock", and the button
@@ -5953,14 +4607,17 @@ SPTick(*) {
 
 ; Which input to latch: the row's value, else the mouse button currently
 ; down (newest wins), else the one physically held, else LButton.
-ClickLockTarget(v) {
+; skip = the input that fired the lock: "whichever button is held" must
+; never pick the lock's own trigger (it is down too, and newest).
+ClickLockTarget(v, skip := "") {
     if (v != "")
         return v
     best := ""
     bestTick := -1
     for name, st in g_BS {
-        if (!IsMouseInput(name) || !st.down || st.consumed)
-            continue
+        if (name = skip || !IsMouseInput(name) || !st.down || st.consumed
+            || (IsObject(st.spec) && st.spec.layerHost))   ; hosts hold layers,
+            continue                                        ; not drags
         if (st.pressTick >= bestTick) {
             bestTick := st.pressTick
             best := name
@@ -5969,7 +4626,8 @@ ClickLockTarget(v) {
     if (best != "")
         return best
     for b in BUTTONS {
-        if RM_KeyHeld(b)
+        if (b != skip && RM_KeyHeld(b)
+            && !((s := BS(b)) && IsObject(s.spec) && s.spec.layerHost))
             return b
     }
     ; NOTHING is held. This used to fall through to "LButton", which latched
@@ -5979,13 +4637,13 @@ ClickLockTarget(v) {
     return ""
 }
 
-ClickLockToggle(v) {
+ClickLockToggle(v, self := 0) {
     global g_ClickLock
     if IsObject(g_ClickLock) {
         ClickLockRelease()
         return
     }
-    src := ClickLockTarget(ResolveInputValue(v))
+    src := ClickLockTarget(ResolveInputValue(v), IsObject(self) ? self.btn : "")
     if (src = "") {
         HUD("Click lock: hold a mouse button first", "warn")
         return
@@ -5997,6 +4655,14 @@ ClickLockToggle(v) {
     }
     held := src
     st := BS(src)
+    ; An UNHOOKED button's physical release reaches the OS and undoes the
+    ; latch at once, leaving g_ClickLock set with nothing held. The Settings
+    ; hotkey has no row to make SyncHooks hook the button, so refuse here.
+    if (IsMouseInput(src) && !g_HookState.Has(src)) {
+        HUD("Click lock: add a Click lock row for " InputLabel(src)
+            . " (Mouse page) so RadMapper can hold it", "warn")
+        return
+    }
     if (st && st.down && !st.consumed && st.mode = "passthru") {
         ; The engine already has a synthetic down out for this button -- latch
         ; THAT (following a remap through passBtn) and withhold its up.
@@ -6027,7 +4693,10 @@ ClickLockToggle(v) {
             st.usedAsMod := true
             st.consumed := true
         }
-        SendNativeDown(held)
+        ; a press that went through the gate natively is already down in the
+        ; OS: a second Down would restart the drag under the user's hand
+        if (st || !GetKeyState(held))
+            SendNativeDown(held)
     }
     g_ClickLock := {held: held, src: src}
     ClickLockWatchStart()
@@ -6183,6 +4852,8 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
         return
     TeleportSignalStop()
     prev := LayerStack.ActiveLayer
+    edges := []
+    ring := 0
     try {
         t := 6
         w := mon.r - mon.l
@@ -6191,7 +4862,6 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
             ? [[mon.l, mon.t, w, t], [mon.l, mon.b - t, w, t],
                [mon.l, mon.t, t, h], [mon.r - t, mon.t, t, h]]
             : []                             ; ring only
-        edges := []
         for sp in specs {
             L := Layer(sp[1], sp[2], sp[3], sp[4], "RadTeleEdge")
             LayerStack.ActiveLayer := L
@@ -6219,6 +4889,16 @@ TeleportSignal(mon, cx, cy, showEdges := true) {
         if IsObject(prev)
             LayerStack.ActiveLayer := prev
         Problem("tele-signal", "teleport signal failed: " e.Message)
+        if !IsObject(g_TeleSig) {            ; built part-way: nobody owns these
+            for L in edges {
+                try g_PassThru.Delete(L.hwnd)
+                try L.Dispose()
+            }
+            if IsObject(ring) {
+                try g_PassThru.Delete(ring.hwnd)
+                try ring.Dispose()
+            }
+        }
         TeleportSignalStop()
     }
 }
@@ -6357,19 +5037,25 @@ FollowTick(*) {
         if GetKeyState(b, "P")
             return
     }
-    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr))
+    if IsObject(g_ClickLock)
         return
     ; 2b. ... and a gesture whose holder is a KEY is invisible to the loop
-    ;     above. A radial menu and the switcher CHOOSE BY POINTER POSITION,
+    ;     above. The switcher CHOOSES BY POINTER POSITION,
     ;     the keyboard pointer may be holding LButton itself, and a moddrag
     ;     holds it synthetically (which reads as up under "P"). Warping now
-    ;     commits the wrong slice or throws the drag across the study.
-    if (IsObject(g_Radial) || IsObject(g_AppSw))
+    ;     picks the wrong window or throws the drag across the study.
+    if IsObject(g_AppSw)
         return
     if (IsSet(Warp) && Warp.active)
         return
     if HandBusy()
         return
+    ; A PowerScribe/PACS delivery holds the foreground for a moment and
+    ; hands it back: adopt the window instead of warping to it and back.
+    if (g_PSBusy || g_PSQueue.Length) {
+        g_FollowLast := hwnd
+        return
+    }
     ; 3. our own windows: the settings GUI and the toast are not destinations
     if (g_OurHwnds.Has(hwnd) || OwnWindowAt(hwnd))
         return
@@ -6501,9 +5187,11 @@ FocusSignal(x, y) {
 
 ; --- monitor teleport ---------------------------------------------------------
 DoTeleport(v) {
-    if (v = "prev" || v = "-1" || v = "left" || v = "l")
+    ; SameText on the signed forms: "1" = "+1" (and ==) are NUMERIC, so
+    ; screen 1 used to mean "next screen".
+    if (v = "prev" || SameText(v, "-1") || v = "left" || v = "l")
         TeleportMonitor(-1)                  ; monitors are ordered by X, so
-    else if (v = "next" || v = "+1" || v = "right" || v = "r")
+    else if (v = "next" || SameText(v, "+1") || v = "right" || v = "r")
         TeleportMonitor(1)                   ; prev/next = left/right
     else if IsInteger(v)
         TeleportToIndex(Integer(v))
@@ -6608,23 +5296,9 @@ MonitorWorkAt(px, py) {
 }
 
 _MonitorsByX() {
-    arr := []
-    loop MonitorGetCount() {
-        MonitorGet(A_Index, &l, &t, &r, &b)
-        arr.Push({l: l, t: t, r: r, b: b})
-    }
-    i := 2
-    while (i <= arr.Length) {
-        key := arr[i]
-        j := i - 1
-        while (j >= 1 && arr[j].l > key.l) {
-            arr[j + 1] := arr[j]
-            j -= 1
-        }
-        arr[j + 1] := key
-        i += 1
-    }
-    return arr
+    ; the same screens, in the same order, as every station feature
+    ; (winplace "2", the keyboard pointer): 0x0 panels dropped, left then top
+    return StationMons()
 }
 
 
@@ -6670,6 +5344,7 @@ AppSwitchOpen(st) {
         HUD("Nothing to switch to", "warn")
         return
     }
+    AppSwitchBindKeys(true)
     g_AppSw := {list: list,
                 idx: 1,                      ; 1 is the CURRENT window; the
                 lyr: 0,                      ;   first step moves off it
@@ -6771,15 +5446,19 @@ AppSwitchList() {
 ; underneath. In a PowerScribe report field that is a keystroke eating text.
 ; A hotkey consumes the key instead, and only while the switcher is showing;
 ; everywhere else Delete stays completely native.
-AppSwitchBindKeys() {
+; Delete is live ONLY while the switcher is up (on = true in AppSwitchOpen,
+; false in AppSwitchClose): a context hotkey costs every Delete press in
+; every program a round trip to this thread.
+AppSwitchBindKeys(on := false) {
     static bound := false
-    if bound
-        return
+    static ctx := (*) => IsObject(g_AppSw)
     try {
-        HotIf((*) => IsObject(g_AppSw))
-        HookChanged()
-        Hotkey("Delete", AppSwitchDelKey, "On")
-        bound := true
+        HotIf(ctx)
+        if !bound {
+            Hotkey("Delete", AppSwitchDelKey, on ? "On" : "Off")
+            bound := true
+        } else
+            Hotkey("Delete", on ? "On" : "Off")
     } catch {
         ; unregistrable: the feature is simply unavailable, as before
     } finally {
@@ -6854,14 +5533,15 @@ AppSwitchClose(commit) {
     SetTimer(AppSwitchShotTick, 0)
     sw := g_AppSw
     g_AppSw := 0
+    if IsObject(sw)
+        AppSwitchBindKeys(false)
     if !IsObject(sw)
         return
     if IsObject(sw.lyr)
         try sw.lyr.Dispose()
     ; A thumbnail of a reading station is a picture of a patient. They live
     ; in memory for as long as the panel is open and are freed the moment it
-    ; closes -- nothing here is ever written to disk. Same rule as the
-    ; clipboard shelf.
+    ; closes -- nothing here is ever written to disk.
     if IsObject(sw.shots) {
         for hw, bmp in sw.shots {
             if IsObject(bmp)
@@ -7582,7 +6262,12 @@ LayoutSlotTarget(slot, lay, mons, reserved, exes := 0, key := "") {
     same := (key = MGet(lay, "station", ""))
     sx := MGet(slot, "x", 0), sy := MGet(slot, "y", 0)
     sw := MGet(slot, "w", 0), sh := MGet(slot, "h", 0)
-    if (same && slot.Has("x"))
+    ; Sizes alone make the key, so the same screens arranged differently
+    ; (primary changed, a twin station) match too: take the stored rect only
+    ; when its centre really lies on the screen it was chosen for.
+    if (same && slot.Has("x")
+        && sx + sw // 2 >= m.l && sx + sw // 2 < m.r
+        && sy + sh // 2 >= m.t && sy + sh // 2 < m.b)
         return {x: sx, y: sy, w: sw, h: sh, mon: m, adapted: false}
     ww := Max(m.wr - m.wl, 1)
     wh := Max(m.wb - m.wt, 1)
@@ -7828,6 +6513,10 @@ LayoutCapture(name) {
  * Find the window a slot means, claiming it so no later slot can take it.
  * See the four-step rule in the section header.
  */
+; A window class with its per-launch GUID removed:
+; "HwndWrapper[PS;;7cde...485]" -> "HwndWrapper[PS]".
+ClsKey(c) => RegExReplace(c, ";;[0-9A-Fa-f-]{36}\]$", "]")
+
 LayoutMatch(slot, wins, claimed) {
     exe := MGet(slot, "exe", "")
     title := MGet(slot, "title", "")
@@ -7839,14 +6528,22 @@ LayoutMatch(slot, wins, claimed) {
     ; class changes every launch, so a stored PS class simply never matches
     ; and those slots fall through to the old exe-only behaviour -- which is
     ; the right outcome, not a regression.
-    cls := MGet(slot, "cls", "")
+    ; WPF/WinForms classes carry a per-launch GUID; compare without it.
+    cls := ClsKey(MGet(slot, "cls", ""))
     ; 1. exe + exact title
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe && wnd.title = title)
             return wnd
     }
-    ; 2. exe + title prefix
+    ; 2. exe + title prefix -- same class first, so two windows of one exe
+    ;    whose titles share a prefix do not swap
     if (pref != "") {
+        for wnd in wins {
+            if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
+                && SubStr(wnd.title, 1, 12) = pref
+                && (cls = "" || ClsKey(wnd.cls) = cls))
+                return wnd
+        }
         for wnd in wins {
             if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
                 && SubStr(wnd.title, 1, 12) = pref)
@@ -7856,14 +6553,14 @@ LayoutMatch(slot, wins, claimed) {
     ; 3. exe + class + ordinal
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
-            && (cls = "" || wnd.cls = cls)
+            && (cls = "" || ClsKey(wnd.cls) = cls)
             && wnd.ord = MGet(slot, "ord", 0))
             return wnd
     }
     ; 4. exe + class, anything left
     for wnd in wins {
         if (!claimed.Has(wnd.hwnd) && wnd.exe = exe
-            && (cls = "" || wnd.cls = cls))
+            && (cls = "" || ClsKey(wnd.cls) = cls))
             return wnd
     }
     return 0
@@ -7932,6 +6629,9 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             continue
         try {
             id := "ahk_id " wnd.hwnd
+            ; a hung window would block this thread on every call below
+            if (enforce && DllCall("user32\IsHungAppWindow", "ptr", wnd.hwnd))
+                continue
             mm := WinGetMinMax(id)
             if (enforce && mm = -1)
                 continue
@@ -7950,6 +6650,10 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             ; window can acquire a dialog between enumeration and this line.
             if IsPSExe(wnd.exe) {
                 if (mm = -1)
+                    continue
+                ; the guard never restores a MAXIMISED PowerScribe (it runs
+                ; off a timer; un-maximising PS is the standing rule's case)
+                if (enforce && mm = 1)
                     continue
                 psOwner := 0
                 try psOwner := DllCall("user32\GetWindow", "ptr", wnd.hwnd,
@@ -7995,7 +6699,7 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
                 ; window as a normal-state window and asked for that state
                 ; back, so restoring is the instruction, not a side effect.
                 WinRestore(id)
-                WinMove(sx, sy, sw, sh, id)
+                WinMoveSure(sx, sy, sw, sh, id)
                 moved += 1
                 continue
             }
@@ -8003,9 +6707,21 @@ LayoutApplyRows(lay, enforce := false, newOnly := false) {
             if (!enforce
                 || Abs(cx - sx) > LAYOUT_TOL || Abs(cy - sy) > LAYOUT_TOL
                 || Abs(cw - sw) > LAYOUT_TOL || Abs(ch - sh) > LAYOUT_TOL) {
-                WinMove(sx, sy, sw, sh, id)
+                ; Three guard moves in a row to the same rect and the window
+                ; is still off it: the app refuses that rect (minimum size,
+                ; DPI rounding). Moving it every 1.5 s is a fight, not a fix.
+                if enforce {
+                    tk := sx "," sy "," sw "," sh
+                    n0 := (g_LayoutGot.Has(wnd.hwnd) && g_LayoutGot[wnd.hwnd].t = tk)
+                        ? g_LayoutGot[wnd.hwnd].n : 0
+                    if (n0 >= 3)
+                        continue
+                    g_LayoutGot[wnd.hwnd] := {t: tk, n: n0 + 1}
+                }
+                WinMoveSure(sx, sy, sw, sh, id, enforce)
                 moved += 1
-            }
+            } else if (enforce && g_LayoutGot.Has(wnd.hwnd))
+                g_LayoutGot.Delete(wnd.hwnd)   ; on target: count afresh
         }
     }
     return moved
@@ -8030,6 +6746,7 @@ LayoutApply(name) {
         return
     }
     n := LayoutApplyRows(lay, false, false)
+    name := MGet(lay, "name", name)          ; the stored spelling keys the guard
     if MGet(lay, "guard", 0)
         LayoutGuardArm(name)
     HUD("Layout '" name "' — " n " window" (n = 1 ? "" : "s") " placed"
@@ -8059,7 +6776,32 @@ LayoutChoose() {
         items, LayoutApply)
 }
 
+; WinMove, then once more if the window did not land where asked. A
+; per-monitor-DPI app moved onto a screen with different scaling applies
+; Windows' suggested rectangle on WM_DPICHANGED (1.5x the size going from
+; 100% to 150%); the second move lands after that rescale.
+; async = the guard's timer path: SetWindowPos with SWP_ASYNCWINDOWPOS, so a
+; busy PowerScribe/PACS can never hold this thread (and every hotkey waiting
+; on it). No second pass there: the next guard tick is the second pass.
+WinMoveSure(x, y, w, h, id, async := false) {
+    if async {
+        try DllCall("user32\SetWindowPos", "ptr", WinExist(id), "ptr", 0,
+            "int", x, "int", y, "int", w, "int", h, "uint", 0x4014)
+        return
+    }
+    WinMove(x, y, w, h, id)
+    try {
+        WinGetPos(&ax, &ay, &aw, &ah, id)
+        if (Abs(ax - x) > 2 || Abs(ay - y) > 2 || Abs(aw - w) > 2 || Abs(ah - h) > 2)
+            WinMove(x, y, w, h, id)
+    }
+}
+
+; hwnd -> {t: target rect, n: consecutive guard moves} (see LayoutApplyRows)
+global g_LayoutGot := Map()
+
 LayoutGuardArm(name) {
+    g_LayoutGot.Clear()
     global g_LayoutGuard
     g_LayoutGuard := name
     ; Arming is a fresh start: "new windows" means new SINCE YOU ARMED IT,
@@ -8067,7 +6809,7 @@ LayoutGuardArm(name) {
     ; candidate again. Without this, disarming and re-arming mode 2 did
     ; nothing at all until the windows were closed and reopened.
     g_LayoutPlaced[name] := Map()
-    SetTimer(LayoutGuardTick, Cfg("layoutGuardMs"))
+    SetTimer(LayoutGuardTick, ClampInt(Cfg("layoutGuardMs"), 250, 60000, 1500))
 }
 
 LayoutGuardDisarm() {
@@ -8084,11 +6826,21 @@ LayoutGuardTick() {
         SetTimer(LayoutGuardTick, 0)
         return
     }
-    ; Never fight a drag that is in progress, and never while our own window
-    ; is being resized by its grip.
-    if (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
+    ; Never fight a drag that is in progress -- a physical one, or one the
+    ; engine holds (moddrag, dragmove, the keyboard pointer's grab), nor the
+    ; switcher -- and never while our own window is being resized.
+    if (HandBusy() || IsObject(g_AppSw)
+        || (IsSet(Warp) && (Warp.active || Warp.grabbing)))
         return
     if Atlas.resizing
+        return
+    ; Nor while the monitor set is changing: until StationSettled has run,
+    ; the layout's screens are not all there and adapting would fold every
+    ; window onto the ones that are.
+    try {
+        if (StationKey() != g_StationKey)
+            return
+    } catch
         return
     lay := LayoutByName(g_LayoutGuard)
     if !IsObject(lay) {
@@ -8127,7 +6879,7 @@ SyncLayoutGuard() {
     if (g_LayoutGuard != "") {
         lay := LayoutByName(g_LayoutGuard)
         if (IsObject(lay) && MGet(lay, "guard", 0)) {
-            SetTimer(LayoutGuardTick, Cfg("layoutGuardMs"))
+            SetTimer(LayoutGuardTick, ClampInt(Cfg("layoutGuardMs"), 250, 60000, 1500))
             return
         }
         LayoutGuardDisarm()
@@ -8215,7 +6967,7 @@ StationSettled() {
         busy := true
     if (!busy && Warp.active)
         busy := true
-    if (!busy && (IsObject(g_Radial) || IsObject(g_AppSw)))
+    if (!busy && IsObject(g_AppSw))
         busy := true
     mons := []
     nMon := -1
@@ -8264,7 +7016,7 @@ StationSettled() {
     if IsObject(lay) {
         n := LayoutApplyRows(lay, false, false)
         if MGet(lay, "guard", 0)
-            LayoutGuardArm(name)
+            LayoutGuardArm(MGet(lay, "name", name))
         if (n > 0 || changed)
             HUD((changed ? "Screens changed: " : "") "'" name "' — " n
                 . " window" (n = 1 ? "" : "s") " placed"
@@ -8408,9 +7160,13 @@ WinPlace(v) {
         n := mons.Length
         if (n = 0)
             return
+        mm := WinGetMinMax(id)
+        if (mm = -1) {                       ; minimised: its rect is -32000
+            WinRestore(id)
+            mm := WinGetMinMax(id)
+        }
         WinGetPos(&x, &y, &w, &h, id)
         cur := MonIndexAt(mons, x + w // 2, y + h // 2)
-        mm := WinGetMinMax(id)
         switch p.screen {
             case "":     tgt := cur
             case "next": tgt := Mod(cur, n) + 1
@@ -8461,7 +7217,7 @@ WinPlace(v) {
             ny := Min(Max(ny, m.wt), m.wb - nh)
             if (mm = -1)
                 WinRestore(id)
-            WinMove(nx, ny, nw, nh, id)
+            WinMoveSure(nx, ny, nw, nh, id)
             HUD("Window moved to screen " tgt, "cyan")
             return
         }
@@ -8471,1323 +7227,11 @@ WinPlace(v) {
         ; restored window's, and the restore is what makes the measurement
         ; true. One DWM call per placement.
         r := WinTileRect(m, tile, WinFrameSlack(id))
-        WinMove(r.x, r.y, r.w, r.h, id)
+        WinMoveSure(r.x, r.y, r.w, r.h, id)
         HUD("Window: " tile " of screen " tgt, "cyan")
     } catch as e {
         Problem("winplace", "window placement failed: " e.Message)
         HUD("Could not move that window", "warn")
-    }
-}
-
-
-; ── §7d  RADIAL MENUS (marking menus) ───────────────────────────────────────
-;
-; A radial menu solves POINTER TRAVEL, which is a measured problem on a
-; reading station rather than a theoretical one. With items arranged around
-; the cursor, every item is the same short distance away and the DIRECTION is
-; constant -- which is what makes it learnable as a gesture, and a gesture
-; costs no travel at all.
-;
-; The design is not open. Kurtenbach and Buxton measured marking-menu error
-; rates staying under 10% at a breadth of 8 and a depth of 2, and rising
-; sharply past either. For a reading room 10% is already too high -- a
-; mis-fired window/level preset is recoverable, a mis-fired "mark as read" is
-; not. So: EIGHT SLICES, ONE LEVEL. Nesting is deliberately not built.
-;
-; Three rules from that literature are load-bearing here:
-;
-;  1. NOVICE AND EXPERT ARE THE SAME GESTURE. The menu is not drawn on press.
-;     Hold and move straight away and it fires on direction alone, with
-;     nothing ever drawn; hold still past the dwell and it fades in so you can
-;     look. Because both paths are one physical action, using the slow form
-;     teaches the fast one. Most implementations get this wrong by always
-;     drawing, which is what turns a marking menu back into a toolbar.
-;  2. IT IS ALWAYS ABORTABLE. Releasing inside the dead zone fires nothing,
-;     and Escape cancels. A gesture that cannot be called off mid-flight will
-;     eventually fire the wrong thing into a report.
-;  3. AT THE CURSOR -- and this is the one deliberate exception to the v0.4.0
-;     rule that moved every HUD off the pointer. That rule is about PASSIVE
-;     notifications sitting over a finding. This is modal, it exists for a few
-;     hundred milliseconds, it is there because you asked for it, and putting
-;     it anywhere else would destroy the only reason to build it.
-;
-; A slice is an ordinary {type, value} action, so the whole existing action
-; table is available with no new executor cases -- and PowerScribe slices
-; route through PSFire automatically, because ps_* actions already do.
-
-global g_Radial := 0       ; live menu {menu, slices, ax, ay, holder, latched,
-                           ;   sel, lyr, t0, drawn, restAt, name}
-; Every wheel layer this process has created and not yet disposed.
-;
-; g_Radial.lyr is the ONE the live menu draws on, and the ordinary paths
-; (RadialRing, RadialClose) dispose it themselves. This list is the floor
-; under them: Layer() creates a window and therefore pumps messages, so a
-; hotkey thread can close or replace the menu while a paint is still inside
-; the constructor, and the layer it hands back would belong to nobody --
-; a click-through wheel left on top of the study with no timer and no
-; reference to tear it down. RadialClose, PanicRelease and Cleanup sweep it.
-global g_RadialLayers := []
-
-; Slice 1 points NORTH and they run clockwise, for 4 and for 8 alike, so the
-; same menu keeps its directions if it grows.
-global RADIAL_DIR4 := ["Up", "Right", "Down", "Left"]
-global RADIAL_DIR8 := ["Up", "Up-right", "Right", "Down-right",
-                       "Down", "Down-left", "Left", "Up-left"]
-; The 9-way ring exists for ONE job: numbered window presets 1-9, clockwise
-; from the top, so the slice number IS the key it sends. 40 degrees a slice
-; is past the 8-way comfort limit, which is why it is the exception and not
-; the default; a preset ring is read (the numbers are printed large), not
-; flicked blind.
-global RADIAL_DIR9 := ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-global RADIAL_MAXDEPTH := 2   ; a menu inside a menu, and no deeper
-
-/** Degrees clockwise from north, 0..360, for a screen-space delta. */
-RadialAngle(dx, dy) {
-    static DEG := 57.29577951308232
-    static PI  := 3.141592653589793
-    x := -dy                                 ; screen y grows downward, so
-    y := dx                                  ;   north is +x in this frame
-    if (x > 0)
-        r := ATan(y / x)
-    else if (x < 0)
-        r := ATan(y / x) + PI
-    else
-        r := (y >= 0) ? (PI / 2) : (-PI / 2)
-    a := r * DEG
-    while (a < 0)
-        a += 360
-    while (a >= 360)
-        a -= 360
-    return a
-}
-
-/** Preserve compass positions when changing between four and eight slots. */
-ResizeMenuSlices(slices, count) {
-    out := []
-    for source in MenuKeepMap(RadialCountFor(slices.Length), count)
-        out.Push(source && slices.Has(source) ? slices[source]
-            : MenuSlice("", "none", ""))
-    return out
-}
-
-; For each slot of a NEW size, which slot of the OLD size feeds it (0 = a
-; fresh blank). Up/Right/Down/Left keep their direction across 4 <-> 8:
-; 4-way slot i sits at 8-way slot 2i-1. The 9-way numbered ring has no
-; compass meaning, so it is filled in order and truncated in order.
-MenuKeepMap(oldCount, newCount) {
-    map := []
-    loop newCount {
-        i := A_Index
-        if (oldCount = newCount)
-            src := i
-        else if (oldCount = 4 && newCount = 8)
-            src := Mod(i, 2) ? (i + 1) // 2 : 0
-        else if (oldCount = 8 && newCount = 4)
-            src := i * 2 - 1
-        else if (oldCount = 4 && newCount = 9)
-            src := (i <= 7 && Mod(i, 2)) ? (i + 1) // 2 : 0
-        else if (oldCount = 9 && newCount = 4)
-            src := i * 2 - 1
-        else
-            src := i <= oldCount ? i : 0          ; 8 <-> 9: in order
-        map.Push(src)
-    }
-    return map
-}
-
-RenameMenuBindings(oldName, newName) {
-    for row in g_Cfg["bindings"] {
-        action := MGet(row, "action", 0)
-        if (MGet(action, "type", "") = "radial"
-            && MGet(action, "value", "") = oldName)
-            action["value"] := newName
-    }
-    ; A radial menu may itself open another menu.
-    for menu in MGet(g_Cfg, "menus", []) {
-        for slice in MGet(menu, "slices", []) {
-            action := MGet(slice, "action", 0)
-            if (MGet(action, "type", "") = "radial"
-                && MGet(action, "value", "") = oldName)
-                action["value"] := newName
-        }
-    }
-}
-
-/** Menu by name; blank name = the best menu for the app in front. */
-RadialFind(name) {
-    menus := MGet(g_Cfg, "menus", [])
-    if (name != "") {
-        for m in menus {
-            if (MGet(m, "name", "") = name)
-                return m
-        }
-        return 0
-    }
-    app := ActiveAppName()
-    fallback := 0
-    for m in menus {
-        ma := MGet(m, "app", "")
-        if (ma != "" && ma = app)
-            return m                         ; an app match always wins
-        if (ma = "" && !IsObject(fallback))
-            fallback := m                    ; first global menu, in order
-    }
-    return fallback
-}
-
-/** The slices that are actually usable, in slice order, with their index. */
-RadialSlices(mn) {
-    out := []
-    raw := MGet(mn, "slices", [])
-    ; The editor writes 4 or 8. Normalize hand-edited/old config to the same
-    ; contract so corrupted input cannot create an unresearched 5- or 12-way
-    ; menu. Missing rows are inert gaps; extra rows never execute.
-    count := RadialCountFor(raw.Length)
-    loop count {
-        sl := raw.Has(A_Index) ? raw[A_Index] : 0
-        act := MGet(sl, "action", 0)
-        live := IsObject(act) && MGet(act, "type", "none") != "none"
-        ; a slice whose action opens another menu: the wheel shows it as a
-        ; door, and resting on it -- or turning a corner on it -- walks
-        ; through. `kids` is how many commands wait behind that door, drawn
-        ; as dots on its rim; `sc` is its live hover scale (v0.6.4).
-        sub := live && MGet(act, "type", "") = "radial"
-               ? String(MGet(act, "value", "")) : ""
-        out.Push({label: MGet(sl, "label", ""),
-                  icon: MGet(sl, "icon", ""),
-                  act: IsObject(act) ? act : 0,
-                  live: live,
-                  sub: sub,
-                  kids: (sub != "") ? RadialKidCount(sub) : 0,
-                  sc: 1.0})
-    }
-    return out
-}
-
-/** 4, 8 or 9 slices, never anything else (see RADIAL_DIR9). */
-RadialCountFor(n) {
-    return n <= 4 ? 4 : (n <= 8 ? 8 : 9)
-}
-
-; ── WEDGES: which directions belong to which slice (v0.6.4a) ─────────────
-;
-; Selection used to be "the nearest slice centre". v0.6.4 replaced it with
-; Kando's scaleWedge(.., 0.5) EVERYWHERE -- an item owning only the inner
-; half of the gap to each neighbour -- and that was one step too far. Dead
-; space is only worth having where a bearing that lands in it MEANS
-; something, and the only ring where it does is a child ring, where it
-; means back.
-;
-;   * A ROOT ring: every slice owns its whole sector. A flick 30 degrees
-;     off north in a 4-way ring is unambiguously north, and 46 degrees is
-;     unambiguously east. There is nothing else it could be: the root has
-;     no way back, so a leftover bearing would fire nothing and read as a
-;     dropped button press. Release in the HUB, or press Escape, or click:
-;     those are the ways to cancel, and they are deliberate acts.
-;   * A CHILD ring: half the gap, as v0.6.4 made it. What is left over --
-;     including the whole direction the ring was entered from -- is BACK,
-;     which commits nothing. "I did not mean to walk in here" lands
-;     somewhere harmless.
-;   * A NUMBERED child ring (the 9-way preset ring): full sectors again,
-;     because there the slot IS the number and all nine have to be
-;     reachable. It keeps a zero-span `back` marker so the parent node and
-;     its connector are still drawn, but no bearing selects it.
-;
-; Slice DIRECTIONS do not move in any of this: a root ring is the same
-; fixed compass it has always been.
-
-/** True when a bearing (degrees from north) lies in the arc start..end. */
-RadialAngleIn(a, start, end) {
-    span := Mod(Mod(end - start, 360) + 360, 360)
-    if (span <= 0.0001)
-        return false
-    d := Mod(Mod(a - start, 360) + 360, 360)
-    return d <= span
-}
-
-/**
- * Where slice i points, in degrees clockwise from north.
- *
- * A root ring is the fixed compass (slice 1 north, then clockwise) that the
- * whole feature's muscle memory is built on. A CHILD ring is spaced
- * 360/(n+1) starting one step past the direction it was entered from, so
- * the way back keeps a slot of its own and no command is ever stacked on
- * top of it (Kando computeItemAngles). A numbered preset ring is exempt:
- * there the slot IS the number, and a preset that moves is a preset nobody
- * can learn.
- */
-RadialSliceAngles(n, parentAngle := -1, numbered := false) {
-    out := []
-    if (parentAngle < 0 || numbered) {
-        step := 360.0 / n
-        loop n
-            out.Push(Mod((A_Index - 1) * step, 360))
-        return out
-    }
-    step := 360.0 / (n + 1)
-    loop n
-        out.Push(Mod(Mod(parentAngle + A_Index * step, 360) + 360, 360))
-    return out
-}
-
-/**
- * The arc each slice answers to, plus the "back" arc.
- *
- * Returns {slices: [{center, start, end}, ...], back: 0 | {center, start,
- * end}}.
- *
- * A FULL ring -- the root, and the numbered preset ring at any depth --
- * gives every slice its WHOLE sector, gap/2 to each side. There is nothing
- * to be gained by leaving dead space there: the root has no way back for a
- * leftover bearing to mean, so a flick 30 degrees off north would simply do
- * nothing and read as a dropped press, and the preset ring is nine numbers
- * that must each be reachable. A CHILD ring is the one that keeps dead
- * space: a wedge is the slice's own direction plus a quarter of the gap to
- * each neighbour -- half the gap in total -- and everything left over,
- * including the parent's own slot, is `back`, which commits nothing. That
- * is where "I did not mean to walk in here" needs somewhere harmless to
- * land.
- *
- * A numbered CHILD ring is the exception to the exception: its slices are
- * full sectors, so nothing is left over, and `back` is a zero-span marker
- * at the parent direction. It exists only so the parent node and its
- * connector are still drawn -- RadialPickIn never returns -1 there.
- */
-RadialWedges(n, parentAngle := -1, numbered := false) {
-    angles := RadialSliceAngles(n, parentAngle, numbered)
-    full := (parentAngle < 0 || numbered)
-    gap := full ? (360.0 / n) : (360.0 / (n + 1))
-    half := full ? (gap / 2) : (gap / 4)
-    out := {slices: [], back: 0}
-    for a in angles
-        out.slices.Push({center: a, start: Mod(a - half + 360, 360),
-                         end: Mod(a + half, 360)})
-    ; A full ring's wedges MEET, so a bearing exactly on a shared edge is in
-    ; both: RadialPickIn scans in order, so it goes to the lower-numbered
-    ; slice. Deliberate -- a boundary has to belong to somebody.
-    if full {
-        if (numbered && parentAngle >= 0) {
-            pa := Mod(Mod(parentAngle, 360) + 360, 360)
-            out.back := {center: pa, start: pa, end: pa}
-        }
-        return out
-    }
-    pa := Mod(Mod(parentAngle, 360) + 360, 360)
-    bs := pa, be := pa, bd := 400.0, ad := 400.0
-    for w in out.slices {
-        d := Mod(Mod(pa - w.end, 360) + 360, 360)
-        if (d < bd) {
-            bd := d
-            bs := w.end
-        }
-        d := Mod(Mod(w.start - pa, 360) + 360, 360)
-        if (d < ad) {
-            ad := d
-            be := w.start
-        }
-    }
-    out.back := {center: pa, start: bs, end: be}
-    return out
-}
-
-/** Slice index for a bearing: 0 = no slice (cancel), -1 = back. */
-RadialPickIn(wedges, angle) {
-    for i, w in wedges.slices {
-        if RadialAngleIn(angle, w.start, w.end)
-            return i
-    }
-    return IsObject(wedges.back) ? -1 : 0
-}
-
-/**
- * Kando's GestureDetector, as a pure function over a list of {x, y}.
- *
- * A corner is the end of a straight run at least `minLen` long followed by
- * a step of at least `jitter` that turns by more than `minAngle` degrees.
- * Returns the INDEX of the point where the hand turned, or 0 while the
- * stroke is still straight. That point, not the current one, is where the
- * decision was made, so it is where the next ring belongs.
- */
-RadialCornerAt(pts, minLen := 90, minAngle := 20, jitter := 10) {
-    static DEG := 57.29577951308232
-    if (!IsObject(pts) || pts.Length < 3)
-        return 0
-    s := pts[1]
-    i := 2
-    while (i < pts.Length) {
-        e := pts[i]
-        m := pts[i + 1]
-        ax := e.x - s.x
-        ay := e.y - s.y
-        bx := m.x - e.x
-        by := m.y - e.y
-        la := Sqrt(ax * ax + ay * ay)
-        lb := Sqrt(bx * bx + by * by)
-        if (la >= minLen && lb >= jitter) {
-            c := (ax * bx + ay * by) / (la * lb)
-            c := (c > 1) ? 1 : ((c < -1) ? -1 : c)
-            if (ACos(c) * DEG > minAngle)
-                return i
-        }
-        i += 1
-    }
-    return 0
-}
-
-/** Distance from a {x, y} point to a screen position. */
-RadialDist(p, x, y) {
-    return Sqrt((p.x - x) * (p.x - x) + (p.y - y) * (p.y - y))
-}
-
-/** One frame of an ease-out toward `target`; ms is the whole transit. */
-RadialEaseTo(cur, target, dt, ms := 250) {
-    if (ms <= 0 || dt >= ms)
-        return target
-    k := (dt * 3.0) / ms                     ; ~95% of the way in `ms`
-    if (k >= 1)
-        return target
-    v := cur + (target - cur) * k
-    return (Abs(target - v) < 0.002) ? target : v
-}
-
-/**
- * Kando's pointer-reactive scale: 1.15 under the pointer, easing to 1.0 at
- * the opposite side of the ring. The hovered slice is a flat 1.15 so the
- * thing being chosen is never the second biggest.
- */
-RadialHoverScale(center, ptrAngle, hovered := false) {
-    if hovered
-        return 1.15
-    if (ptrAngle < 0)
-        return 1.0
-    d := Mod(Mod(center - ptrAngle, 360) + 360, 360)
-    if (d > 180)
-        d := 360 - d
-    return 1.15 - (d / 180) ** 0.25 * 0.15
-}
-
-/**
- * Keep a ring's centre on screen (Kando clampToMonitor, margin 160 for a
- * 12-item ring; 120 here, where eight slices sit inside a smaller radius).
- * Only a CHILD ring is clamped: a root ring must agree with the cursor that
- * opened it, so it is still allowed to run off the edge.
- */
-RadialClampAnchor(x, y, margin := 120) {
-    m := MonitorAt(x, y)
-    mw := Min(margin, (m.r - m.l) // 2 - 1)
-    mh := Min(margin, (m.b - m.t) // 2 - 1)
-    return {x: Min(Max(x, m.l + mw), m.r - mw),
-            y: Min(Max(y, m.t + mh), m.b - mh)}
-}
-
-/** How many live slices a menu has -- the grandchild dots on its door. */
-RadialKidCount(name) {
-    mn := RadialFind(name)
-    if !IsObject(mn)
-        return 0
-    n := 0
-    for sl in MGet(mn, "slices", []) {
-        act := MGet(sl, "action", 0)
-        if (IsObject(act) && MGet(act, "type", "none") != "none")
-            n += 1
-    }
-    return Min(n, 9)
-}
-
-/** What the hub prints under a slice's name: its keys, or what it does. */
-RadialShortcut(sl) {
-    act := IsObject(sl) ? sl.act : 0
-    if !IsObject(act)
-        return ""
-    t := String(MGet(act, "type", ""))
-    v := String(MGet(act, "value", ""))
-    switch t {
-        case "keys", "keysrepeat", "ps_keys", "pacs_keys":
-            return v
-        case "radial":
-            return "opens " (v = "" ? "another menu" : v)
-        case "text":
-            return "types text"
-    }
-    return ActLabelOf(t)
-}
-
-/** Ease every slice toward its hover scale. True when anything moved. */
-RadialAnimStep(R, now) {
-    dt := now - R.animAt
-    R.animAt := now
-    on := Cfg("radialAnim") ? true : false
-    moved := false
-    i := 1
-    for sl in R.slices {
-        t := RadialHoverScale(R.wedges.slices[i].center, R.ptrAngle, i = R.sel)
-        v := on ? RadialEaseTo(sl.sc, t, dt, 250) : t
-        if (Abs(v - sl.sc) > 0.0015)
-            moved := true
-        sl.sc := v
-        i += 1
-    }
-    return moved
-}
-
-/**
- * Point the live menu at a ring: the slices, where it is centred, and which
- * way its parent lies (-1 at the root). Shared by open, walk-in and back,
- * so a ring is described in exactly one place.
- */
-RadialRing(R, mn, slices, ax, ay, parentAngle) {
-    global g_PassThru
-    ; Uninterruptible: this swaps the layer AND the geometry that the paint
-    ; reads. A hotkey thread landing between the two paints the new ring
-    ; with the old wedges, or draws onto a layer that has just been
-    ; disposed.
-    Critical "On"
-    if IsObject(R.lyr) {                     ; the old wheel sat at the old
-        try g_PassThru.Delete(R.lyr.hwnd)    ; anchor; the new one is drawn
-        try R.lyr.Dispose()                  ; fresh where the hand is
-        R.lyr := 0
-    }
-    ; Nothing is live between here and the paint that follows, so the whole
-    ; register is stale: take the disposed layer out of it (and anything an
-    ; interrupted paint left behind) rather than letting it grow one entry
-    ; per ring for the length of the gesture.
-    RadialSweepLayers()
-    for sl in slices
-        sl.sc := 1.0
-    R.menu := mn
-    R.name := MGet(mn, "name", "menu")
-    R.slices := slices
-    R.ax := ax
-    R.ay := ay
-    R.parentAngle := parentAngle
-    R.wedges := RadialWedges(slices.Length, parentAngle, slices.Length > 8)
-    R.sel := 0
-    R.lastSel := -1
-    R.ptrAngle := -1
-    R.pts := []
-    R.t0 := A_TickCount
-    R.restAt := A_TickCount
-    R.moveAt := A_TickCount
-    R.animAt := A_TickCount
-    R.fadeAt := 0
-}
-
-; ── clicking out of a live menu ──────────────────────────────────────────
-;
-; The wheel is drawn on a NoActivate, click-through layer, so a mouse button
-; the config does not hook stays fully native and its click goes THROUGH the
-; menu into the study. OnPressHK cancels the menu for every button the engine
-; already hooks; these hotkeys cover the rest -- LButton, RButton and MButton
-; when nothing references them -- and exist only while a non-trial menu is
-; open, so the three buttons are byte-for-byte native at every other moment.
-; Practice menus included (v0.6.4a): the trial exemption meant a practice
-; wheel could only be closed by Escape or by waiting out its 20 s floor.
-; Registered on open, removed on close: nothing outlives the menu.
-global g_RadialCancelKeys := []   ; buttons hooked for the current menu
-
-RadialCancelActive(*) {
-    return IsObject(g_Radial) ? 1 : 0
-}
-
-RadialCancelHit(btn, *) {
-    Critical "On"
-    if !IsObject(g_Radial)
-        return
-    RadialClose(false)                       ; cancel: a menu never commits
-    HUD("Menu cancelled", "mute")            ; on a click
-}
-
-RadialBindCancel() {
-    global g_RadialCancelKeys
-    RadialUnbindCancel()
-    ; try/finally, not try alone: a throw inside must never leave OUR context
-    ; installed, or the next plain Hotkey() call in the process silently
-    ; inherits it (the engine's own hooks are registered that way).
-    try {
-        HotIf(RadialCancelActive)
-        HookChanged()
-        for b in ["LButton", "RButton", "MButton"] {
-            if g_HookState.Has(b)            ; already ours: OnPressHK cancels
-                continue
-            try {
-                Hotkey("*" b, RadialCancelHit.Bind(b), "On")
-                g_RadialCancelKeys.Push(b)
-            }
-        }
-    } catch {
-        ; a menu that could not hook the spare buttons still works; the
-        ; unhooked ones simply stay native, as they were before v0.6.2a
-    } finally {
-        HotIf()
-    }
-}
-
-RadialUnbindCancel() {
-    global g_RadialCancelKeys
-    if (g_RadialCancelKeys.Length = 0)
-        return
-    try {
-        HotIf(RadialCancelActive)            ; Off must run under the SAME
-        HookChanged()
-        for b in g_RadialCancelKeys          ; context the hotkey was made in
-            try Hotkey("*" b, "Off")
-    } catch {
-    } finally {
-        HotIf()
-    }
-    g_RadialCancelKeys := []
-}
-
-/**
- * Open a menu.
- *
- * holder = the input state holding it open: release commits, release in the
- * hub or Escape cancels. A menu is only ever opened by a HOLD (v0.7): the
- * tap-opened "latched" menu that fired by resting in a slice is gone, so a
- * hand on the mouse always has a way out. Practice (trial) draws at once and
- * fires nothing.
- */
-RadialOpen(name, holder := 0, trial := false) {
-    global g_Radial
-    if IsObject(g_Radial)
-        RadialClose(false)
-    mn := RadialFind(name)
-    if !IsObject(mn) {
-        HUD(name = "" ? "No radial menu for this app"
-                      : ("No radial menu named " name), "warn")
-        return
-    }
-    slices := RadialSlices(mn)
-    if (slices.Length < 2) {
-        HUD("That menu has nothing in it", "warn")
-        return
-    }
-    RM_GetPos(&ax, &ay)
-    now := A_TickCount
-    ; v0.6.4 adds, to the state that was always here: which ring these slices
-    ; belong to (parentAngle, wedges, stack), the stroke that is choosing one
-    ; of them (pts, ptrAngle, moveAt) and the animation clock (animAt, fadeAt).
-    g_Radial := {menu: mn,
-                 name: MGet(mn, "name", "menu"),
-                 slices: slices,
-                 ax: ax, ay: ay,
-                 holder: IsObject(holder) ? holder : 0,
-                 latched: trial ? true : false,
-                 sel: 0, lastSel: -1, trial: trial, target: FgHwnd(),
-                 targetPid: RadialPidOf(FgHwnd()),
-                 lyr: 0, drawn: false, depth: 1,
-                 ; t0 is the PER-RING clock (the dwell before a ring is
-                 ; drawn, and RadialRing restarts it on every walk-in and
-                 ; walk-back). openedAt is the whole menu's age, and it is
-                 ; what the safety floors below measure, so a gesture that
-                 ; walks in and out of three rings cannot keep resetting the
-                 ; timer that is meant to be a ceiling on the whole thing.
-                 t0: now, openedAt: now, restAt: now,
-                 parentAngle: -1,
-                 wedges: RadialWedges(slices.Length, -1, slices.Length > 8),
-                 stack: [], pts: [], ptrAngle: -1,
-                 moveAt: now, animAt: now, fadeAt: 0}
-    ; ALWAYS, practice included. A practice wheel that a click could not
-    ; dismiss was the one window in RadMapper you had to wait out, and the
-    ; cancel keys are the thing being practised as much as the flick is.
-    RadialBindCancel()                       ; a click anywhere cancels
-    SetTimer(RadialTick, 16)
-    RadialTick()
-}
-
-/**
- * 16 ms is a frame. It costs one cursor read, and a repaint only when the
- * picture would actually differ: the highlighted slice changed, the stroke
- * grew, or an animation is still running. With "Animate the wheel" off the
- * tick repaints on selection changes alone, exactly as it did before v0.6.4.
- */
-RadialTick(*) {
-    global g_Radial
-    if !IsObject(g_Radial) {
-        SetTimer(RadialTick, 0)
-        return
-    }
-    R := g_Radial
-    now := A_TickCount
-    if ((!g_Enabled && !R.trial) || GetKeyState("Escape", "P")
-        || (!R.trial && RadialFocusLost(R.target, R.targetPid))) {
-        RadialClose(false)
-        return
-    }
-    ; A held menu whose holder never reports a release is a stuck menu over
-    ; the image. ActionUp is the real commit; this is the floor under it.
-    ; Measured from openedAt, not t0: t0 restarts on every ring change, so
-    ; a gesture that kept walking in and out of submenus never aged.
-    ; A hand that is STILL holding is not stuck: after 15 s the menu closes
-    ; only when its holder is gone or reads physically up (a physical
-    ; reading is trusted only for a press that read as physical); a genuine
-    ; long hold gets a 60 s ceiling instead of a vanishing menu.
-    if (!R.latched && (now - R.openedAt > 15000)) {
-        h := R.holder
-        gone := !IsObject(h) || !h.down
-            || (h.physSeen && !InputHeldPhysical(h.btn))
-        if (gone || now - R.openedAt > 60000) {
-            RadialClose(false)
-            return
-        }
-    }
-    ; Practice is a thing you look at: 20 s, then it goes away by itself.
-    if (R.trial && (now - R.openedAt > 20000)) {
-        RadialClose(false)
-        return
-    }
-    RM_GetPos(&mx, &my)
-    dx := mx - R.ax
-    dy := my - R.ay
-    dead := Max(Cfg("radialDead"), 8)
-    ; The hub is the dead zone AND the abort: inside it nothing is selected,
-    ; whatever the hand is pointing at.
-    sel := 0
-    ang := -1
-    if (dx * dx + dy * dy >= dead * dead) {
-        ang := RadialAngle(dx, dy)
-        sel := RadialPickIn(R.wedges, ang)    ; 0 = nothing, -1 = back
-    }
-    R.ptrAngle := ang
-    if (sel != R.sel) {
-        R.sel := sel
-        R.restAt := now
-    }
-    ; The stroke: kept only while the hand actually moves, so a stationary
-    ; pointer cannot fill the buffer with copies of itself -- "paused" has
-    ; to stay measurable, and the trace has to stay a line.
-    moved := false
-    if (R.pts.Length = 0 || RadialDist(R.pts[R.pts.Length], mx, my) >= 4) {
-        R.pts.Push({x: mx, y: my})
-        if (R.pts.Length > 64)
-            R.pts.RemoveAt(1)
-        moved := true
-        R.moveAt := now
-    }
-    ; The dwell is measured from the PRESS, not from the last movement: move
-    ; fast enough and the menu is never drawn at all, which is the whole
-    ; novice/expert unification. Once drawn it stays drawn.
-    want := R.drawn || R.latched || (now - R.t0 >= Max(Cfg("radialDwellMs"), 0))
-    if want {
-        paint := !R.drawn || (R.sel != R.lastSel)
-        if RadialAnimStep(R, now)
-            paint := true
-        if (moved && R.drawn && !R.latched)
-            paint := true                    ; the trace grew
-        if (R.fadeAt && (now - R.fadeAt < 75))
-            paint := true                    ; still fading in
-        if paint {
-            R.drawn := true
-            R.lastSel := R.sel
-            RadialPaint()
-        }
-    }
-    ; ── walking through a door without stopping (Kando's marking mode) ──
-    ;
-    ; A sharp turn, or a pause at the end of a long enough stroke, means the
-    ; hand has finished one leg of a gesture and started the next: open the
-    ; door it turned at, re-centred ON THE CORNER, and keep going. Only
-    ; DOORS open this way. A leaf still fires on release and on release only
-    ; (Kando's eSubmenuOnly), because a gesture that can fire a command
-    ; mid-flight is a gesture that will fire one into a report.
-    if (!R.latched && R.pts.Length > 1) {
-        corner := RadialCornerAt(R.pts, 90, 20, 10)
-        paused := (RadialDist(R.pts[1], mx, my) >= 90 && (now - R.moveAt >= 100))
-        if (corner || paused) {
-            px := corner ? R.pts[corner].x : mx
-            py := corner ? R.pts[corner].y : my
-            ; A corner INSIDE THE HUB has no bearing worth reading: over a
-            ; few pixels a direction is noise, which is what the dead zone
-            ; says everywhere else. A flick that curls back through the
-            ; centre on its way out would otherwise open whichever door
-            ; happened to lie that way -- or walk back out of the ring. 0 is
-            ; "nothing", the same answer the selection gives in the hub, and
-            ; it falls through to the fresh-stroke reset below.
-            cs := (RadialDist({x: R.ax, y: R.ay}, px, py) < dead) ? 0
-                : RadialPickIn(R.wedges, RadialAngle(px - R.ax, py - R.ay))
-            ; a deliberate TURN into the back arc walks out; a pause does
-            ; not, or a hand resting anywhere but on a slice would leave the
-            ; ring after 100 ms
-            if (corner && cs = -1 && R.stack.Length > 0) {
-                RadialBack()
-                return
-            }
-            if (cs > 0 && R.slices[cs].sub != "" && R.depth < RADIAL_MAXDEPTH) {
-                RadialEnter(R.slices[cs].sub, px, py, R.wedges.slices[cs].center)
-                return
-            }
-            ; not a door: start a fresh stroke at the corner, so the next leg
-            ; is measured on its own rather than against the whole journey
-            if corner
-                R.pts := [{x: px, y: py}, {x: mx, y: my}]
-        }
-    }
-    ; A slice that opens another menu is a DOOR. Rest on it and that menu
-    ; takes the wheel's place, re-centred under the cursor, still held: hold,
-    ; go to "Windowing", pause, go to "3", release -- one gesture, depth two,
-    ; which is as deep as marking menus stay accurate. Releasing ON the door
-    ; instead opens the same menu latched (the ordinary fire path), so both
-    ; habits work.
-    if (R.sel > 0 && R.slices[R.sel].sub != "" && R.depth < RADIAL_MAXDEPTH
-        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
-        RadialEnter(R.slices[R.sel].sub, , , R.wedges.slices[R.sel].center)
-        return
-    }
-    ; Resting in the back arc walks out of a nested ring the same way.
-    if (R.sel = -1 && R.stack.Length > 0
-        && (now - R.restAt >= Max(Cfg("radialSubMs"), 120))) {
-        RadialBack()
-        return
-    }
-}
-
-/**
- * Swap the live wheel for a nested menu.
- *
- * The child ring is centred where the decision was made -- the cursor, or
- * the corner the gesture turned at -- and then clamped onto the monitor
- * (Kando openSubmenu + clampToMonitor), which is what makes a second ring
- * usable near a screen edge. The cursor is deliberately NOT warped to
- * follow the clamp: the button is physically down, and moving the pointer
- * under a held button is how you drag something in the study underneath.
- */
-RadialEnter(name, px := "", py := "", doorAngle := -1) {
-    global g_Radial
-    R := g_Radial
-    if !IsObject(R)
-        return
-    mn := RadialFind(name)
-    if !IsObject(mn) {
-        HUD("No radial menu named " name, "warn")
-        return
-    }
-    slices := RadialSlices(mn)
-    if (slices.Length < 2)
-        return
-    if (px = "" || py = "")
-        RM_GetPos(&px, &py)                  ; not 0: a monitor may start there
-    ; the way back, remembered exactly where it was (Kando keeps the parent's
-    ; own offset when walking back out)
-    R.stack.Push({menu: R.menu, name: R.name, slices: R.slices,
-                  ax: R.ax, ay: R.ay, parentAngle: R.parentAngle})
-    at := RadialClampAnchor(px, py, 120)
-    ; which way the ring we came from now lies. Far enough away and it is
-    ; simply the bearing back to it; on top of us (a tap-opened door, or a
-    ; hard clamp) fall back to the opposite of the door we walked through.
-    pa := (RadialDist({x: R.ax, y: R.ay}, at.x, at.y) >= 16)
-        ? RadialAngle(R.ax - at.x, R.ay - at.y)
-        : Mod((doorAngle >= 0 ? doorAngle : 0) + 180, 360)
-    RadialRing(R, mn, slices, at.x, at.y, pa)
-    R.depth += 1
-    R.drawn := true                          ; a nested menu is always shown:
-    RadialPaint()                            ; you asked for it by walking in
-}
-
-/**
- * Dispose every wheel layer except the one the live menu is using.
- *
- * `keep` is that layer (0 when no menu is open). Anything else in the list
- * is an orphan -- disposed already, or created by a paint that lost its
- * menu mid-constructor -- and Dispose is wrapped in try for exactly that
- * reason. The pass-thru registration goes with it: a stale hwnd in
- * g_PassThru would gate the engine's own input handling on a window that
- * no longer exists (Windows recycles handles).
- */
-RadialSweepLayers(keep := 0) {
-    global g_RadialLayers, g_PassThru
-    kept := []
-    for lyr in g_RadialLayers {
-        if (IsObject(keep) && IsObject(lyr) && ObjPtr(lyr) = ObjPtr(keep)) {
-            kept.Push(lyr)
-            continue
-        }
-        try g_PassThru.Delete(lyr.hwnd)
-        try lyr.Dispose()
-    }
-    g_RadialLayers := kept
-}
-
-/** Walk back out to the ring this one was opened from. Commits nothing. */
-RadialBack() {
-    global g_Radial
-    R := g_Radial
-    if (!IsObject(R) || R.stack.Length = 0)
-        return
-    p := R.stack.Pop()
-    RadialRing(R, p.menu, p.slices, p.ax, p.ay, p.parentAngle)
-    R.depth := Max(1, R.depth - 1)
-    R.drawn := true
-    RadialPaint()
-}
-
-/** Close, and fire the highlighted slice if this was a commit. */
-RadialClose(commit) {
-    global g_Radial
-    SetTimer(RadialTick, 0)
-    RadialUnbindCancel()                     ; the three buttons go native
-    R := g_Radial
-    g_Radial := 0
-    if !IsObject(R)
-        return
-    if IsObject(R.lyr) {
-        try g_PassThru.Delete(R.lyr.hwnd)
-        try R.lyr.Dispose()
-    }
-    RadialSweepLayers()                      ; nothing is live now: take any
-                                             ; orphan with it
-    if (R.trial) {
-        ; A menu opened from "Try it now" NEVER fires. It is being looked at,
-        ; over whatever happens to be underneath, and "close tab" or a W/L
-        ; preset going into a study because you paused on a slice is not an
-        ; acceptable cost of previewing a layout.
-        if (commit && R.sel >= 1 && R.sel <= R.slices.Length) {
-            sl := R.slices[R.sel]
-            HUD(sl.live ? "Would run: " sl.label : "Empty direction — no command", "cyan")
-        }
-        Atlas.MenuReturnAfter(-1)
-        return
-    }
-    if (!commit || R.sel < 1 || R.sel > R.slices.Length)
-        return                               ; released in the dead zone, or
-    sl := R.slices[R.sel]                    ;   Escape: fires nothing
-    if !sl.live
-        return
-    ; Released ON a door: nothing to hold the next ring open with, so
-    ; nothing fires. Say how the door works instead (v0.7).
-    if (sl.sub != "") {
-        HUD("Keep holding: pause on “" sl.label "” and its ring opens", "mute")
-        return
-    }
-    ; Deferred out of the timer thread: an action can activate a window, send
-    ; a blocking key sequence or open a shelf, and none of that belongs
-    ; inside the tick that is still tearing the menu down.
-    SetTimer(RadialFireSlice.Bind(sl.act, sl.label, R.target, R.targetPid), -1)
-}
-
-RadialPidOf(hwnd) {
-    pid := 0
-    if hwnd
-        try pid := WinGetPID("ahk_id " hwnd)
-    return pid
-}
-
-; True when the foreground has moved to a DIFFERENT APPLICATION since the
-; menu opened. Same window, or another window of the same process, is not a
-; loss: syngo.via, PACS viewers and browsers hand the foreground between
-; their own top-level windows on their own (the v0.4.9 follow-focus lesson),
-; and cancelling a gesture over that would make the menu unusable exactly
-; where it is wanted. Our own layers never take the foreground (NoActivate).
-RadialFocusLost(target, targetPid) {
-    fg := FgHwnd()
-    if (fg = target || !target)
-        return false
-    fgPid := RadialPidOf(fg)
-    if (fgPid = DllCall("GetCurrentProcessId", "uint"))   ; any layer of ours
-        return false
-    return fgPid != targetPid
-}
-
-RadialFireSlice(act, label, target, targetPid := 0, *) {
-    if (!g_Enabled || RadialFocusLost(target, targetPid))
-        return
-    try {
-        b := Map()
-        b["action"] := act
-        ActionFire(b, 0)                     ; ordinary action, ordinary path;
-        if Cfg("hud")                        ;   ps_* still routes via PSFire
-            HUD(label, "jade")
-    } catch as e {
-        Problem("radial", "slice '" label "' failed: " e.Message)
-        HUD("Slice failed: " e.Message, "danger")
-    }
-}
-
-/**
- * A small vector glyph, 22 px across, centred on (x, y), in one colour.
- * Every icon is built from the same six primitives the wheel already uses
- * (line, rectangle, ellipse, triangle, pie, polygon) -- no images, so they
- * scale with the ring and recolour with the state.
- *
- * `sc` scales the whole glyph about its centre. Every case below is written
- * on the same 22 px grid and goes through X/Y/S, so the hover animation
- * costs one multiply per coordinate rather than a second copy of the table.
- */
-RadialIcon(name, x, y, col, sc := 1.0) {
-    gX(d) => Round(x + d * sc)
-    gY(d) => Round(y + d * sc)
-    gS(d) => Max(1, Round(d * sc))
-    try {
-        switch name {
-            case "next":                     ; play triangle + end bar
-                FilledTriangle(gX(-8), gY(-8), gX(3), gY(0), gX(-8), gY(8), col)
-                Rectangle(gX(5), gY(-8), gS(3), gS(16), col, true)
-            case "prev":
-                FilledTriangle(gX(8), gY(-8), gX(-3), gY(0), gX(8), gY(8), col)
-                Rectangle(gX(-8), gY(-8), gS(3), gS(16), col, true)
-            case "delete":                   ; a lidded bin
-                Rectangle(gX(-6), gY(-4), gS(12), gS(12), col, false)
-                Rectangle(gX(-8), gY(-7), gS(16), gS(2), col, true)
-                Rectangle(gX(-2), gY(-10), gS(4), gS(2), col, true)
-                Line(gX(-2), gY(-1), gX(-2), gY(5), col, 1)
-                Line(gX(2), gY(-1), gX(2), gY(5), col, 1)
-            case "ruler":                    ; a rule with graduations
-                Rectangle(gX(-11), gY(-4), gS(22), gS(9), col, false)
-                for k in [-7, -3, 1, 5]
-                    Line(gX(k), gY(-4), gX(k), gY(-1), col, 1)
-                Line(gX(9), gY(-4), gX(9), gY(1), col, 1)
-            case "roi":                      ; dashed frame around a blob
-                for k in [-9, -3, 3]
-                    Line(gX(k), gY(-8), gX(k + 3), gY(-8), col, 1)
-                for k in [-9, -3, 3]
-                    Line(gX(k), gY(8), gX(k + 3), gY(8), col, 1)
-                for k in [-8, -2, 4]
-                    Line(gX(-9), gY(k), gX(-9), gY(k + 3), col, 1)
-                for k in [-8, -2, 4]
-                    Line(gX(9), gY(k), gX(9), gY(k + 3), col, 1)
-                Ellipse(gX(-5), gY(-3), gS(10), gS(7), col, true)
-            case "clahe":                    ; half-filled disc: contrast
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                FilledPie(gX(-9), gY(-9), gS(18), gS(18), 90.0, 180.0, col)
-            case "window":                   ; a window pane: W/L
-                Rectangle(gX(-9), gY(-8), gS(18), gS(16), col, false)
-                Line(gX(0), gY(-8), gX(0), gY(8), col, 1)
-                Line(gX(-9), gY(0), gX(9), gY(0), col, 1)
-            case "magnify":                  ; lens and handle
-                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
-                Ellipse(gX(-9), gY(-9), gS(12), gS(12), col, false)
-                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
-            case "series":                   ; a stack of slices
-                Rectangle(gX(-9), gY(-3), gS(12), gS(10), col, false)
-                Rectangle(gX(-6), gY(-6), gS(12), gS(10), col, false)
-                Rectangle(gX(-3), gY(-9), gS(12), gS(10), col, false)
-            case "menu":                     ; a ring with a hub: another wheel
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
-                Line(gX(0), gY(-9), gX(0), gY(-5), col, 1)
-                Line(gX(0), gY(5), gX(0), gY(9), col, 1)
-                Line(gX(-9), gY(0), gX(-5), gY(0), col, 1)
-                Line(gX(5), gY(0), gX(9), gY(0), col, 1)
-            case "zoom":                     ; lens with a plus
-                Ellipse(gX(-10), gY(-10), gS(14), gS(14), col, false)
-                Line(gX(-3), gY(-6), gX(-3), gY(0), col, 1)
-                Line(gX(-6), gY(-3), gX(0), gY(-3), col, 1)
-                Line(gX(3), gY(3), gX(9), gY(9), col, gS(3))
-            case "invert":                   ; two half discs swapped
-                Ellipse(gX(-9), gY(-9), gS(18), gS(18), col, false)
-                FilledPie(gX(-9), gY(-9), gS(18), gS(18), -90.0, 180.0, col)
-            case "reset":                    ; a counter-clockwise arrow
-                Arc(gX(-8), gY(-8), gS(16), gS(16), col, 2, -60.0, 300.0)
-                FilledTriangle(gX(-2), gY(-12), gX(-2), gY(-4), gX(-9), gY(-8), col)
-            case "dictate":                  ; a microphone
-                Rectangle(gX(-3), gY(-10), gS(6), gS(11), col, true)
-                Arc(gX(-6), gY(-6), gS(12), gS(12), col, 1, 0.0, 180.0)
-                Line(gX(0), gY(6), gX(0), gY(9), col, 1)
-                Line(gX(-4), gY(9), gX(4), gY(9), col, 1)
-            default:
-                Ellipse(gX(-3), gY(-3), gS(6), gS(6), col, true)
-        }
-    } catch as e {
-        Problem("radial", "icon '" name "' failed: " e.Message)
-    }
-}
-
-/**
- * Draw the wheel, centred on the anchor.
- *
- * A ROOT ring is deliberately NOT clamped to the monitor. The geometry has
- * to agree with the cursor -- the direction you push is the slice you get
- * -- so a menu opened near an edge is allowed to run off it rather than
- * shift under your hand and change what every direction means. A CHILD ring
- * is clamped, because it is re-centred on the corner of a gesture and its
- * directions are being read, not remembered (RadialEnter).
- *
- * Everything here is arithmetic over R plus GDI+ calls: the tick decides
- * WHEN to paint, this decides only what the frame looks like.
- */
-RadialPaint() {
-    global g_Radial, g_PassThru, g_RadialLayers
-    ; Uninterruptible: Layer() creates a window and Draw() blits one, and
-    ; both pump messages. A hotkey thread that closes the menu in the middle
-    ; of either would leave this one drawing onto a disposed layer.
-    Critical "On"
-    if (!IsObject(g_Radial) || !IsSet(Lumi) || !IsSet(Layer))
-        return
-    R := g_Radial
-    ro := ClampInt(Cfg("radialRadius"), 90, 260, 132)
-    ri := Max(38, ro // 3)
-    ; The layer is wider than the ring by a whole label: words sit OUTSIDE
-    ; their icon now (Kando draws the name past the item), and the gesture
-    ; trace needs somewhere to live.
-    pad := 46
-    size := ro * 2 + pad * 2
-    wedgy := Cfg("radialWedges") ? true : false
-    ; GDI+ measures from 3 o'clock; our bearings are from north. Kept FLOAT
-    ; deliberately: GpGFX's Pie constructor decides which overload it was
-    ; handed by asking isColourParam() about the start angle, and that returns
-    ; TRUE for any negative INTEGER -- so an integer -135 would be read as a
-    ; colour and the wedge drawn as something else entirely. The `+ 0.0` says
-    ; so out loud.
-    gd(a) => (a - 90) + 0.0
-    arcOf(w) => Mod(Mod(w.end - w.start, 360) + 360, 360) + 0.0
-    rad(a) => (a - 90) * 0.017453292519943295
-    prev := LayerStack.ActiveLayer
-    try {
-        if !IsObject(R.lyr) {
-            lyr := Layer(R.ax - ro - pad, R.ay - ro - pad, size, size,
-                "RadMapperRadial")
-            ; Creating a window pumps messages even under Critical, so the
-            ; menu we started painting may be gone -- or replaced -- by the
-            ; time the constructor returns. Its layer would then be an
-            ; orphan: click-through, top-most, over the study, with nothing
-            ; holding a reference to it.
-            if (!IsObject(g_Radial) || !Lumi.Same(g_Radial, R)) {
-                try g_PassThru.Delete(lyr.hwnd)
-                try lyr.Dispose()
-                return
-            }
-            g_RadialLayers.Push(lyr)         ; the sweep's safety net
-            R.lyr := lyr
-            ; Click-through and sitting under the cursor by design, so the
-            ; engine must never claim it positionally -- that would gate the
-            ; native input underneath and eat the very click it is watching.
-            g_PassThru[lyr.hwnd] := 1
-            ; Window STYLES are set here, ONCE. They used to be re-applied on
-            ; every repaint (each slice change), and SetWindowLongPtr on a
-            ; visible layered window plus a SetWindowPos re-insert is
-            ; exactly what makes one blink -- "the menu flashes in and out
-            ; while I hold the button" (0.6.1 report).
-            lyr.ClickThrough := true
-            lyr.NoActivate()
-            lyr.TopMost(true)
-            lyr.alwaysFullErase := true      ; text may outgrow its box
-            R.fadeAt := A_TickCount          ; fade in over 75 ms
-        }
-        lyr := R.lyr
-        LayerStack.ActiveLayer := lyr
-        lyr.Clear()
-        cx := ro + pad
-        cy := ro + pad
-        n := R.slices.Length
-        step := 360.0 / n
-        WD := R.wedges
-        ; The way back, under everything: it is the largest target on the
-        ; ring and it must never look like a command. A numbered child ring
-        ; has a zero-span `back` -- a marker for the node below, with no arc
-        ; to fill.
-        if (IsObject(WD.back) && arcOf(WD.back) > 0.01)
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(WD.back.start),
-                arcOf(WD.back), (R.sel = -1)
-                    ? Lumi.Mix(Lumi.C["surface"], Lumi.C["cyan"], 0.30)
-                    : Lumi.C["raised"])
-        i := 1
-        for sl in R.slices {
-            w := WD.slices[i]
-            ; With wedges on, the slice is DRAWN as the arc it answers to,
-            ; so what you see is exactly what you can hit; with them off it
-            ; fills its whole share of the circle, as it did before v0.6.4.
-            start := wedgy ? gd(w.start) : (gd(w.center) - step / 2)
-            sweep := wedgy ? arcOf(w) : (step - 1.4)
-            active := (i = R.sel)
-            col := !sl.live ? Lumi.C["raised"]
-                 : active   ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.55)
-                            : Lumi.C["raised2"]
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, start, sweep, col)
-            i += 1
-        }
-        ; Kando's selection wedge: a translucent sector over the hovered
-        ; slice, which is the one thing a solid ring cannot say -- WHICH
-        ; directions still count as this slice.
-        if (wedgy && R.sel > 0) {
-            w := WD.slices[R.sel]
-            FilledPie(cx - ro, cy - ro, ro * 2, ro * 2, gd(w.start), arcOf(w),
-                Lumi.Alpha(Lumi.C["magenta"], 0x38))
-        }
-        ; The hub, punched over the wedges: it is also the dead zone, so it
-        ; has to look like the place where nothing happens.
-        FilledCircle(cx, cy, ri, Lumi.C["surface"])
-        Circle(cx, cy, ri, Lumi.C["hair"], false)
-        Circle(cx, cy, ro, Lumi.C["hair"], false)
-        ; A hairline at every wedge boundary, ONCE. On a full ring the
-        ; wedges meet, so every boundary is one slice's end and the next
-        ; one's start; drawing the list raw painted each of them twice, and
-        ; a 1 px anti-aliased line drawn twice is a 2 px line. Deduped on
-        ; the angle rounded to a hundredth of a degree, which is finer than
-        ; any ring this code can build.
-        if wedgy {
-            raw := []
-            for w in WD.slices {
-                raw.Push(w.start)
-                raw.Push(w.end)
-            }
-            ; a zero-span back (the numbered child ring) is a marker for the
-            ; parent node, not an arc: it has no edges of its own
-            if (IsObject(WD.back) && arcOf(WD.back) > 0.01) {
-                raw.Push(WD.back.start)
-                raw.Push(WD.back.end)
-            }
-            edges := []
-            seen := Map()
-            for a in raw {
-                k := String(Round(Mod(Mod(a, 360) + 360, 360), 2))
-                if seen.Has(k)
-                    continue
-                seen[k] := 1
-                edges.Push(a)
-            }
-            for a in edges {
-                t := rad(a)
-                Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)),
-                     Round(cx + ro * Cos(t)), Round(cy + ro * Sin(t)),
-                     Lumi.C["hairSoft"], 1)
-            }
-        }
-        ; The parent ring, as a node in the direction it actually lies in,
-        ; with the line that leads back to it (Kando's connector).
-        if IsObject(WD.back) {
-            t := rad(WD.back.center)
-            bx := Round(cx + (ro - 24) * Cos(t))
-            by := Round(cy + (ro - 24) * Sin(t))
-            bcol := (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["hair"]
-            Line(Round(cx + ri * Cos(t)), Round(cy + ri * Sin(t)), bx, by,
-                bcol, 2)
-            FilledCircle(bx, by, 13, Lumi.C["raised"])
-            Circle(bx, by, 13, bcol, false)
-            RadialIcon("prev", bx, by,
-                (R.sel = -1) ? Lumi.C["cyan"] : Lumi.C["inkDim"], 0.62)
-        }
-        ; ── the slices themselves ───────────────────────────────────────
-        i := 1
-        numbered := (n > 8)                  ; the preset ring: numbers first
-        ; The disc, then the word outside it, then the rim of the ring: at
-        ; the smallest allowed radius (90) the annulus is 52 px wide, so the
-        ; disc is sized from the annulus rather than fixed at 19.
-        disc := Min(19, (ro - ri) * 0.28)
-        ; a numbered ring has no disc: the number itself is the target, and
-        ; it keeps the mid-annulus place it has always had
-        micon := numbered ? ((ri + ro) / 2) : (ri + disc + 6)
-        for sl in R.slices {
-            w := WD.slices[i]
-            t := rad(w.center)
-            lx := cx + micon * Cos(t)
-            ly := cy + micon * Sin(t)
-            active := (i = R.sel)
-            sc := (sl.sc > 0.2) ? sl.sc : 1.0
-            txt := (sl.label != "") ? sl.label : (sl.live ? "?" : "—")
-            inkCol := !sl.live ? Lumi.C["inkMute"]
-                    : active   ? Lumi.C["ink"] : Lumi.C["inkDim"]
-            if numbered {
-                ; the number is what the hand is choosing; the name is the
-                ; reminder of what it means
-                Text(Round(lx - 30), Round(ly - 24), 60, 26, String(i),
-                    active ? Lumi.C["ink"] : Lumi.C["cyanSoft"],
-                    Round(Lumi.Size["hero"] * sc), Lumi.Face, "Bold")
-                    .TextAlign("center", "middle")
-                Text(Round(lx - 52), Round(ly + 2), 104, 18, txt, inkCol,
-                    Lumi.Size["small"], Lumi.Face).TextAlign("center", "middle")
-            } else {
-                ; A glyph in a disc, the word outside it on the ring: the
-                ; disc is what the eye lands on and what the hover grows.
-                rr := Round(disc * sc)
-                FilledCircle(Round(lx), Round(ly), rr,
-                    sl.live ? Lumi.C["raised"] : Lumi.C["surface"])
-                Circle(Round(lx), Round(ly), rr,
-                    active ? Lumi.C["magenta"] : Lumi.C["hair"], false)
-                RadialIcon(sl.icon != "" ? sl.icon
-                    : (sl.sub != "" ? "menu" : "dot"), Round(lx), Round(ly),
-                    !sl.live ? Lumi.C["inkMute"]
-                    : active ? Lumi.C["ink"] : Lumi.C["cyan"], sc * 0.8)
-                ; Grandchild dots: one per command in the ring behind this
-                ; door, so a door LOOKS like a door before you open it.
-                if (sl.kids > 0) {
-                    k := sl.kids
-                    j := 1
-                    loop k {
-                        dt := rad(w.center + (j - (k + 1) / 2) * 6.5)
-                        FilledCircle(Round(lx + (rr + 7) * Cos(dt)),
-                            Round(ly + (rr + 7) * Sin(dt)), 2,
-                            active ? Lumi.C["cyanSoft"] : Lumi.C["inkMute"])
-                        j += 1
-                    }
-                }
-                tx := cx + (ro - 11) * Cos(t)
-                ty := cy + (ro - 11) * Sin(t)
-                Text(Round(tx - 58), Round(ty - 10), 116, 20,
-                    txt (sl.sub != "" ? " ›" : ""), inkCol,
-                    Round(Lumi.Size["small"] * sc), Lumi.Face)
-                    .TextAlign("center", "middle")
-            }
-            i += 1
-        }
-        ; ── the stroke that is choosing ─────────────────────────────────
-        ; The gesture drawn back at you, fading toward the tail: it is the
-        ; only feedback a marking menu can give about the SHAPE you made,
-        ; and in practice mode it is the whole lesson.
-        if (!R.latched && R.pts.Length > 1) {
-            first := Max(1, R.pts.Length - 11)
-            span := R.pts.Length - first
-            j := first
-            while (j < R.pts.Length) {
-                a := R.pts[j]
-                b := R.pts[j + 1]
-                f := (j - first + 1) / span
-                Line(Round(a.x - R.ax + cx), Round(a.y - R.ay + cy),
-                     Round(b.x - R.ax + cx), Round(b.y - R.ay + cy),
-                     Lumi.Alpha(Lumi.C["cyan"], Round(40 + 170 * f)), 3)
-                j += 1
-            }
-        }
-        ; ── the hub says what is armed ──────────────────────────────────
-        ; A glance answers "what happens if I let go now" without reading
-        ; the ring: the hovered command, and under it the keys it sends.
-        inner := ri * 2 - 8
-        pick := (R.sel > 0) ? R.slices[R.sel] : 0
-        if IsObject(pick) {
-            Lumi.Label(cx - ri + 4, cy - 26, inner,
-                Lumi.Elide(pick.live ? (pick.label != "" ? pick.label : "?")
-                                     : "—", inner, "body"),
-                pick.live ? "accent" : "mute", "center", 20)
-            hint := pick.live ? RadialShortcut(pick) : "nothing here"
-            if (hint != "")
-                Lumi.Label(cx - ri + 4, cy - 4, inner,
-                    Lumi.Elide(hint, inner, "small"), "mute", "center", 18)
-        } else if (R.sel = -1) {
-            Lumi.Label(cx - ri + 4, cy - 26, inner, "back", "accent",
-                "center", 20)
-            Lumi.Label(cx - ri + 4, cy - 4, inner,
-                Lumi.Elide(R.stack.Length > 0
-                    ? R.stack[R.stack.Length].name : "", inner, "small"),
-                "mute", "center", 18)
-        } else {
-            Lumi.Label(cx - ri + 4, cy - 26, inner,
-                Lumi.Elide(R.name, inner, "body"), "section", "center", 20)
-            Lumi.Label(cx - ri + 4, cy - 4, inner, "cancel", "mute",
-                "center", 18)
-        }
-        ; Practice looks exactly like the real thing, which is the point --
-        ; so the hub has to say, on the wheel itself, that it is not.
-        if R.trial
-            Text(cx - ri + 4, cy + 16, inner, 16,
-                "practice — nothing is sent", Lumi.C["warn"],
-                Lumi.Size["small"], Lumi.Face)
-                .TextAlign("center", "middle")
-        ; Kando fades a menu in over 75 ms. There is no matching fade OUT:
-        ; a closing wheel may not leave a timer behind it, and a blocking
-        ; fade would sit between the release and the command.
-        if R.fadeAt {
-            el := A_TickCount - R.fadeAt
-            if (!Cfg("radialAnim") || el >= 75) {
-                lyr.alpha := 255
-                R.fadeAt := 0
-            } else
-                lyr.alpha := Max(40, Round(255 * el / 75))
-        }
-        lyr.Draw()
-    } catch as e {
-        Problem("radial", "menu paint failed: " e.Message
-            . (e.HasProp("Line") ? " (line " e.Line ")" : ""))
-    } finally {
-        if IsObject(prev)
-            LayerStack.ActiveLayer := prev
     }
 }
 
@@ -9929,8 +7373,15 @@ PSSendAtomic(keys) {
 ; BOUNDED: after PS_DEFER_MS of continuous deferral the keys go out anyway.
 PSDeferForButtons(entry) {
     global g_PSQueue
-    static since := 0
+    static since := 0, sinceGen := -1
     static PS_DEFER_MS := 1500
+    ; A deferral the queue was dropped under (panic, pause) must not leave
+    ; its start time behind: the next delivery during a click would read
+    ; it as "waited long enough" and send straight through the click.
+    if (sinceGen != g_PSGen) {
+        since := 0
+        sinceGen := g_PSGen
+    }
     gen := g_PSGen
     held := false
     for b in BUTTONS {
@@ -10018,18 +7469,10 @@ AppDeliverNow(appName, keys) {
         try WinActivate(win)                     ; foreground lock: one retry
         if !WinWaitActive(win, , 0.5) {
             if (g_PSGen = gen && WinExist(win)) {
-                ; Best effort, and NOT a delivery. ControlSend posts to a
-                ; window's message queue; a WPF application (PowerScribe One,
-                ; and the WPF parts of the viewer) routes keyboard input
-                ; through its own focus manager and ignores a posted message
-                ; aimed at the HWND. So this may land and may do nothing at
-                ; all, and the old wording -- "key delivered in background" --
-                ; told the reader the keystroke had arrived when the usual
-                ; outcome is that it did not.
-                try ControlSend(keys, , win)
+                ; No ControlSend fallback: WPF drops posted keys, and a
+                ; modifier sent that way can stick in the active window.
                 Problem("app-blocked", appName " would not come forward;"
-                    . " background delivery attempted (ControlSend is"
-                    . " unreliable in WPF and may have done nothing)")
+                    . " keys not sent: " keys)
                 HUD(appName " would not come forward — press it again", "warn")
             }
             return
@@ -10041,10 +7484,22 @@ AppDeliverNow(appName, keys) {
         return
     }
     Sleep(50)
-    PSSendAtomic(keys)
+    ; The thread is interruptible across the waits above: a click back into
+    ; the viewer in that moment must not receive the keys.
+    Critical "On"
+    ok := (g_PSGen = gen) && WinActive(win)
+    if ok
+        PSSendAtomic(keys)
+    Critical "Off"
+    if !ok {
+        Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        HUD("Focus moved before the keys were sent — press it again", "warn")
+        return
+    }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        try WinActivate("ahk_id " prev)
+        if WinActive(win)                      ; not if the user has moved on
+            try WinActivate("ahk_id " prev)
     }
 }
 
@@ -10079,6 +7534,10 @@ RM_PSFireReal(keys) {
 HandBusy() {
     if (GetKeyState("LButton", "P") || GetKeyState("RButton", "P"))
         return true
+    for b in BUTTONS {                       ; a native middle/side hold (its
+        if (GetKeyState(b, "P") && !BS(b))   ; press went through the gate)
+            return true
+    }
     for name, st in g_BS {
         if (!st.down || st.consumed)
             continue
@@ -10096,12 +7555,13 @@ HandBusy() {
 }
 
 PSDrain() {
-    global g_PSBusy, g_PSQueue, g_PSDefer
+    global g_PSBusy, g_PSQueue, g_PSDefer, g_PSGen
     if g_PSBusy
         return
     if !g_Enabled {                          ; paused: input is native, and
         g_PSQueue := []                      ; nothing of ours may land in
         g_PSDefer := 0                       ; the study
+        g_PSGen += 1
         return
     }
     ; Never activate another window or send keys under the user's hand -- a
@@ -10167,14 +7627,10 @@ PSDeliverNow(keys) {
         try WinActivate(psWin)                   ; foreground lock: one retry
         if !WinWaitActive(psWin, , 0.5) {
             if (g_PSGen = gen && WinExist(psWin)) {
-                ; Last resort, and best effort ONLY -- see AppDeliverNow:
-                ; PowerScribe is WPF, so a posted keystroke is very likely to
-                ; be dropped by its focus manager. Attempt it, then tell the
-                ; truth: the window would not come forward.
-                try ControlSend(keys, , psWin)
+                ; No ControlSend fallback: WPF drops posted keys, and a
+                ; modifier sent that way can stick in the active window.
                 Problem("ps-blocked", "PowerScribe would not come forward;"
-                    . " background delivery attempted (ControlSend is"
-                    . " unreliable in WPF and may have done nothing)")
+                    . " keys not sent: " keys)
                 HUD("PowerScribe would not come forward — press it again",
                     "warn")
             }
@@ -10187,10 +7643,22 @@ PSDeliverNow(keys) {
         return
     }
     Sleep(50)
-    PSSendAtomic(keys)
+    ; The thread is interruptible across the waits above: a click back into
+    ; the viewer in that moment must not receive the keys.
+    Critical "On"
+    ok := (g_PSGen = gen) && WinActive(psWin)
+    if ok
+        PSSendAtomic(keys)
+    Critical "Off"
+    if !ok {
+        Problem("ps-focus", "focus moved before the keys were sent; not sent: " keys)
+        HUD("Focus moved before the keys were sent — press it again", "warn")
+        return
+    }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        try WinActivate("ahk_id " prev)
+        if WinActive(psWin)                  ; not if the user has moved on
+            try WinActivate("ahk_id " prev)
     }
 }
 
@@ -10219,8 +7687,7 @@ FocusApp(name) {
             crit := MatchCrit(m)
             if WinExist(crit) {
                 try WinActivate(crit)
-                WinWaitActive(crit, , 1)
-                return true
+                return WinWaitActive(crit, , 1) ? true : false
             }
         }
     }
@@ -10263,13 +7730,23 @@ RunMacro(name, *) {
                     PSMacroSync()
                 case "pskeys":
                     PSFire(v)
+                    PSMacroSync()
                 case "pacskeys":
                     PACSFire(v)
                     PSMacroSync()
                 case "focus":
-                    FocusApp(v)
+                    ; the next step would type into whatever IS in front
+                    if !FocusApp(v) {
+                        Problem("macro-focus", "Macro " name ": could not focus " v)
+                        HUD("Macro stopped: " v " would not come forward", "warn")
+                        break
+                    }
                 case "run":
                     try Run(v)
+                    catch as e {
+                        Problem("run", "Run failed: " v " — " e.Message)
+                        HUD("Could not start: " v, "warn")
+                    }
                 case "teleport":
                     DoTeleport(v)
                 case "tooltip":
@@ -10320,7 +7797,20 @@ SyncHooks() {
                 }
             }
         }                                    ; the layer
+    } else {
+        ; v0.7.2: a "Toggle engine pause" row is a TOGGLE, so its input stays
+        ; hooked while paused -- otherwise it could pause but never resume.
+        for row in g_Cfg["bindings"] {
+            if (MGet(MGet(row, "action", Map()), "type", "") != "pausetgl"
+                || MGet(row, "event", "") = "turn")
+                continue
+            needed[CanonicalInputName(NormalizeInputName(MGet(row, "button", "")))] := 1
+            for part in LayerParts(row)      ; its layer host, to reach it
+                needed[CanonicalInputName(NormalizeInputName(part))] := 1
+        }
     }
+    for n in g_SwallowUp                     ; a release still owed a swallow
+        needed[n] := 1
     ; Each Hotkey toggle is wrapped: a throw mid-reconfigure must never leave an
     ; input SUPPRESSED with no live handler (a dead/frozen click, or a keyboard
     ; that eats a character). On failure we roll back to fully native and keep
@@ -10518,6 +8008,7 @@ KbHotkeyConflict(hk) {
     return g_HookState.Has(s) ? s : ""
 }
 
+global g_BadHkWarned := "|"
 RegisterKbHotkeys() {
     global g_KbRegistered
     if IsObject(g_RecHook)
@@ -10537,8 +8028,6 @@ RegisterKbHotkeys() {
         [Cfg("hkPause"),     (*) => ToggleEnabled()],
         [Cfg("hkPanic"),     (*) => PanicRelease()],
         [Cfg("hkClickLock"), (*) => ClickLockToggle("")],
-        [Cfg("hkClipboard"), (*) => Shelf.Toggle("clip")],
-        [Cfg("hkScratch"),   (*) => Shelf.Toggle("scratch")],
         [Cfg("hkWinNext"),   (*) => WinPlace("next")],
         [Cfg("hkWinPrev"),   (*) => WinPlace("prev")],
         [Cfg("hkWinMax"),    (*) => WinPlace("max")],
@@ -10546,10 +8035,19 @@ RegisterKbHotkeys() {
     bad := ""
     mouse := ""
     clash := ""
+    dup := ""
+    seen := Map()
+    seen.CaseSense := "Off"
     for pair in pairs {
         hk := pair[1]
         if (hk = "")
             continue
+        ; the same combo twice: the later silently replaced the earlier
+        if seen.Has(hk) {
+            dup .= (dup = "" ? "" : ", ") hk
+            continue
+        }
+        seen[hk] := 1
         if IsMouseHotkey(hk) {
             mouse .= (mouse = "" ? "" : ", ") hk
             continue
@@ -10566,10 +8064,17 @@ RegisterKbHotkeys() {
             bad .= (bad = "" ? "" : ", ") hk
         }
     }
-    if (bad != "") {
-        Problem("bad-hotkey", "Invalid Settings hotkey(s): " bad)
-        TrayTip("Invalid hotkey(s): " bad, "RadMapper", "Iconx")
+    global g_BadHkWarned
+    if (bad dup != "" && bad "|" dup != g_BadHkWarned) {   ; once per set
+        if (bad != "")
+            Problem("bad-hotkey", "Invalid Settings hotkey(s): " bad)
+        if (dup != "")
+            Problem("dup-hotkey", "Settings hotkey used twice (first kept): " dup)
+        TrayTip((bad != "" ? "Invalid hotkey(s): " bad "`n" : "")
+            . (dup != "" ? "Used twice, second ignored: " dup : ""),
+            "RadMapper", "Iconx")
     }
+    g_BadHkWarned := bad "|" dup
     ; warn once per offending set -- RegisterKbHotkeys reruns on EVERY config
     ; change, and re-raising the tip on each unrelated edit would be noise
     global g_MouseHkWarned
@@ -10599,15 +8104,12 @@ RegisterKbHotkeys() {
 ; before any path that can unregister an Up hotkey (disable, config change)
 ; or the release event is lost and the synthetic input stays down forever.
 ForceReleaseActive() {
-    ; BEFORE the g_BS sweep: a held radial menu commits on ActionUp, and
-    ; teardown is not a commit. Pausing the engine, changing a binding or
-    ; exiting with a wheel up used to fire whichever slice the pointer
-    ; happened to be resting in -- a W/L preset or "mark as read" into the
-    ; open study. RadialClose(false) is a no-op when no menu is open.
-    RadialClose(false)
-    AppSwitchClose(false)                    ; same rule: teardown never commits
+    BypassOff(true)                          ; pass-through never outlives teardown
+    ; BEFORE the g_BS sweep: a held switcher commits on release, and
+    ; teardown is not a commit.
+    AppSwitchClose(false)
     ClickLockRelease()                       ; a latch must never outlive the
-    ScrollPtrStop()                          ; hooks that can release it
+                                             ; hooks that can release it
     for name, st in g_BS.Clone() {
         if (st.down && !st.consumed) {
             if (st.mode = "passthru")
@@ -10615,6 +8117,11 @@ ForceReleaseActive() {
             else if (st.mode = "held")
                 ActionUp(st.holdBinding, st)
         }
+        ; its physical release is still coming; with the state gone (and,
+        ; when pausing, the input maybe unhooked) a lone native Up would
+        ; reach the app -- Back on button 4, a menu on the right button
+        if st.down
+            g_SwallowUp[name] := 1
         st.down := false                     ; watchers holding a reference to
         ClearBS(name)                        ; this state see a release
     }
@@ -10634,39 +8141,25 @@ ForceReleaseActive() {
 ; owns those. A 500 ms age guard keeps the watchdog out of legitimate
 ; in-flight transitions.
 
-; True while any live held-mode input owns an action of this type -- the
-; anchor test for momentary speed states.
-WatchdogHolderAlive(type) {
-    for name, st in g_BS {
-        if (st.down && st.mode = "held" && IsObject(st.holdBinding)
-            && st.holdBinding["action"]["type"] = type)
-            return true
-    }
-    return false
-}
-
 Watchdog() {
     Critical "On"
     ; Before the enabled test: a wedged UI count is not an engine state, and
     ; it must clear even while the engine is paused. See Lumi.EditGuard.
     try Lumi.EditGuard()
-    ; Also before the enabled test, and for the same reason: a hidden system
-    ; cursor is not engine state. SetSystemCursor replaces the cursors for the
-    ; WHOLE desktop (it is the only way to hide the pointer over another
-    ; process), so if the thing that hid it dies without restoring -- a throw
-    ; inside SPTick, a paused engine, a teardown that skipped ScrollPtrStop --
-    ; the user is left with no pointer at all and no pointer to fix it with.
-    ; Drag scroll/zoom is the only caller, so no live anchor means nothing
-    ; owns the hidden cursor: give it back.
-    if (g_SysCursorHidden && !IsObject(g_ScrollPtr)) {
-        SysCursorShow()
-        SPMarkerHide()
-        Problem("recovered", "system cursor was hidden with no drag scroll"
-            . " running -- restored")
-        HUD("RadMapper restored the mouse pointer")
-    }
     if !g_Enabled
         return
+    if (IsObject(g_Bypass) && g_Bypass.mom) {
+        hs := BS(g_Bypass.src)
+        ; an injected holder (physSeen false) never reads as physically
+        ; held: trust its state, as the engine does elsewhere
+        ; ...nor after a hook reinstall since the press (the physical table
+        ; is wiped then, and would read a held button as up)
+        if !(hs && hs.down && (!hs.physSeen || (g_HookChangedAt - hs.pressTick) >= 0
+            || InputHeldPhysical(g_Bypass.src))) {
+            BypassOff()
+            Problem("recovered", "pass-through ended: its button is no longer held")
+        }
+    }
     now := A_TickCount
     ; 1) input states whose physical input is no longer down (lost Up)
     for name, st in g_BS.Clone() {
@@ -10684,6 +8177,14 @@ Watchdog() {
         synthetic := (st.mode = "passthru" || st.mode = "held")
         why := ""
         if !synthetic {
+            ; A layer host held through a long scroll (a 40 s CT stack) is
+            ; still held: with no hook change since the press a "held"
+            ; reading is trustworthy (only the wiped table reads falsely UP),
+            ; and sweeping it dropped the layer mid-gesture and later sent a
+            ; lone XButton Up (Back).
+            if (st.physSeen && (g_HookChangedAt - st.pressTick) < 0
+                && InputHeldPhysical(st.btn))
+                continue
             if (age < 30000)
                 continue
             why := "held 30 s with nothing out"
@@ -10710,11 +8211,8 @@ Watchdog() {
             continue
         }
         ; Recovery is a TEARDOWN, and teardown never commits (same rule as
-        ; ForceReleaseActive). Close first: ActionUp's RadialClose(true) is
-        ; then a no-op, and AppSwitchWatch never sees this holder go up and
-        ; read it as the commit gesture.
-        if (IsObject(g_Radial) && IsObject(g_Radial.holder) && g_Radial.holder = st)
-            RadialClose(false)
+        ; ForceReleaseActive). Close first: AppSwitchWatch must never see
+        ; this holder go up and read it as the commit gesture.
         if (IsObject(g_AppSw) && IsObject(g_AppSw.holder) && g_AppSw.holder = st)
             AppSwitchClose(false)
         if (st.mode = "passthru")
@@ -10726,29 +8224,7 @@ Watchdog() {
         Problem("recovered", "released stuck " name " (" st.mode ", " why ")")
         HUD("RadMapper recovered a stuck " name)
     }
-    ; 2) momentary speed states whose holder is gone entirely (state cleared
-    ;    without ActionUp -- e.g. a lost Up followed by nothing). Held LAYERS
-    ;    need no sweep here: a layer is active only while its holder is
-    ;    physically down, and part 1 above already releases a holder whose
-    ;    input went up, which drops the layer with it.
-    for name in ["sniper", "boost"] {
-        if (g_SpeedMods.Has(name) && g_SpeedMods[name] = "m"
-            && !WatchdogHolderAlive(name)) {
-            SpeedMod(name, false)
-            Problem("recovered", "released orphaned momentary " name " speed")
-            HUD("RadMapper restored pointer speed")
-        }
-    }
-    ; 3) a momentary drag scroll whose holder is gone (a toggled one is the
-    ;    user's choice and is never swept -- panic owns that)
-    if (IsObject(g_ScrollPtr) && g_ScrollPtrMom
-        && !WatchdogHolderAlive("scrollptr")
-        && !WatchdogHolderAlive("zoomptr")) {
-        ScrollPtrStop()
-        Problem("recovered", "stopped orphaned drag scroll")
-        HUD("RadMapper stopped drag scroll")
-    }
-    ; 4) and 5) THE OS's OWN STATE, not ours. Parts 1-3 reconcile g_BS, and
+    ; 4) and 5) THE OS's OWN STATE, not ours. Part 1 reconciles g_BS, and
     ;    that is exactly what the PowerScribe/PACS click freeze slipped past:
     ;    a click whose Down went out inside a "+{Tab}" delivery leaves a Shift
     ;    logically down and/or an orphan LButton down in the OS while g_BS's
@@ -10759,7 +8235,12 @@ Watchdog() {
     ;    be holding anything down (WatchdogSweepSafe).
     static modTicks := Map()
     static lbTicks := 0
-    if !WatchdogSweepSafe() {
+    ; ...and only when RADMAPPER sent input in the last 10 s. The sweeps exist
+    ; for a modifier or button WE left down (a +{Tab} delivery, a moddrag).
+    ; With a dead hook, or keys injected by another program, "physically up"
+    ; is wrong -- and releasing Ctrl the user is holding turned Ctrl+C into
+    ; a bare "c" typed over the selection.
+    if (!WatchdogSweepSafe() || A_TickCount - g_SynthAt > 10000) {
         modTicks.Clear()                     ; a count may never survive a
         lbTicks := 0                         ; period when the guard was up
         return
@@ -10819,8 +8300,8 @@ WatchdogSweepSafe() {
         if st.down
             return false
     }
-    if (IsObject(g_ClickLock) || IsObject(g_ScrollPtr)
-        || IsObject(g_Radial) || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
+    if (IsObject(g_ClickLock)
+        || IsObject(g_AppSw) || g_PSBusy || g_MacroBusy)
         return false
     try {
         if (Warp.active || Warp.grabbing)
@@ -10847,15 +8328,23 @@ HookFrontTick(*) {
     static lastHwnd := 0, lastAt := 0, logged := false
     if !g_Enabled
         return
+    static lastNot := 0                      ; a window already seen not PACS
     fg := FgHwnd()
+    if (fg && fg = lastNot)                  ; an hwnd's exe never changes
+        return
     exe := ""
     try exe := WinGetProcessName("ahk_id " fg)
     if (exe != "IntelliSpacePACSRadiology.exe") {
         lastHwnd := 0
+        lastNot := fg
         return
     }
+    lastNot := 0
     now := A_TickCount
-    if (fg = lastHwnd && now - lastAt >= 0 && now - lastAt < 10000)
+    ; ONCE each time PACS comes to the front. Every reinstall drops the
+    ; keystrokes in its gap and wipes the physical key table; doing it every
+    ; 10 s while PACS stayed in front cost more than it fixed.
+    if (fg = lastHwnd)
         return
     for name, st in g_BS {
         if st.down
@@ -10872,8 +8361,8 @@ HookFrontTick(*) {
         if GetKeyState(k)
             return
     }
-    if (IsObject(g_Radial) || IsObject(g_AppSw) || IsObject(g_ClickLock)
-        || IsObject(g_ScrollPtr) || IsObject(g_RecHook))
+    if (IsObject(g_AppSw) || IsObject(g_ClickLock)
+        || IsObject(g_RecHook))
         return
     try {
         if Warp.active
@@ -10921,10 +8410,6 @@ PanicSnapshot() {
     live := ""
     if IsObject(g_ClickLock)
         live .= " clicklock"
-    if IsObject(g_ScrollPtr)
-        live .= " dragscroll"
-    if IsObject(g_Radial)
-        live .= " menu"
     if IsObject(g_AppSw)
         live .= " switcher"
     try {
@@ -10946,10 +8431,15 @@ PanicSnapshot() {
 }
 
 ToggleEnabled() {
-    global g_Enabled, g_PSQueue, g_PSGen
+    global g_Enabled, g_PSQueue, g_PSGen, g_MacroGen, g_MacroBusy
     g_Enabled := !g_Enabled
     if !g_Enabled {
+        g_MacroGen += 1                      ; a running macro stops too
+        g_MacroBusy := false
         ForceReleaseActive()                 ; nothing may stay down once hooks drop
+        ; "input is native" must be true: the keyboard pointer's InputHook
+        ; would otherwise outlive the pause with its off switch unhooked.
+        try Warp.Close(true)
         g_PSQueue := []                      ; and nothing may still be on its
         g_PSGen += 1                         ; way into the study: queued
     }                                        ; deliveries die, the in-flight
@@ -10965,6 +8455,7 @@ ToggleEnabled() {
     if wasTesting                            ; and "*X" are the same hotkey
         TestStop()
     SyncHooks()
+    RegisterKbHotkeys()                      ; its clash check reads the hooks
     UpdateTray()
     if wasTesting
         TestStart()
@@ -10976,7 +8467,7 @@ ToggleEnabled() {
 }
 
 PanicRelease() {
-    global g_SpeedSaved, g_PSQueue, g_PSGen, g_ClickLock
+    global g_PSQueue, g_PSGen, g_ClickLock
     global g_MacroBusy, g_MacroGen
     g_PSQueue := []                          ; queued PS deliveries die, and
     g_PSGen += 1                             ; the in-flight one aborts unsent
@@ -10988,31 +8479,23 @@ PanicRelease() {
     try Problem("panic", PanicSnapshot())   ; BEFORE anything is cleared
     g_MacroGen += 1
     g_MacroBusy := false
-    try SysCursorShow()                      ; never leave the pointer hidden
-    try SPMarkerHide()
     RM_Send("{LButton Up}{RButton Up}{MButton Up}{XButton1 Up}{XButton2 Up}"
         . "{LCtrl Up}{RCtrl Up}{LAlt Up}{RAlt Up}{LShift Up}{RShift Up}{LWin Up}{RWin Up}")
     for name, st in g_BS.Clone() {           ; v0.3: a KEY held down by our own
-        if (IsKeyInput(name) && st.down)     ; passthrough needs its own Up --
-            try SendNativeUp(st.passBtn != "" ? st.passBtn : name)
+        tgt := st.passBtn != "" ? st.passBtn : name   ; passthrough needs its
+        if (st.down && IsKeyInput(tgt))      ; own Up -- judged on the TARGET,
+            try SendNativeUp(tgt)            ; so XButton2 -> Enter is released
     }                                        ; the blanket list above is mouse
                                              ; + modifiers only
-    for name, st in g_BS.Clone()
+    AppSwitchClose(false)                    ; panic never commits a switch, and
+    for name, st in g_BS.Clone() {           ; a switcher left up would disable
+        st.down := false                     ; the watchdog until Esc
         ClearBS(name)
+    }
     g_ClickLock := 0                         ; the blanket Up above released it
     ClickLockWatchStop()                     ; and its watcher must not outlive it
-    ScrollPtrStop()
     try Warp.Close(true)                     ; the keyboard comes back, too
-    RadialClose(false)                       ; a menu over the image, firing
-                                             ; nothing: panic never commits
-    RadialSweepLayers()                      ; and any wheel layer that lost
-                                             ; its menu (this is what panic
-                                             ; is for)
-    if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-    }
-    g_SpeedMods.Clear()
+    BypassOff(true)
     HUD("PANIC: everything released & reset")
 }
 
@@ -11053,11 +8536,6 @@ RadUnhandledError(err, mode) {
     try Problem("unhandled", detail)
     try OutputDebug("[RadMapper unhandled] " detail "`n")
     try DllCall("user32\ReleaseCapture")
-    ; The error may have come out of the drag-scroll tick, which hides the
-    ; system cursor process-wide. Never let an unhandled error be the reason
-    ; the workstation has no pointer. (OnExit -> Cleanup does the same.)
-    try SysCursorShow()
-    try SPMarkerHide()
     return 1
 }
 
@@ -11067,8 +8545,10 @@ RadUnhandledError(err, mode) {
 ; a latch, warn/danger for trouble.
 HUD(msg, tone := "cyan") {
     if (IsSet(Lumi) && IsSet(Layer)) {
+        ; Built on its own thread: a toast is a GDI+ layer (tens of ms), and
+        ; HUD is called from Critical hotkey threads that input waits on.
         try {
-            Lumi.Toast(msg, tone)
+            SetTimer(ObjBindMethod(Lumi, "Toast", msg, tone), -1)
             return
         }
     }
@@ -11338,6 +8818,7 @@ RestoreDefaults(confirmed := false) {
     if (!confirmed && MsgBox("Restore the shipped defaults?"
         . " Your assignments will be replaced, including the dictation and monitor-switching defaults.", "RadMapper", "YesNo Icon?") != "Yes")
         return
+    try BackupCfg()                          ; edits since launch stay recoverable
     g_Cfg := DefaultCfg()
     SaveCfg()
     AfterCfgChange()
@@ -11493,19 +8974,70 @@ AppChoices() {
 ; LAYER_BASE_LABEL is a top-level global (defined near BUTTONS, above Init()).
 LayerChoices() {
     out := [LAYER_BASE_LABEL]
-    for b in LAYER_HOSTS
+    for b in LayerHosts()
         out.Push("Hold " InputLabel(b))
     return out
 }
 
-; May this input hold a layer open? Only LAYER_HOSTS. Everything else is
-; refused by the editors and dropped on load (ValidateCfg).
+; The inputs that may hold a layer open (v0.7.2: a setting). Everything else
+; is refused by the editors and dropped on load (ValidateCfg).
+LayerHosts() {
+    h := IsSet(g_Cfg) ? MGet(g_Cfg, "layerHosts", 0) : 0
+    return (h is Array) ? h : LAYER_HOSTS
+}
+
 LayerHostAllowed(inp) {
-    for b in LAYER_HOSTS {
+    for b in LayerHosts() {
         if (b = inp)
             return true
     }
     return false
+}
+
+; Could this input host a layer at all? Any mouse button but left (and no
+; wheel direction), or any key AutoHotkey can hook.
+LayerHostOk(inp) {
+    if (inp = "" || inp = "LButton" || IsWheel(inp))
+        return false
+    return IsMouseInput(inp) || KeyNameValid(inp)
+}
+
+; A hand-edited or stale host list, cleaned: canonical names, valid hosts
+; only, no duplicates, at most LAYER_HOSTS_MAX.
+CleanLayerHosts(list) {
+    out := []
+    for v in list {
+        if IsObject(v)
+            continue
+        n := CanonicalInputName(NormalizeInputName(String(v)))
+        for b in BUTTONS {                   ; "mbutton" -> "MButton"
+            if (b = n)
+                n := b
+        }
+        if !LayerHostOk(n)
+            continue
+        dup := false
+        for o in out {
+            if (o = n)
+                dup := true
+        }
+        if (!dup && out.Length < LAYER_HOSTS_MAX)
+            out.Push(n)
+    }
+    return out
+}
+
+; Short words for a host list: "button 4, button 5 or CapsLock".
+LayerHostsText() {
+    hs := LayerHosts()
+    if (hs.Length = 0)
+        return "no input (add one with “Layer buttons…”)"
+    out := ""
+    for i, h in hs {
+        w := IsMouseInput(h) ? StrLower(InputLabel(h)) : h
+        out .= (i = 1 ? "" : (i = hs.Length ? " or " : ", ")) w
+    }
+    return out
 }
 
 ; A row's layer path is usable when every component may host a layer and
@@ -11828,14 +9360,6 @@ ValidateActionValue(owner, atype, raw, &ok) {
             "RadMapper", "Icon! Owner" hwnd)
         return ""
     }
-    if (atype = "radial" && Trim(raw) != "" && !MenuByName(Trim(raw))) {
-        ok := false
-        MsgBox("No menu named '" Trim(raw) "'. Choose a name from Menus, or leave "
-            . "Details empty for the automatic menu.", "RadMapper", "Icon! Owner" hwnd)
-        return ""
-    }
-    if (atype = "radial")
-        return Trim(raw)
     if (atype = "native" || atype = "dblclick" || atype = "dragmove"
         || atype = "clicklock") {
         v := ResolveInputValue(raw)
@@ -11863,19 +9387,6 @@ ValidateActionValue(owner, atype, raw, &ok) {
         return m
     }
     return raw
-}
-
-; Does `rows` already hold a row for the same button, trigger and scope?
-RowKeyTaken(rows, row) {
-    for r in rows {
-        if (MGet(r, "button", "") = MGet(row, "button", "")
-            && MGet(r, "event", "") = MGet(row, "event", "")
-            && MGet(r, "app", "*") = MGet(row, "app", "*")
-            && MGet(r, "layer", "*") = MGet(row, "layer", "*")
-            && MGet(r, "mods", "") = MGet(row, "mods", ""))
-            return true
-    }
-    return false
 }
 
 IsRetiredEvent(ev) {
@@ -12068,13 +9579,26 @@ AppOk(dlg, editRow, edName, edMatch) {
         MsgBox("Enter at least one match entry.", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
+    ; Two profiles with one name would share every row: renaming or
+    ; deleting either rewrote the rows of both.
+    for i, other in g_Cfg["apps"] {
+        if (i != editRow && MGet(other, "name", "") = name) {
+            MsgBox("There is already a profile called '" name "'.", "RadMapper",
+                "Iconx Owner" . dlg.Hwnd)
+            return
+        }
+    }
     if editRow {
         old := g_Cfg["apps"][editRow]["name"]
-        if (old != name) {
+        if (old !== name) {
             for row in g_Cfg["bindings"] {
                 if (MGet(row, "app", "*") = old)
                     row["app"] := name
             }
+            ; "PACS: send keys" targets a profile by NAME; follow the rename
+            ; or every pacs_keys press reports a missing profile.
+            if (Cfg("pacsApp") = old)
+                CfgSet("pacsApp", name)
         }
         g_Cfg["apps"][editRow]["name"] := name
         g_Cfg["apps"][editRow]["match"] := matches
@@ -12099,15 +9623,56 @@ AppDelete(row) {
         if (MGet(r, "app", "*") = name)
             used += 1
     }
-    msg := used > 0
-        ? "Profile '" name "' is used by " used " row(s); they will be switched to Global (all apps). Delete?"
-        : "Delete profile '" name "'?"
-    if (MsgBox(msg, "RadMapper", "YesNo Icon?") != "Yes")
+    toGlobal := false
+    if (used > 0) {
+        ; Default: its settings go WITH it. Made global, a PACS "keys r"
+        ; thumb row would start typing into PowerScribe.
+        ans := MsgBox("Delete profile '" name "'?`n`nIt has " used " setting(s)."
+            . "`n`nYes = delete them too (recommended)"
+            . "`nNo = keep them, working in every program"
+            . "`nCancel = keep the profile", "RadMapper", "YesNoCancel Icon? Default1")
+        if (ans = "Cancel")
+            return
+        toGlobal := (ans = "No")
+    } else if (MsgBox("Delete profile '" name "'?", "RadMapper", "YesNo Icon?") != "Yes")
         return
+    ; Moving a row to Global must not shadow an existing global row on the
+    ; same key, and a left/right/middle hold cannot be global at all.
+    kept := []
+    dropped := 0
     for r in g_Cfg["bindings"] {
-        if (MGet(r, "app", "*") = name)
+        if (MGet(r, "app", "*") = name) {
+            if !toGlobal {
+                dropped += 1
+                continue
+            }
+            g := r.Clone()
+            g["app"] := "*"
+            if ((IsPrimaryButton(MGet(r, "button", "")) && MGet(r, "event", "") = "hold")
+                || FindDupBinding(g).Length > 0) {
+                dropped += 1
+                continue
+            }
             r["app"] := "*"
+        }
+        kept.Push(r)
     }
+    g_Cfg["bindings"] := kept
+    ; The Mouse/Keyboard program pickers index AppChoices() (Global first,
+    ; then profiles): keep them on the same program, or Global if it went.
+    if IsSet(Atlas) {
+        pos := row + 1
+        for prop in ["appIdx", "kbAppIdx"] {
+            v := Atlas.%prop%
+            if (v = pos)
+                Atlas.%prop% := 1
+            else if (v > pos)
+                Atlas.%prop% := v - 1
+        }
+        Atlas.selWant := 0
+    }
+    if dropped
+        Problem("app-deleted", dropped " row(s) of '" name "' removed with it")
     g_Cfg["apps"].RemoveAt(row)
     SaveCfg()
     AfterCfgChange()
@@ -12139,8 +9704,6 @@ UpdateTray() {
 BuildTray() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Settings…", (*) => ShowMain())
-    A_TrayMenu.Add("Clipboard…", (*) => Shelf.Toggle("clip"))
-    A_TrayMenu.Add("Scratchpad…", (*) => Shelf.Toggle("scratch"))
     A_TrayMenu.Add("Rendering self-test…", (*) => ShowGallery())
     A_TrayMenu.Add("Enabled", (*) => ToggleEnabled())
     A_TrayMenu.Add("Panic release", (*) => PanicRelease())
@@ -12152,25 +9715,17 @@ BuildTray() {
 }
 
 Cleanup(*) {
-    global g_SpeedSaved, g_Problems, g_FgLockSaved
+    global g_Problems, g_FgLockSaved
     SetTimer(Watchdog, 0)
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
-    RadialClose(false)
-    RadialSweepLayers()                      ; no wheel layer outlives us
     TeleportSignalStop()
-    try ScrollPtrStop()                      ; restores a hidden pointer too
-    try SysCursorShow()
     g_Problems := []                         ; in-memory only, dies with us
     if g_CfgDirty
         SaveCfg()                            ; never drop a debounced slider value
     ForceReleaseActive()
-    if (g_SpeedSaved != "") {
-        RM_SetSpeed(g_SpeedSaved)
-        g_SpeedSaved := ""
-    }
     ; Put the user's foreground-lock timeout back. It is a per-user Windows
     ; setting, not ours to leave changed on a shared login. -1 = never read.
     if (g_FgLockSaved >= 0) {
@@ -12198,11 +9753,10 @@ Init() {
                                              ; set was armed BEFORE the last
                                              ; exit; arm it again now
 
-    OnClipboardChange(ClipChanged)           ; feeds the clipboard shelf
     BuildTray()
     SyncHooks()
     RegisterKbHotkeys()
-    AppSwitchBindKeys()                      ; AFTER RegisterKbHotkeys, and
+    AppSwitchBindKeys(false)                 ; AFTER RegisterKbHotkeys, and
                                              ; here rather than lazily on the
                                              ; wheel thread that opens the
                                              ; switcher: both set a HotIf
@@ -13198,8 +10752,14 @@ class Lumi {
         ; yields -- so without this a click on a second field opened a nested
         ; loop inside the first, and whichever unwound last wrote its buffer
         ; over the other's.
-        if (Lumi.editing > 0)
+        ; v0.7.2: a click on a SECOND field ends the first (committing it)
+        ; and opens this one a moment later, once that loop has unwound --
+        ; ignoring the click typed the next entry into the first field.
+        if (Lumi.editing > 0) {
+            Lumi.EndEdit()
+            SetTimer(() => Lumi.__FieldEdit(state), -50)
             return
+        }
         ; An open option list must not stay up over the field being typed in.
         Lumi.CloseSelect()
         ; The field's OWN layer -- captured when it was built. Reading the
@@ -14358,14 +11918,14 @@ class Atlas {
     ; (pan) are two of the most-used PACS gestures and the wizard offers
     ; them as tiles, so Simple mode has to be able to show the action they
     ; actually save.
-    ; v0.7: shorter again. Simple mode shows the eleven things a reading
+    ; v0.7: shorter again. Simple mode shows the ten things a reading
     ; room binds; text, native, double-click, click lock, drag zoom, window
     ; placement, the keyboard pointer and "open settings" are Advanced.
     ; ActView still keeps a row's own action, so nothing bound is hidden.
     static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
-        "ps_keys", "pacs_keys", "tele_prev", "tele_next", "scrollptr",
-        "radial", "none"]
+        "ps_keys", "pacs_keys", "tele_prev", "tele_next",
+        "bypass", "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -14402,12 +11962,13 @@ class Atlas {
     }
 
     static PANELS := ["Home", "Mouse", "Keyboard", "Macros", "Apps",
-                      "Windows", "Menus", "Pointer", "Settings", "Diagnostics"]
+                      "Windows", "Pointer", "Settings", "Diagnostics"]
 
     ; ── WINDOW ──────────────────────────────────────────────────────────────
 
     static Show() {
         if IsObject(Atlas.lyr) {
+            Atlas.KeysOn(true)
             ; Minimised is not the same as hidden: Show() alone leaves a
             ; minimised window minimised, so the tray icon would appear to do
             ; nothing once you had used the minimise button.
@@ -14455,11 +12016,35 @@ class Atlas {
      * ONCE, under a context that is true only while our own layer is the
      * foreground window, so Escape stays completely native everywhere else.
      */
-    static BindEscape() {
-        if Atlas.escBound
+    static ctxFn := 0              ; the ONE IsFront object the keys use
+    static ctxKeys := []
+
+    /** Settings-window keys on/off -- live only while the window is up
+     *  (see #HotIfTimeout: a context hotkey costs every press of that key,
+     *  in every program, a round trip to this thread). */
+    static KeysOn(on) {
+        if !Atlas.escBound
             return
         try {
-            HotIf(ObjBindMethod(Atlas, "IsFront"))
+            HotIf(Atlas.ctxFn)
+            for hk in Atlas.ctxKeys
+                try Hotkey(hk, on ? "On" : "Off")
+        } finally {
+            HotIf()
+        }
+    }
+
+    static BindEscape() {
+        if Atlas.escBound {
+            Atlas.KeysOn(true)
+            return
+        }
+        Atlas.ctxFn := ObjBindMethod(Atlas, "IsFront")
+        Atlas.ctxKeys := ["Escape", "F1", "^!Left", "^!Right", "^!Up", "^!Down",
+            "~Tab", "~+Tab", "~Enter", "~Space", "~Left", "~Right", "~Up",
+            "~Down", "~Delete", "~BackSpace"]
+        try {
+            HotIf(Atlas.ctxFn)
             Hotkey("Escape", ObjBindMethod(Atlas, "EscKey"), "On")
             Hotkey("F1", (*) => Atlas.Help(), "On")
             ; Resize from the keyboard, live only while OUR window is in
@@ -14661,7 +12246,6 @@ class Atlas {
             return
         switch Atlas.PanelName() {
             case "Mouse", "Keyboard": Atlas.DeleteSel()
-            case "Menus":  Atlas.MenuDelete()
             case "Macros": Atlas.MacroStepDelete()
         }
     }
@@ -14684,14 +12268,13 @@ class Atlas {
             case "key":
                 m.Add("Edit…", (*) => Atlas.EditRow(i, true))
                 m.Add("Delete", (*) => Atlas.DeleteSel())
-            case "menu":
-                m.Add("Edit commands…", (*) => Atlas.MenuEditSel())
-                m.Add("Delete", (*) => Atlas.MenuDelete())
             case "step":
                 m.Add("Edit…", (*) => Atlas.MacroStepEditSel())
                 m.Add("Delete", (*) => Atlas.MacroStepDelete())
                 m.Add("Move up", (*) => Atlas.MacroStepMove(-1))
                 m.Add("Move down", (*) => Atlas.MacroStepMove(1))
+            case "app":
+                m.Add("Edit…", (*) => Atlas.AppEdit(Atlas.SelectedRef()))
             default:
                 return
         }
@@ -14729,6 +12312,7 @@ class Atlas {
 
     static Hide(*) {
         Atlas.StopTick()
+        Atlas.KeysOn(false)
         Lumi.CloseSelect()               ; a floating option list must never
         if IsObject(Atlas.dlg) {         ; outlive the window that opened it
             Atlas.Disown(Atlas.dlg)
@@ -15264,7 +12848,6 @@ class Atlas {
                 case "Macros":      Atlas.PanelMacros(px, py, pw, ph)
                 case "Apps":        Atlas.PanelApps(px, py, pw, ph)
                 case "Windows":     Atlas.PanelWindows(px, py, pw, ph)
-                case "Menus":       Atlas.PanelMenus(px, py, pw, ph)
                 case "Pointer":     Atlas.PanelPointer(px, py, pw, ph)
                 case "Settings":    Atlas.PanelSettings(px, py, pw, ph)
                 case "Diagnostics": Atlas.PanelDiag(px, py, pw, ph)
@@ -15355,9 +12938,9 @@ class Atlas {
         ; Chips stop clear of the window buttons on the right. They used to
         ; start at w-34, i.e. underneath them.
         cx := w - 166                    ; clear of four window buttons now
-        if IsObject(g_ScrollPtr) {
-            cx -= 110
-            Lumi.Chip(cx, 20, 106, 24, "drag scroll", "cyan")
+        if IsObject(g_Bypass) {
+            cx -= 132
+            Lumi.Chip(cx, 20, 128, 24, "pass-through", "warn")
         }
         if IsObject(g_ClickLock) {
             cx -= 132
@@ -15532,12 +13115,12 @@ class Atlas {
             . "monitor -- each with whatever "
             . "fires it today, a Set button that asks three questions, and a "
             . "Clear button that puts it back to normal.`n`n"
-            . "It offers four jobs -- change what a mouse button does, "
-            . "change what a keyboard key does, set up a radial menu, apply "
-            . "a starter pack -- and every one of them is a button. Start "
+            . "It offers three jobs -- change what a mouse button does, "
+            . "change what a keyboard key does, apply a starter pack -- and "
+            . "every one of them is a button. Start "
             . "there and you never have to guess which page you want.`n`n"
             . "The switch at the bottom of Home is Simple or Advanced. "
-            . "Simple shows Mouse, Keyboard, Menus, Settings and Diagnostics, "
+            . "Simple shows Mouse, Keyboard, Settings and Diagnostics, "
             . "and a short list of actions. Advanced adds Macros, "
             . "Apps, Windows and Pointer. Nothing is lost either way -- the "
             . "switch changes what is SHOWN, never what is set up.`n`n"
@@ -15547,33 +13130,12 @@ class Atlas {
             . "email and the answer usually falls out of it.`n`n"
             . "Mouse / Keyboard`n"
             . "Choose a button or key, then add an assignment. In program "
-            . "limits where it works. Rec records a shortcut; Keys lets you "
+            . "limits where it works: a mouse button follows the window "
+            . "under the pointer, a key follows the window you are typing "
+            . "in. Rec records a shortcut; Keys lets you "
             . "choose one without AutoHotkey syntax. Left, right and middle "
             . "are always instant clicks; a hold on them only works inside "
             . "one program.`n`n"
-            . "Radial menus`n"
-            . "Edit commands, Assign a button, then Practice safely. Choose "
-            . "Send keys for PACS shortcuts and record the keys shown in "
-            . "your viewer settings.`n`n"
-            . "Every direction on the first wheel belongs to a command: "
-            . "each one owns its whole slice of the circle, so being a bit "
-            . "off centre still picks the one you aimed at. The numbered "
-            . "preset ring works the same way — all nine numbers are "
-            . "reachable. To fire nothing, let go in the middle, press "
-            . "Escape, or click.`n`n"
-            . "A command that opens a SECOND ring opens it when you turn a "
-            . "corner on it or pause on it. That second ring is the one "
-            . "place with gaps: the direction you came from, and the space "
-            . "either side of it, mean back — turn or pause there and the "
-            . "first wheel returns, having sent nothing. A preset ring has "
-            . "no gaps, so leave it with Escape or a click.`n`n"
-            . "A click cancels a live menu wherever you are, practice "
-            . "included, and sends nothing. The middle of the wheel says "
-            . "what is armed and which keys it will send. Two switches on "
-            . "the Menus page — Animate the wheel and Show wedges — turn "
-            . "the movement and the drawn arcs off; neither changes what a "
-            . "direction does. A disabled direction does nothing, and "
-            . "practice never sends a command.`n`n"
             . "Getting around`n"
             . "Use the list on the left, or set the whole thing up from the "
             . "keyboard: Tab and Shift+Tab move between controls and ring "
@@ -15736,6 +13298,8 @@ class Atlas {
         ; header, a nav and an empty body. Refuse it and stay where we are.
         if (i < 1 || i > Atlas.PANELS.Length)
             return
+        Lumi.EndEdit()                       ; a live field defers Build
+        Atlas.selWant := 0                   ; a row index means nothing here
         Atlas.panel := i
         Atlas.Build()
     }
@@ -15775,11 +13339,10 @@ class Atlas {
      * THE READING ROOM ESSENTIALS (v0.6.5).
      *
      * Five functions this program exists for, one row each:
-     *   label, action type, action value (radial menus only), hotkey setting.
+     *   label, action type, action value (unused), hotkey setting.
      * A function is "set" when ANY binding fires it, or when its Settings
      * hotkey is filled in -- which is why the row reads both and says so in
-     * one sentence. The value is compared only for "radial", where the menu
-     * name is what tells the PACS wheel from the preset ring.
+     * one sentence.
      */
     static ESSENTIALS := [
         ["Dictate on / off",         "ps_dictate", "",               "hkDictate"],
@@ -15794,8 +13357,6 @@ class Atlas {
         for row in MGet(g_Cfg, "bindings", []) {
             a := MGet(row, "action", 0)
             if (!IsObject(a) || MGet(a, "type", "") != act)
-                continue
-            if (act = "radial" && MGet(a, "value", "") != value)
                 continue
             one := InputLabel(MGet(row, "button", ""))
             ev := EventLabelOf(MGet(row, "event", ""))
@@ -15822,11 +13383,11 @@ class Atlas {
         if (i < 1 || i > Atlas.ESSENTIALS.Length)
             return
         e := Atlas.ESSENTIALS[i]
-        ; A radial menu is a HOLD: flick a direction and release. Everything
-        ; else here is a tap.
-        btn := IsMouseInput(Atlas.sel) ? Atlas.sel : "XButton1"
-        seed := NewBinding("*", "*", "", btn,
-            (e[2] = "radial") ? "hold" : "tap", e[2], e[3])
+        ; never the left/right/middle button or a wheel: "Set… Dictate" then
+        ; Save made every left click toggle dictation
+        btn := (IsMouseInput(Atlas.sel) && !IsPrimaryButton(Atlas.sel)
+            && !IsWheel(Atlas.sel)) ? Atlas.sel : "XButton1"
+        seed := NewBinding("*", "*", "", btn, "tap", e[2], e[3])
         Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
     }
 
@@ -15846,8 +13407,6 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             drop := IsObject(a) && (MGet(a, "type", "") = e[2])
-            if (drop && e[2] = "radial" && MGet(a, "value", "") != e[3])
-                drop := false
             if !drop
                 kept.Push(row)
         }
@@ -15912,7 +13471,7 @@ class Atlas {
             "Use the switch at the bottom of the list on the left to turn it "
             . "on or off.", "mute", "left", 20)
 
-        ; ── the four jobs ───────────────────────────────────────────────
+        ; ── the three jobs ───────────────────────────────────────────────
         jy := sy + 56
         Lumi.Label(x, jy, 420, "What do you want to do?", "section")
         bw := Min(380, (w - 16) // 2)
@@ -15922,9 +13481,7 @@ class Atlas {
         Lumi.Btn(x + bw + 16, jy + 22, bw, bh,
             "Change what a keyboard key does",
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
-        Lumi.Btn(x, jy + 70, bw, bh, "Set up a radial menu",
-            (*) => Atlas.Go(Atlas.PanelIndex("Menus")), "accent")
-        Lumi.Btn(x + bw + 16, jy + 70, bw, bh, "Apply a starter pack",
+        Lumi.Btn(x, jy + 70, bw, bh, "Apply a starter pack",
             (*) => Atlas.PackChoose(), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
@@ -15971,6 +13528,11 @@ class Atlas {
      * what changes is what each part does.
      */
     static LayerTabs(x, y, w) {
+        ; v0.7.2: the right end of the strip edits WHICH inputs are tabs
+        bw0 := 132
+        Lumi.Btn(x + w - bw0, y, bw0, 30, "Layer buttons…",
+            (*) => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), "ghost")
+        w -= bw0 + 8
         items := LayerChoices()
         if !items.Has(Atlas.layerIdx)        ; a tab whose host is gone
             Atlas.layerIdx := 1
@@ -15981,6 +13543,7 @@ class Atlas {
             code := LayerCodeFromLabel(lab)
             host := (code = "*") ? "" : code
             txt := (host = "") ? "Base"
+                : (host = "RButton") ? "Hold Right"
                 : "Hold " (IsMouseInput(host) ? "Button " Atlas.ZoneCap(host) : host)
             tabs.Push({i: i, txt: txt, bw: Max(72, 22 + StrLen(txt) * 7)})
         }
@@ -16169,11 +13732,15 @@ class Atlas {
     }
 
     static SetApp(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.appIdx := i
         Atlas.Build()
     }
 
     static SetLayer(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.layerIdx := i
         Atlas.Build()
     }
@@ -16322,7 +13889,11 @@ class Atlas {
         ; Edit and Delete usable; without this the incoming frame inherited
         ; the sel of the list belonging to the PREVIOUS input, which pointed
         ; at whatever row happened to sit at that index here.
-        Atlas.selWant := 1
+        ; v0.7.2: 0, not 1. The list under the slots holds only MODIFIER
+        ; rows now, so pre-selecting row 1 armed Delete on a row the user
+        ; never picked.
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.Build()
     }
 
@@ -16421,11 +13992,15 @@ class Atlas {
     }
 
     static SetKbApp(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.kbAppIdx := i
         Atlas.Build()
     }
 
     static SetKbLayer(i) {
+        Lumi.EndEdit()
+        Atlas.selWant := 0
         Atlas.layerIdx := i
         Atlas.Build()
     }
@@ -16524,8 +14099,9 @@ class Atlas {
     }
 
     static PickKeyTile(code) {
+        Lumi.EndEdit()
         Atlas.keySel := code
-        Atlas.selWant := 1               ; as PickZone: the key's first row
+        Atlas.selWant := 0               ; as PickZone: nothing pre-selected
         Atlas.Build()
     }
 
@@ -16616,7 +14192,7 @@ class Atlas {
         for i, name in names {
             n := g_Cfg["macros"][name].Length
             rows.Push({cells: [name, n " step" (n = 1 ? "" : "s")]})
-            if (name = Atlas.macroSel)
+            if SameText(name, Atlas.macroSel)
                 selRow := i
         }
         Lumi.Label(x, y + 74, lw, "Macros", "section")
@@ -16700,7 +14276,7 @@ class Atlas {
         if (i < 1 || i > names.Length)
             return
         if (dbl = "ctx") {
-            if (names[i] != Atlas.macroSel) {
+            if !SameText(names[i], Atlas.macroSel) {
                 Atlas.macroSel := names[i]
                 Atlas.selWant := 0
                 Atlas.Build()
@@ -16714,7 +14290,7 @@ class Atlas {
             Atlas.StartTick()
             return
         }
-        if (names[i] = Atlas.macroSel)
+        if SameText(names[i], Atlas.macroSel)
             return
         Atlas.macroSel := names[i]
         Atlas.selWant := 0                   ; a new macro, no step picked
@@ -16755,7 +14331,7 @@ class Atlas {
             Lumi.Toast("Type the new name in the field, then click Rename", "warn")
             return
         }
-        if (name = old)
+        if SameText(name, old)
             return
         if g_Cfg["macros"].Has(name) {
             Lumi.Toast("There is already a macro called “" name "”", "warn")
@@ -16767,7 +14343,7 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             if (IsObject(a) && MGet(a, "type", "") = "macro"
-                && MGet(a, "value", "") = old) {
+                && SameText(MGet(a, "value", ""), old)) {
                 a["value"] := name
                 n += 1
             }
@@ -16790,7 +14366,7 @@ class Atlas {
         for row in g_Cfg["bindings"] {
             a := MGet(row, "action", 0)
             if (IsObject(a) && MGet(a, "type", "") = "macro"
-                && MGet(a, "value", "") = name)
+                && SameText(MGet(a, "value", ""), name))
                 used += 1
         }
         if !Atlas.Confirm("Delete the macro “" name "”?`n`n"
@@ -17035,7 +14611,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 112, w, h - 220, rows,
             [{w: 170}, {w: w - 560, kind: "code"}, {w: 120, kind: "mono"},
              {w: 190, kind: "mono"}],
-            Atlas.Picker(), 30,
+            Atlas.Picker("app"), 30,
             ["Program", "Recognised by", "Pointer spot", "Special"])
 
         hasSel := Atlas.HasSel(rows.Length)
@@ -17142,114 +14718,6 @@ class Atlas {
     static layoutRefs := []        ; list row -> g_Cfg["layouts"] index
     static layoutName := 0         ; the "new name" field
 
-    ; ── PANEL: MENUS (radial) ───────────────────────────────────────────────
-
-    static menuRefs := []          ; list row -> g_Cfg["menus"] index
-    static menuReturnTimer := 0
-    static menuName := 0           ; the "new menu" name field
-
-    static PanelMenus(x, y, w, h) {
-        Lumi.Label(x, y, 400, "Radial menus", "title")
-        Lumi.Para(x, y + 28, w, 56,
-            "1. Edit commands.   2. Assign a button.   3. Practice safely. "
-            . "Hold the assigned button, move toward a command, then release. "
-            . "Each command answers to its own arc; between two of them "
-            . "nothing is chosen. Release in the center or press Escape to "
-            . "cancel.", "mute")
-
-        rows := []
-        Atlas.menuRefs := []
-        for i, m in MGet(g_Cfg, "menus", []) {
-            nm := MGet(m, "name", "")
-            sl := MGet(m, "slices", [])
-            live := 0
-            for one in sl {
-                act := MGet(one, "action", 0)
-                if (IsObject(act) && MGet(act, "type", "none") != "none")
-                    live += 1
-            }
-            app := MGet(m, "app", "")
-            rows.Push({cells: [nm, app = "" ? "any program" : AppDisp(app),
-                sl.Length " slice" (sl.Length = 1 ? "" : "s"),
-                live " filled", Atlas.MenuBoundTo(nm)]})
-            Atlas.menuRefs.Push(i)
-        }
-        Atlas.list := Lumi.List(x, y + 96, w, h - 248, rows,
-            [{w: 210}, {w: 150, kind: "mute"}, {w: 110, kind: "mono"},
-             {w: 110, kind: "mono"}, {w: w - 620, kind: "mono"}],
-            Atlas.Picker("menu"), 30,
-            ["Menu", "Program", "Size", "Filled in", "Opened by"])
-        if (rows.Length = 0)
-            Lumi.Label(x + 12, y + 122, w - 24,
-                "No menus yet — type a name below and click Add.", "mute",
-                "left", 30)
-
-        ; How the wheel LOOKS, never what a direction does. Both are on by
-        ; default; both are here rather than on Settings because they are
-        ; about this page's one object.
-        ty := y + h - 140
-        Lumi.Toggle(x, ty, "Animate the wheel", Cfg("radialAnim"),
-            (v) => Atlas.SetCfg("radialAnim", v ? 1 : 0))
-        Lumi.Toggle(x + 300, ty, "Show wedges", Cfg("radialWedges"),
-            (v) => Atlas.SetCfg("radialWedges", v ? 1 : 0))
-
-        by := y + h - 96
-        Lumi.Label(x, by, 90, "New menu", "dim", "left", 30)
-        Atlas.menuName := Lumi.Field(x + 96, by, 230, 30, "", 0,
-            "e.g. Viewer", true)
-        Lumi.Btn(x + 334, by, 130, 30, "Add",
-            (*) => Atlas.MenuAddNew(), "primary")
-        Lumi.Label(x + 476, by, w - 476,
-            "4 or 8 directions, or 9 numbered slots for window presets.",
-            "mute", "left", 30)
-
-        by2 := y + h - 50
-        mb := Atlas.BtnRow(x, w, [0.2, 0.2, 0.2, 0.2, 0.2])
-        hasSel := Atlas.HasSel(rows.Length)
-        Lumi.Btn(mb[1].x, by2, mb[1].w, 34, "Edit commands",
-            (*) => Atlas.MenuEditSel(), hasSel ? "accent" : "muted")
-        Lumi.Btn(mb[2].x, by2, mb[2].w, 34, "Assign a button",
-            (*) => Atlas.MenuAssign(), hasSel ? "accent" : "muted")
-        Lumi.Btn(mb[3].x, by2, mb[3].w, 34, "Practice safely",
-            (*) => Atlas.MenuTry(), hasSel ? "ghost" : "muted")
-        Lumi.Btn(mb[4].x, by2, mb[4].w, 34, "Duplicate",
-            (*) => Atlas.MenuDuplicate(), "ghost")
-        Lumi.Btn(mb[5].x, by2, mb[5].w, 34, "Delete",
-            (*) => Atlas.MenuDelete(), "danger")
-    }
-
-    /** Which inputs open this menu -- read back out of the bindings. */
-    static MenuBoundTo(name) {
-        out := ""
-        for row in MGet(g_Cfg, "bindings", []) {
-            a := MGet(row, "action", 0)
-            if (!IsObject(a) || MGet(a, "type", "") != "radial")
-                continue
-            v := MGet(a, "value", "")
-            ; A blank value means "whatever matches the app in front", so it
-            ; opens this menu too when this menu is that match.
-            if (v != "" && v != name)
-                continue
-            lbl := InputLabel(MGet(row, "button", ""))
-            if (MGet(row, "event", "") != "")
-                lbl .= " " MGet(row, "event", "")
-            if (v = "")
-                lbl .= " (auto)"
-            out .= (out = "" ? "" : ", ") lbl
-        }
-        return out = "" ? "— nothing opens it yet —" : out
-    }
-
-    /** Select a row of the CURRENT list view -- call after Build(), which
-     *  replaces the view; a sel written before it lands on the old one. */
-    static SelectListRow(i) {
-        if (!IsObject(Atlas.list) || i < 1 || i > Atlas.list.rows.Length)
-            return
-        Atlas.list.sel := i
-        Atlas.savedSel := i
-        try Lumi.__ListPaint(Atlas.list)
-    }
-
     /** SaveCfg for panel actions that go on to show a success toast: on a
      *  failed or blocked save, a warning toast lands AFTER theirs so the
      *  last word on screen is the true one. */
@@ -17269,155 +14737,6 @@ class Atlas {
         Chooser.Show("Starter packs",
             "click one to apply it   ·   each is just ordinary settings   ·   Esc cancels",
             items, StarterPackApply)
-    }
-
-    static MenuAssign() {
-        menu := Atlas.MenuSel()
-        if !IsObject(menu) {
-            Lumi.Toast("Select a menu first", "warn")
-            return
-        }
-        app := MGet(menu, "app", "")
-        seed := NewBinding(app = "" ? "*" : app, "*", "", "XButton1",
-            "hold", "radial", menu["name"])
-        Atlas.OpenDlg(() => Atlas.BindDlg(0, false, seed))
-    }
-
-    static MenuSelRef() {
-        if !IsObject(Atlas.list)
-            return 0
-        i := Atlas.list.sel
-        if (i < 1 || i > Atlas.menuRefs.Length)
-            return 0
-        return Atlas.menuRefs[i]
-    }
-
-    static MenuSel() {
-        ref := Atlas.MenuSelRef()
-        return ref ? g_Cfg["menus"][ref] : 0
-    }
-
-    static MenuAddNew() {
-        Lumi.EndEdit()
-        name := Trim(Lumi.FieldValue(Atlas.menuName))
-        if (name = "") {
-            Lumi.Toast("Type a name for it first", "warn")
-            return
-        }
-        if MenuByName(name) {
-            Lumi.Toast("There is already a menu called “" name "”", "warn")
-            return
-        }
-        m := Map()
-        m["name"] := name
-        m["app"] := ""
-        m["slices"] := [MenuSlice("", "none", ""), MenuSlice("", "none", ""),
-                        MenuSlice("", "none", ""), MenuSlice("", "none", "")]
-        if !g_Cfg.Has("menus")
-            g_Cfg["menus"] := []
-        g_Cfg["menus"].Push(m)
-        AfterCfgChange()
-        ; The menu EXISTS whether or not the file could be written, and the
-        ; list has to show it either way -- bailing before Build() left the
-        ; new menu alive in memory and invisible on screen. SaveOrWarn says
-        ; the true thing about the disk (MenuDelete has always done this).
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Atlas.SelectListRow(g_Cfg["menus"].Length)
-        Lumi.Toast("Added “" name "” — now fill in its commands", "jade")
-    }
-
-    static MenuDuplicate() {
-        m := Atlas.MenuSel()
-        if !IsObject(m) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        base := MGet(m, "name", "menu")
-        name := base " copy"
-        i := 2
-        while MenuByName(name)
-            name := base " copy " i++
-        copy := Map()
-        copy["name"] := name
-        copy["app"] := MGet(m, "app", "")
-        sl := []
-        for one in MGet(m, "slices", []) {
-            act := MGet(one, "action", 0)
-            sl.Push(MenuSlice(MGet(one, "label", ""),
-                IsObject(act) ? MGet(act, "type", "none") : "none",
-                IsObject(act) ? MGet(act, "value", "") : ""))
-        }
-        copy["slices"] := sl
-        g_Cfg["menus"].Push(copy)
-        AfterCfgChange()
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Atlas.SelectListRow(g_Cfg["menus"].Length)
-        Lumi.Toast("Copied to “" name "”", "jade")
-    }
-
-    static MenuDelete() {
-        ref := Atlas.MenuSelRef()
-        if !ref {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        name := MGet(g_Cfg["menus"][ref], "name", "")
-        if !Atlas.Confirm("Delete the menu “" name "”?`n`n"
-            . "Its commands go with it, and anything you set to open "
-            . "it will stop opening anything. This cannot be undone.")
-            return
-        g_Cfg["menus"].RemoveAt(ref)
-        AfterCfgChange()
-        Atlas.SaveOrWarn()
-        Atlas.Build()
-        Lumi.Toast("Deleted “" name "”", "magenta")
-    }
-
-    /**
-     * Open the selected menu at the cursor, latched, so it can be looked at
-     * without binding it to anything first. The settings window is hidden
-     * for it: a menu drawn over the window that opened it tells you nothing
-     * about how it will feel over an image.
-     */
-    static MenuTry() {
-        m := Atlas.MenuSel()
-        if !IsObject(m) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        name := MGet(m, "name", "")
-        Atlas.Hide()
-        ; And GIVE IT BACK. v0.5.0 hid the settings window to show the menu
-        ; over something real and then never showed it again -- the window
-        ; simply vanished, which is indistinguishable from the app freezing.
-        SetTimer(() => RadialOpen(name, 0, true), -260)
-        ; Backstop only: RadialClose brings the window back the moment the
-        ; trial ends, whichever way it ended.
-        Atlas.MenuReturnAfter(-7200)
-    }
-
-    /** Bring the settings window back after a trial menu, whatever happened. */
-    static MenuReturnAfter(delay) {
-        if !IsObject(Atlas.menuReturnTimer)
-            Atlas.menuReturnTimer := ObjBindMethod(Atlas, "MenuTryDone")
-        SetTimer(Atlas.menuReturnTimer, delay)
-    }
-
-    static MenuTryDone(*) {
-        Atlas.MenuReturnAfter(0)
-        if IsObject(g_Radial)
-            RadialClose(false)
-        Atlas.Show()
-    }
-
-    static MenuEditSel() {
-        if !IsObject(Atlas.MenuSel()) {
-            Lumi.Toast("Pick a menu in the list first", "warn")
-            return
-        }
-        Atlas.OpenDlg(() => Atlas.MenuDlg())
     }
 
     static PanelWindows(x, y, w, h) {
@@ -17455,7 +14774,7 @@ class Atlas {
         Atlas.list := Lumi.List(x, y + 96, w, h - 396, rows,
             [{w: 230}, {w: 100, kind: "mute"}, {w: 120, kind: "mono"},
              {w: 80, kind: "mono"}, {w: 130, kind: "mute"}],
-            (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : 0), 30,
+            (i, dbl) => (dbl = 1 ? Atlas.LayoutApplySel() : Atlas.PickRow(i, dbl)), 30,
             ["Arrangement", "Windows", "Keep in place", "Now", "Saved on"])
         if (rows.Length = 0)
             Lumi.Label(x + 12, y + 122, w - 24,
@@ -17548,7 +14867,10 @@ class Atlas {
         ; in, which is the one thing the list column beside it could not be
         ; read for while the row was highlighted. The label is the CURRENT
         ; state; the line underneath names what one click does next.
-        selLay := Atlas.LayoutSel()
+        ; the list above was JUST built (its sel is restored after the panel
+        ; is drawn), so read the carried selection, not the list's
+        selLay := (Atlas.HasSel(rows.Length) && Atlas.layoutRefs.Has(Atlas.savedSel))
+            ? g_Cfg["layouts"][Atlas.layoutRefs[Atlas.savedSel]] : 0
         keepG := IsObject(selLay) ? MGet(selLay, "guard", 0) : -1
         keepNow := (keepG = 1) ? "always"
                  : (keepG = 2) ? "new windows"
@@ -17611,6 +14933,9 @@ class Atlas {
             Lumi.Toast("Type a name for it first", "warn")
             return
         }
+        if (IsObject(LayoutByName(name))
+            && !Atlas.Confirm("Replace the saved arrangement “" name "”?"))
+            return
         n := LayoutCapture(name)
         if (n = 0) {
             Lumi.Toast("Nothing to save — no movable windows are open",
@@ -17631,6 +14956,11 @@ class Atlas {
         }
         name := MGet(lay, "name", "")
         n := LayoutCapture(name)          ; same name = overwrite in place
+        if (n = 0) {
+            Lumi.Toast("Nothing to save — no movable windows are open",
+                "warn", 2600)
+            return
+        }
         Atlas.SaveOrWarn()
         Atlas.Build()
         Lumi.Toast("Saved over “" name "” — " n " window"
@@ -17697,6 +15027,7 @@ class Atlas {
             LayoutGuardDisarm()
         g_Cfg["layouts"].RemoveAt(ref)
         Atlas.SaveOrWarn()
+        Atlas.selWant := 0                   ; never the row that slid up
         Atlas.Build()
         Lumi.Toast("Arrangement deleted", "magenta")
     }
@@ -17795,66 +15126,26 @@ class Atlas {
 
     static PanelPointer(x, y, w, h) {
         Lumi.Label(x, y, 400, "Pointer", "title")
-        ; Band 2 grew a second column in v0.6.5 (the wheel repeat guards),
-        ; so it takes a larger share and a taller minimum; band 3 gives the
-        ; difference back. The three minimums total 446 (148 + 166 + 132 +
-        ; 2 gaps of 12); at the 940x760 minimum the bands are given 566.
-        bands := Atlas.Bands(y + 34, h - 34, [0.30, 0.38, 0.32], [148, 166, 132])
-        sw := Min(300, Max(160, w - 340))    ; slider track
+        ; v0.7.2: speed modes and drag scroll are gone; two bands remain.
+        bands := Atlas.Bands(y + 34, h - 34, [0.45, 0.55], [150, 150])
         lx := x + 24
 
-        ; ── speed ───────────────────────────────────────────────────────
+        ; ── the wheel repeat guards ─────────────────────────────────────
         B := bands[1]
         Lumi.Card(x, B.y, w, B.h)
-        Lumi.Label(lx, B.y + 12, 300, "Speed", "section")
-        Lumi.Label(lx, B.y + 38, 170, "Sniper", "dim", "left", 24)
-        Lumi.Slider(lx + 176, B.y + 40, sw, 1, 20, Cfg("sniperSpeed"),
-            (v) => Atlas.SetCfg("sniperSpeed", v))
-        Lumi.Label(lx, B.y + 76, 170, "Boost", "dim", "left", 24)
-        Lumi.Slider(lx + 176, B.y + 78, sw, 1, 20, Cfg("boostSpeed"),
-            (v) => Atlas.SetCfg("boostSpeed", v))
-        Lumi.Para(lx, B.y + 110, w - 48, B.h - 122,
-            "Windows pointer-speed steps, the same 1-20 scale as Mouse "
-            . "Properties. Bind “Sniper speed” or “Boost speed” to an input: "
-            . "hold for momentary, tap to toggle. The original speed is "
-            . "restored on release, on panic and on exit.", "mute")
-
-        ; ── the wheel: drag scroll, and the repeat guards ────────────────
-        ; Two columns. Left is drag scroll; right is what a HELD tilt or a
-        ; held wheel is allowed to do. At the 940 px minimum the panel is
-        ; 704 px wide, so each column is (704 - 48 - 24) / 2 = 316 and a
-        ; 150 px name plus a 90 px box (240) sits inside one with room over.
-        B := bands[2]
-        Lumi.Card(x, B.y, w, B.h)
-        col := Max(240, (w - 72) // 2)
-        rxw := lx + col + 24
-        Lumi.Label(lx, B.y + 12, 300, "Drag scroll", "section")
-        Lumi.Label(lx, B.y + 34, 150, "Pixels per notch", "dim", "left", 30)
-        Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("scrollPtrPx")),
-            (t) => Atlas.SetCfgInt("scrollPtrPx", t, 2, 200, 18), "", true)
-        Lumi.Toggle(lx, B.y + 70, "Pin the cursor while scrolling",
-            Cfg("scrollPtrPin"), (v) => Atlas.SetCfg("scrollPtrPin", v ? 1 : 0))
-        Lumi.Toggle(lx, B.y + 102, "Invert (push to scroll)",
-            Cfg("scrollPtrInvert"),
-            (v) => Atlas.SetCfg("scrollPtrInvert", v ? 1 : 0))
-        Lumi.Label(rxw, B.y + 12, 300, "Wheel repeat", "section")
-        Lumi.Label(rxw, B.y + 34, 150, "Tilt guard (ms)", "dim", "left", 30)
-        Lumi.Field(rxw + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
+        Lumi.Label(lx, B.y + 12, 300, "Wheel repeat", "section")
+        Lumi.Label(lx, B.y + 34, 150, "Tilt guard (ms)", "dim", "left", 30)
+        Lumi.Field(lx + 156, B.y + 34, 90, 30, String(Cfg("tiltRepeatMs")),
             (t) => Atlas.SetCfgInt("tiltRepeatMs", t, 0, 1000, 150), "", true)
-        Lumi.Label(rxw, B.y + 70, 150, "Wheel guard (ms)", "dim", "left", 30)
-        Lumi.Field(rxw + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
+        Lumi.Label(lx, B.y + 70, 150, "Wheel guard (ms)", "dim", "left", 30)
+        Lumi.Field(lx + 156, B.y + 70, 90, 30, String(Cfg("wheelRepeatMs")),
             (t) => Atlas.SetCfgInt("wheelRepeatMs", t, 0, 1000, 0), "", true)
-        Lumi.Para(rxw, B.y + 104, col, 40,
+        Lumi.Para(lx, B.y + 106, w - 48, B.h - 118,
             "Razer tilt wheels repeat while held; 150 ms turns a held tilt "
             . "into one press. 0 = off.", "mute")
-        Lumi.Para(lx, B.y + 134, col, B.h - 146,
-            "Bind “Drag scroll” to an input, hold it and move the mouse. "
-            . "Pinning holds the cursor on the spot you started from, so "
-            . "travel is unlimited and the pointer never drifts off the "
-            . "image. Smaller px/notch scrolls faster.", "mute")
 
         ; ── click lock ──────────────────────────────────────────────────
-        B := bands[3]
+        B := bands[2]
         Lumi.Card(x, B.y, w, B.h)
         Lumi.Label(lx, B.y + 12, 300, "Click lock", "section")
         Lumi.Label(lx, B.y + 36, 170, "Lock button", "dim", "left", 30)
@@ -17929,10 +15220,10 @@ class Atlas {
         Lumi.Label(rx + 24, B.y + 12, 300, "PowerScribe", "section")
         py0 := B.y + 32
         Lumi.Label(rx + 24, py0, pl, "Dictate key", "dim", "left", 30)
-        Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
+        dk := Lumi.Field(rx + 24 + pl, py0, 120, 30, Cfg("psDictateKey"),
             (t) => Atlas.SetCfgStr("psDictateKey", t), "F4", true)
         Lumi.Btn(rx + 24 + pl + 126, py0, 44, 30, "Rec",
-            Atlas.RecSendKey("psDictateKey"), "accent")
+            Atlas.RecSendKey("psDictateKey", dk), "accent")
         ; Where to FIND it. Nobody knows this key by heart, and the wrong
         ; one here is a dictation button that silently does nothing.
         Lumi.Label(rx + 24, py0 + 31, rw - 48,
@@ -18127,49 +15418,55 @@ class Atlas {
         if (cw > 0) {
             Lumi.Label(x, y, cw, Lumi.Elide(label, cw, "dim"),
                 "dim", "left", 16)
-            Lumi.Field(x, y + 17, cw - 52, 26, Cfg(key), Atlas.StrCommit(key),
+            f := Lumi.Field(x, y + 17, cw - 52, 26, Cfg(key), Atlas.StrCommit(key),
                 "unassigned", true)
             Lumi.Btn(x + cw - 46, y + 17, 46, 26, "Rec",
-                Atlas.RecHotkey(key), "accent")
+                Atlas.RecHotkey(key, f), "accent")
             Lumi.Label(x, y + 44, cw, Lumi.Elide(words, cw, "mute"),
                 "mute", "left", 13)
             return
         }
         Lumi.Label(x, y, lw, Lumi.Elide(label, lw, "dim"), "dim", "left", 28)
-        Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
+        f := Lumi.Field(x + lw, y, fw, 30, Cfg(key), Atlas.StrCommit(key),
             "unassigned", true)
         Lumi.Btn(x + lw + fw + 6, y, 44, 30, "Rec",
-            Atlas.RecHotkey(key), "accent")
+            Atlas.RecHotkey(key, f), "accent")
         Lumi.Label(x + lw, y + 30, fw + 50, Lumi.Elide(words, fw + 50, "mute"),
             "mute", "left", 14)
     }
 
-    static RecHotkey(key) {
-        return (*) => Atlas.DoRecHotkey(key)
+    static RecHotkey(key, f := 0) {
+        return (*) => Atlas.DoRecHotkey(key, f)
     }
 
     /** Rec, for a HOTKEY field. RecordCombo returns Send syntax ("^{F9}");
      *  a hotkey is registered WITHOUT the braces, so they come off here.
      *  Same capture path the binding editor's Rec uses. */
-    static DoRecHotkey(key) {
+    static DoRecHotkey(key, f := 0) {
         Lumi.EndEdit()
         v := RecordCombo()
         if (v = "")
             return
-        Atlas.SetCfgStr(key, StrReplace(StrReplace(v, "{", ""), "}", ""))
+        v := StrReplace(StrReplace(v, "{", ""), "}", "")
+        ; Into the field's edit buffer too: when the caret was in the field,
+        ; its edit loop commits AFTER this returns, and used to commit the
+        ; old text over the recorded hotkey.
+        Lumi.FieldSet(f, v)
+        Atlas.SetCfgStr(key, v)
         Atlas.Build()
     }
 
     /** Rec, for a field that holds SEND syntax -- braces stay on. */
-    static RecSendKey(key) {
-        return (*) => Atlas.DoRecSendKey(key)
+    static RecSendKey(key, f := 0) {
+        return (*) => Atlas.DoRecSendKey(key, f)
     }
 
-    static DoRecSendKey(key) {
+    static DoRecSendKey(key, f := 0) {
         Lumi.EndEdit()
         v := RecordCombo()
         if (v = "")
             return
+        Lumi.FieldSet(f, v)                  ; see DoRecHotkey
         Atlas.SetCfgStr(key, v)
         Atlas.Build()
     }
@@ -18329,8 +15626,8 @@ class Atlas {
             switch mode {
                 case "mouse": Atlas.EditRow(i)
                 case "key":   Atlas.EditRow(i, true)
-                case "menu":  Atlas.MenuEditSel()
                 case "step":  Atlas.MacroStepEditSel()
+                case "app":   Atlas.AppEdit(Atlas.SelectedRef())
             }
             return
         }
@@ -18401,8 +15698,9 @@ class Atlas {
             return
         }
         r := g_Cfg["bindings"][ref]
-        what := Trim(InputLabel(MGet(r, "button", "")) " "
-            . MGet(r, "event", ""))
+        what := Trim(MGet(r, "mods", "") " " InputLabel(MGet(r, "button", "")) " "
+            . MGet(r, "event", "")) " (" AppDisp(MGet(r, "app", "*")) ", "
+            . LayerLabelFromCode(MGet(r, "layer", "*")) ")"
         if !Atlas.Confirm("Delete the setting for " what "?`n`n"
             . "That button or key goes back to doing whatever Windows and "
             . "the program normally do with it.")
@@ -18446,7 +15744,7 @@ class Atlas {
      * app, layer, trigger, modifiers, action, value -- is identical, because
      * in the engine it always was.
      */
-    static BindDlg(idx, keyMode := false, seed := 0) {
+    static BindDlg(idx, keyMode := false, seed := 0, focusIdx := 0) {
         ; A seed WINS over the stored row, for an edit as well as for a new
         ; one: changing the action between the free-text family and the
         ; input-picking family swaps the Details widget, and the only honest
@@ -18471,7 +15769,7 @@ class Atlas {
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
         ; pressed. A page is not, which is why Build() does not do this.
-        Lumi.Focus.Reset(dlg, true)
+        Lumi.Focus.Reset(dlg, true, focusIdx)  ; a rebuild keeps its place
         Atlas.Own(dlg)
         dlg.Drag()               ; it is borderless too -- it needs a caption
 
@@ -18645,8 +15943,11 @@ class Atlas {
         if (Atlas.ValueFamily(code) != Atlas.ValueFamily(st.actCode)) {
             Lumi.EndEdit()
             seed := Atlas.BindDraft(st, code)
+            ; Keep keyboard focus on the action list: reset to control 1 (the
+            ; program), the next arrow key changed the program instead.
+            fi := Lumi.Focus.idx
             SetTimer(() => Atlas.OpenDlg(()
-                => Atlas.BindDlg(st.idx, st.keyMode, seed)), -1)
+                => Atlas.BindDlg(st.idx, st.keyMode, seed, fi)), -1)
             return
         }
         txt := ACT_HINTS.Has(code) ? ACT_HINTS[code] : ""
@@ -18864,6 +16165,11 @@ class Atlas {
                 . " key NAME (Numpad1, F8), not Send syntax", "danger", 3200)
             return
         }
+        if (atype = "bypass" && IsWheel(btn)) {
+            Lumi.Toast("Pass-through belongs on a button or key, not the wheel",
+                "warn", 3000)
+            return
+        }
         if (IsWheel(btn) && event != "turn") {
             Lumi.Toast("The wheel can only be set up for 'turn'", "warn", 2400)
             return
@@ -18878,8 +16184,8 @@ class Atlas {
             return
         }
         if !LayerPathAllowed(lay) {
-            Lumi.Toast("Only button 4, button 5 or CapsLock "
-                . "can hold a layer, one at a time", "warn", 3200)
+            Lumi.Toast("Only " LayerHostsText() " can hold a layer, one at a"
+                . " time — change the list with “Layer buttons…”", "warn", 3600)
             return
         }
         if (event = "hold" && IsPrimaryButton(btn) && app = "*") {
@@ -18909,11 +16215,6 @@ class Atlas {
             if (MsgBox(MButtonHoldWarning(), "RadMapper",
                 "YesNo Icon! Owner" . hwnd) != "Yes")
                 return
-        }
-        if (atype = "radial" && event != "hold") {
-            Lumi.Toast("A radial menu opens while the button is held — "
-                . "choose “Hold it down”", "warn", 3200)
-            return
         }
         ; One validator, shared with the classic dialogs, so "LAlt" means the
         ; same thing and fails the same way wherever it is typed.
@@ -19048,14 +16349,22 @@ class Atlas {
             Lumi.Btn(462, 126, 70, 30, "Pick", Atlas.PickKey(st), "ghost")
         } else {
             inputs := []
-            for b in LAYER_HOSTS {           ; the thumb buttons: the only
-                if IsMouseInput(b)           ; mouse buttons that host a layer
+            for b in LayerHosts() {          ; the mouse buttons that may
+                if IsMouseInput(b)           ; host a layer (a setting)
                     inputs.Push(InputLabel(b))
             }
             st.input := Lumi.Select(150, 126, 300, 30, inputs,
                 Atlas.IndexOfText(inputs,
                     InputLabel(IsWheel(host) ? "XButton1" : host)))
+            ; load the rows of the input actually SHOWN (the page's pick may
+            ; be left/right or a wheel, which the list falls back from)
+            host := InputCodeFromLabel(st.input.items.Has(st.input.index)
+                ? st.input.items[st.input.index] : "")
         }
+        ; what the rows below were loaded for: Save only CLEARS directions
+        ; of this input + program, never of one the dialog never showed
+        st.origHost := host
+        st.origApp := app
 
         Lumi.Rule(24, 168, w - 48)
         Lumi.Label(24, 180, w - 48,
@@ -19179,7 +16488,7 @@ class Atlas {
             return
         }
         if !LayerHostAllowed(host) {         ; a deck IS a layer (v0.7)
-            Lumi.Toast("Only button 4, button 5 or CapsLock can hold a deck",
+            Lumi.Toast("Only " LayerHostsText() " can hold a deck",
                 "warn", 3200)
             return
         }
@@ -19208,6 +16517,8 @@ class Atlas {
             for p in plan {
                 b := NewBinding(app, host, "", p.wheel, "turn", p.type, p.value)
                 if (p.type = "none") {
+                    if (host != st.origHost || app != st.origApp)
+                        continue             ; never shown: nothing to clear
                     ; Descending, so the remaining indexes stay valid --
                     ; the same discipline UpsertRow uses.
                     dups := FindDupBinding(b)
@@ -19301,25 +16612,14 @@ class Atlas {
         Lumi.Focus.Paint()
     }
 
-    ; ── RADIAL MENU EDITOR ──────────────────────────────────────────────────
-    ; The wheel deck one axis further out: pick the app, then fill in up to
-    ; eight outputs, one per direction, and see all eight at the same time.
-    ; Same reasoning, and deliberately the same shape on screen -- a menu is
-    ; not a different kind of object from a deck, it is the same idea with
-    ; direction instead of notch.
+    ; ── LAYER BUTTONS (v0.7.2) ──────────────────────────────────────────────
+    ; Which inputs may hold a layer open. Each one is a tab on the Mouse and
+    ; Keyboard pages. Changes apply and save immediately; the dialog is
+    ; rebuilt in place after each one.
 
-    static MENU_SIZES := ["4 slices — up / right / down / left",
-                          "8 slices — every 45°"]
-
-    static MenuDlg(draft := 0) {
-        ; 1000 wide (v0.6.6): the eight-column row grid on the left, and a
-        ; live wheel on the right that shows the menu as it will open --
-        ; and that can be DRAGGED: one wedge onto another swaps the two
-        ; commands, rows and all. The header row is laid out on ONE line
-        ; with room to read: "Program" no longer wraps into "Progra / m",
-        ; and "Size" sits beside its label instead of under it.
-        w := 1000
-        h := 624
+    static LayerHostsDlg() {
+        w := 620
+        h := 520
         Lumi.CloseSelect()
         Lumi.EndEdit()
         if IsObject(Atlas.dlg) {
@@ -19327,123 +16627,71 @@ class Atlas {
             try Atlas.dlg.Dispose()
             Atlas.dlg := 0
         }
-        menu := IsObject(draft) ? draft.menu : Atlas.MenuSel()
-        if !IsObject(menu)
-            return
-        ref := IsObject(draft) ? draft.ref : Atlas.MenuSelRef()
-        slices := MGet(menu, "slices", [])
-        count := RadialCountFor(slices.Length)
-        pitch := (count = 9) ? 34 : 38      ; 4 / 8 px gaps between 30 px rows
         parent := Atlas.lyr
         dlg := Layer(parent.x + (Atlas.W - w) // 2,
-                     Max(parent.y + (Atlas.H - h) // 2, parent.y + 8),
-                     w, h, "RadMapperMenuEdit")
+                     parent.y + (Atlas.H - h) // 2, w, h, "RadMapperLayerHosts")
         Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
-        ; A dialog opens FOCUSED on its first control: it is a place you were
-        ; sent to answer something, so the ring is useful before Tab is
-        ; pressed. A page is not, which is why Build() does not do this.
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
         dlg.Drag()
 
         Lumi.Card(0, 0, w, h, "surface", 0)
-        Lumi.Label(24, 16, 520, "Set up your radial menu", "title")
+        Lumi.Label(24, 16, w - 48, "Layer buttons", "title")
         Lumi.Label(24, 42, w - 48,
-            "Name each command, choose its action, then record its shortcut.", "mute", "left", 20)
+            "Hold one of these and everything else can do something different.",
+            "mute", "left", 20)
         Lumi.Rule(24, 66, w - 48)
 
-        st := {ref: ref, dlg: dlg, rows: [], count: count,
-               original: g_Cfg["menus"][ref], wheel: 0}
-
-        ; ── header row: Name · Program · Size, one line ─────────────────
-        Lumi.Label(24, 84, 56, "Name", "dim", "left", 30)
-        st.name := Lumi.Field(84, 84, 200, 30, MGet(menu, "name", ""), 0,
-            "menu name", true)
-
-        apps := AppChoices()
-        cur := MGet(menu, "app", "")
-        Lumi.Label(300, 84, 70, "Program", "dim", "left", 30)
-        st.app := Lumi.Select(374, 84, 220, 30, apps,
-            Atlas.IndexOfText(apps, cur = "" ? "Global (all apps)" : cur))
-
-        Lumi.Label(610, 84, 40, "Size", "dim", "left", 30)
-        st.size := Lumi.Select(654, 84, 102, 30, ["4", "8", "9 (1-9)"],
-            count = 9 ? 3 : (count = 8 ? 2 : 1), (i, t) => Atlas.MenuResize(st, i))
-
-        Lumi.Label(24, 122, 732,
-            "Program chooses the automatic menu. A named binding opens it directly.",
-            "mute", "left", 22)
-        Lumi.Rule(24, 156, w - 48)
-
-        ; ── the row grid ───────────────────────────────────────────────
-        ; Columns (x, w): direction 24/80, label 108/140, action 256/210,
-        ; details 472/134, icon 612/88, Rec 706/50. The icon column was
-        ; 70 px, which showed "magn…" and "dele…" for magnify and delete.
-        Lumi.Label(24, 164, 80, count = 9 ? "Number" : "Direction", "section")
-        Lumi.Label(108, 164, 140, "Label", "section")
-        Lumi.Label(256, 164, 210, "It does", "section")
-        Lumi.Label(474, 164, 132, "Details", "section")
-        Lumi.Label(614, 164, 86, "Icon", "section")
-
-        icons := []
-        for nm in RADIAL_ICONS
-            icons.Push(nm = "" ? "—" : nm)
-        i := 1
-        Loop count {
-            ry := 186 + (i - 1) * pitch
-            sl := slices.Has(i) ? slices[i] : 0
-            act := IsObject(sl) ? MGet(sl, "action", 0) : 0
-            code := IsObject(act) ? MGet(act, "type", "none") : "none"
-            val := IsObject(act) ? MGet(act, "value", "") : ""
-            lbl := IsObject(sl) ? MGet(sl, "label", "") : ""
-            ico := IsObject(sl) ? MGet(sl, "icon", "") : ""
-            dir := (count = 4 ? RADIAL_DIR4 : (count = 8 ? RADIAL_DIR8 : RADIAL_DIR9))[i]
-            Lumi.Label(24, ry, 80, dir, "dim", "left", 30)
-            r := {dlg: dlg, dir: dir}
-            ; The wheel on the right follows the Label field and the action
-            ; dropdown as they change, so what is typed is what is shown.
-            r.label := Lumi.Field(108, ry, 140, 30, lbl,
-                (v) => Atlas.MenuWheelPaint(st), "label", true)
-            r.act := Atlas.ActSelect(256, ry, 210, 30, code,
-                (i2, t) => Atlas.MenuWheelPaint(st))
-            r.value := Lumi.Field(474, ry, 132, 30, val, 0, "value", true)
-            r.icon := Lumi.Select(614, ry, 86, 30, icons,
-                Max(1, Atlas.IndexOfText(RADIAL_ICONS, ico)))
-            Lumi.Btn(708, ry, 48, 30, "Rec", Atlas.DeckRec(r), "accent")
-            st.rows.Push(r)
-            i += 1
+        st := {dlg: dlg}
+        hosts := LayerHosts()
+        y := 80
+        if (hosts.Length = 0)
+            Lumi.Label(24, y, w - 48, "None — no layers until you add one.",
+                "mute", "left", 30)
+        for hst in hosts {
+            n := Atlas.LayerRowCount(hst)
+            Lumi.Label(24, y, 300, IsMouseInput(hst) ? InputLabel(hst) : hst,
+                "body", "left", 30)
+            Lumi.Label(330, y, 150, n ? (n " setting" (n = 1 ? "" : "s")) : "empty",
+                "mute", "left", 30)
+            Lumi.Btn(w - 24 - 100, y, 100, 30, "Remove",
+                Atlas.LayerHostRemoveGo(hst), "ghost")
+            y += 36
         }
 
-        Lumi.Para(24, 186 + (count - 1) * pitch + 38, 732, 48,
-            "For a PACS shortcut, choose Send keys and use Rec to press the "
-            . "shortcut from your viewer settings. Disabled leaves a direction "
-            . "empty. A direction set to Radial menu opens that menu inside "
-            . "this one: rest on it while holding, or release on it.", "mute")
+        full := (hosts.Length >= LAYER_HOSTS_MAX)
+        ay := 80 + LAYER_HOSTS_MAX * 36 + 8
+        Lumi.Rule(24, ay - 6, w - 48)
+        ; a mouse button: middle, right, 4, 5 (never left)
+        mice := []
+        for b in ["MButton", "RButton", "XButton1", "XButton2"] {
+            if !LayerHostAllowed(b)
+                mice.Push(InputLabel(b))
+        }
+        Lumi.Label(24, ay + 4, 150, "Add a mouse button", "dim", "left", 30)
+        if (mice.Length > 0) {
+            st.mouse := Lumi.Select(180, ay + 4, 300, 30, mice, 1)
+            Lumi.Btn(w - 24 - 100, ay + 4, 100, 30, "Add",
+                (*) => Atlas.LayerHostAddMouse(st), full ? "muted" : "accent")
+        } else
+            Lumi.Label(180, ay + 4, 300, "all of them are layer buttons",
+                "mute", "left", 30)
+        Lumi.Label(24, ay + 44, 150, "Add a key", "dim", "left", 30)
+        st.input := Lumi.Field(180, ay + 44, 176, 30, "", 0, "F13, Numpad0…", true)
+        Lumi.Btn(362, ay + 44, 58, 30, "Rec", Atlas.RecKey(st), "accent")
+        Lumi.Btn(426, ay + 44, 62, 30, "Pick", Atlas.PickKey(st), "ghost")
+        Lumi.Btn(w - 24 - 100, ay + 44, 100, 30, "Add",
+            (*) => Atlas.LayerHostAddKey(st), full ? "muted" : "accent")
 
-        ; ── the wheel ──────────────────────────────────────────────────
-        ; 200 px across, in the column to the right of the rows. Its
-        ; shapes are rebuilt by MenuWheelPaint whenever a label or an
-        ; action changes; the invisible Container over it is the ONE hit
-        ; target, because every Pie shares the same bounding box and
-        ; GpGFX hit-tests boxes, not arcs -- so the wedge under the
-        ; pointer is worked out from the angle here, never by GpGFX.
-        st.wheel := {x: 776, y: 186, d: 200, shapes: [], src: 0, dst: 0}
-        Lumi.Label(776, 164, 200, "As it opens", "section", "center")
-        Atlas.MenuWheelPaint(st)
-        grab := Container(st.wheel.x, st.wheel.y, st.wheel.d, st.wheel.d)
-        grab.OnEvent("LeftMouseDown", ObjBindMethod(Atlas, "MenuWheelDown", st))
-        Lumi.Para(776, 394, 200, 60,
-            "Drag one wedge onto another to swap the two commands. "
-            . "The rows on the left swap with them.", "mute")
+        Lumi.Para(24, ay + 84, w - 48, 48,
+            "Middle or right as a layer button: a quick click still clicks, "
+            . "but a longer press waits for the hold time and stays silent "
+            . "if nothing in its layer is used. The left button cannot be one.",
+            "mute")
 
-        Lumi.Rule(24, h - 78, w - 48)
-        Lumi.Chip(24, h - 52, 240, 20, count = 9 ? "numbers 1-9 · clockwise"
-            : count " directions · clockwise", "cyan")
-        Lumi.Btn(w - 262, h - 60, 110, 36, "Cancel",
-            (*) => Atlas.CloseDlg(), "ghost")
-        Lumi.Btn(w - 140, h - 60, 116, 36, "Save",
-            Atlas.SaveMenu(st), "primary")
+        Lumi.Btn(w - 24 - 110, h - 52, 110, 36, "Done",
+            (*) => Atlas.CloseDlg(), "primary")
 
         Atlas.dstate := st
         Lumi.Focus.Restore()
@@ -19452,308 +16700,100 @@ class Atlas {
         dlg.Activate()
     }
 
-    /**
-     * The row grid as a menu Map -- name, program, and one slice per row
-     * exactly as the fields hold them right now. MenuResize and the wheel
-     * drag both hand this to a fresh MenuDlg as a draft, which is the one
-     * honest way this kit rebuilds a dialog around answers already given.
-     */
-    static MenuDraftFrom(st) {
-        slices := []
-        for r in st.rows
-            slices.Push(MenuSlice(Lumi.FieldValue(r.label),
-                Atlas.ActCode(r.act),
-                Lumi.FieldValue(r.value),
-                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
-        app := AppCodeFromDisp(st.app.items[st.app.index])
-        return Map("name", Lumi.FieldValue(st.name), "app", app = "*" ? "" : app,
-            "slices", slices)
-    }
-
-    /**
-     * (Re)draw the wheel from the rows. Slice i points where the real ring
-     * points it: north first, then clockwise, a full sector each (this is
-     * a root ring; RadialSliceAngles). GDI+ measures its arcs clockwise
-     * from east, so a bearing b from north is the angle b - 90 here.
-     *
-     * A filled wedge is one whose action is set; an empty one is drawn in
-     * the sunk tone so the gaps in a half-built menu are visible at a
-     * glance. During a drag the source is outlined pink and the wedge
-     * under the pointer cyan.
-     */
-    static MenuWheelPaint(st) {
-        wh := st.wheel
-        ; Paint only onto the dialog that is actually up. Atlas.dlg is set
-        ; before the first paint (dstate is not, so DlgAlive cannot be the
-        ; test here), and a field commit arriving after the dialog closed
-        ; must not build shapes into a disposed layer.
-        if (!IsObject(wh) || !IsObject(Atlas.dlg) || !Lumi.Same(Atlas.dlg, st.dlg))
-            return
-        prev := LayerStack.ActiveLayer
-        LayerStack.ActiveLayer := st.dlg
-        try {
-            for shp in wh.shapes {
-                try shp.Hide()
-                try shp.Dispose()
-            }
-            wh.shapes := []
-            n := st.count
-            cx := wh.x + wh.d / 2
-            cy := wh.y + wh.d / 2
-            step := 360.0 / n
-            gap := 3
-            for i, r in st.rows {
-                if (i > n)
-                    break
-                bearing := (i - 1) * step
-                start := bearing - 90 - step / 2 + gap / 2
-                live := (Atlas.ActCode(r.act) != "none")
-                fill := live ? Lumi.C["raised2"] : Lumi.C["sunk"]
-                if (i = wh.src)
-                    fill := Lumi.Mix(fill, Lumi.C["magenta"], 0.35)
-                else if (i = wh.dst)
-                    fill := Lumi.Mix(fill, Lumi.C["cyan"], 0.35)
-                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
-                    step - gap, fill, true))
-                edge := (i = wh.src) ? Lumi.C["magenta"]
-                    : ((i = wh.dst) ? Lumi.C["cyan"] : Lumi.C["hair"])
-                wh.shapes.Push(Pie(wh.x, wh.y, wh.d, wh.d, start,
-                    step - gap, edge, false))
-                ; the label, on the wedge's centre line at 0.66 R
-                rad := bearing * 0.0174532925
-                tx := cx + (wh.d / 2) * 0.66 * Sin(rad)
-                ty := cy - (wh.d / 2) * 0.66 * Cos(rad)
-                txt := Trim(Lumi.FieldValue(r.label))
-                if (txt = "")
-                    txt := live ? ActLabelOf(Atlas.ActCode(r.act)) : r.dir
-                lw := (n = 4) ? 84 : 62
-                wh.shapes.Push(Lumi.Label(Round(tx - lw / 2), Round(ty - 10), lw,
-                    Lumi.Elide(txt, lw, live ? "body" : "mute"),
-                    live ? "body" : "mute", "center", 20))
-            }
-            ; the hub: release here to cancel, as on the real ring
-            hub := 22
-            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
-                hub * 2, Lumi.C["surface"], true))
-            wh.shapes.Push(Ellipse(Round(cx - hub), Round(cy - hub), hub * 2,
-                hub * 2, Lumi.C["hair"], false))
-        } finally {
-            if IsObject(prev)
-                LayerStack.ActiveLayer := prev
+    /** Rows living in the layer this input hosts (any program). */
+    static LayerRowCount(hst) {
+        n := 0
+        for row in g_Cfg["bindings"] {
+            if LayerIncludes(MGet(row, "layer", "*"), hst)
+                n += 1
         }
-        Lumi.FullErase(st.dlg)
-        Lumi.Refresh(st.dlg)
+        return n
     }
 
-    /** Which wedge a layer-local point is on: 1..count, or 0 (hub / outside). */
-    static MenuWheelAt(st, mx, my) {
-        wh := st.wheel
-        cx := wh.x + wh.d / 2
-        cy := wh.y + wh.d / 2
-        dx := mx - cx
-        dy := my - cy
-        dist := Sqrt(dx * dx + dy * dy)
-        if (dist < 24 || dist > wh.d / 2)
-            return 0
-        bearing := RadialAngle(dx, dy)       ; degrees clockwise from north
-        step := 360.0 / st.count
-        return Mod(Round(bearing / step), st.count) + 1
+    static LayerHostRemoveGo(hst) {
+        return (*) => Atlas.LayerHostRemove(hst)
     }
 
-    /** A press on the wheel: remember the wedge, then drag OUTSIDE the
-     *  handler -- the loop below repaints the layer it was called from. */
-    static MenuWheelDown(st, shp := 0, mx := 0, my := 0) {
-        if !Atlas.DlgAlive(st)
+    static LayerHostRemove(hst) {
+        n := Atlas.LayerRowCount(hst)
+        lbl := IsMouseInput(hst) ? InputLabel(hst) : hst
+        if (n > 0 && !Atlas.Confirm("Stop using " lbl " as a layer button?`n`n"
+            . "The " n " setting" (n = 1 ? "" : "s") " in its layer will be "
+            . "deleted. What " lbl " itself does on a tap or hold stays."))
             return
-        i := Atlas.MenuWheelAt(st, mx, my)
-        if (i < 1)
+        kept := []
+        for row in g_Cfg["bindings"] {
+            if !LayerIncludes(MGet(row, "layer", "*"), hst)
+                kept.Push(row)
+        }
+        g_Cfg["bindings"] := kept
+        hs := []
+        for b in LayerHosts() {
+            if (b != hst)
+                hs.Push(b)
+        }
+        Atlas.LayerHostsCommit(hs, lbl " is no longer a layer button")
+    }
+
+    static LayerHostAddMouse(st) {
+        if !IsObject(st.HasProp("mouse") ? st.mouse : 0)
             return
+        code := InputCodeFromLabel(st.mouse.items.Has(st.mouse.index)
+            ? st.mouse.items[st.mouse.index] : "")
+        Atlas.LayerHostAdd(code)
+    }
+
+    static LayerHostAddKey(st) {
         Lumi.EndEdit()
-        SetTimer(() => Atlas.MenuWheelDrag(st, i), -1)
+        k := CanonicalInputName(NormalizeInputName(Lumi.FieldValue(st.input)))
+        if (k = "") {
+            Lumi.Toast("Type, record or pick a key first", "warn")
+            return
+        }
+        if IsMouseInput(k) {
+            Lumi.Toast("That is a mouse input — use “Add a mouse button”", "warn")
+            return
+        }
+        if !KeyNameValid(k) {
+            Lumi.Toast("RadMapper cannot watch '" k "' — use a key name like F13", "danger", 3000)
+            return
+        }
+        Atlas.LayerHostAdd(k)
     }
 
-    /**
-     * Drag a wedge. Polls the physical button the way Shelf.RowDrag does
-     * (no capture, so nothing can stick), lights the wedge under the
-     * pointer as it moves, and on release over a DIFFERENT wedge swaps
-     * the two slices and reopens the editor around the result -- the
-     * same draft reopen a size change does. Released on the same wedge,
-     * the hub or outside the ring: nothing happens.
-     */
-    static MenuWheelDrag(st, i) {
-        if !Atlas.DlgAlive(st)
-            return
-        wh := st.wheel
-        wh.src := i
-        wh.dst := 0
-        Atlas.MenuWheelPaint(st)
-        j := 0
-        try {
-            while GetKeyState("LButton", "P") {
-                if !Atlas.DlgAlive(st)
-                    return
-                RM_GetPos(&sx, &sy)
-                k := Atlas.MenuWheelAt(st, sx - st.dlg.x, sy - st.dlg.y)
-                if (k = i)
-                    k := 0
-                if (k != j) {
-                    j := k
-                    wh.dst := j
-                    Atlas.MenuWheelPaint(st)
-                }
-                Sleep(15)
-            }
-        } finally {
-            wh.src := 0
-            wh.dst := 0
-        }
-        if (j < 1 || j = i || !Atlas.DlgAlive(st)) {
-            Atlas.MenuWheelPaint(st)
+    static LayerHostAdd(code) {
+        if !LayerHostOk(code) {
+            Lumi.Toast("'" code "' cannot hold a layer", "warn")
             return
         }
-        if (st.ref > g_Cfg["menus"].Length
-            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
-            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
-            Atlas.MenuWheelPaint(st)
+        if LayerHostAllowed(code) {
+            Lumi.Toast("Already a layer button", "warn")
             return
         }
-        menu := Atlas.MenuDraftFrom(st)
-        sl := menu["slices"]
-        tmp := sl[i]
-        sl[i] := sl[j]
-        sl[j] := tmp
-        draft := {ref: st.ref, menu: menu}
-        ; Unwind before disposing the layer this drag was started from.
-        SetTimer(() => (Atlas.DlgAlive(st)
-            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
-        SetTimer(() => Lumi.Toast("Swapped " st.rows[i].dir " and "
-            . st.rows[j].dir " — Save keeps it", "cyan"), -60)
+        hs := LayerHosts().Clone()
+        if (hs.Length >= LAYER_HOSTS_MAX) {
+            Lumi.Toast("At most " LAYER_HOSTS_MAX " layer buttons", "warn")
+            return
+        }
+        if (IsKeyInput(code) && IsBareTypingKey(code)
+            && !Atlas.Confirm("'" code "' types a character. Holding it for a "
+            . "layer delays that character every time you type it.`n`n"
+            . "Use it anyway?"))
+            return
+        hs.Push(code)
+        Atlas.LayerHostsCommit(hs, (IsMouseInput(code) ? InputLabel(code) : code)
+            . " is now a layer button — it has its own tab")
     }
 
-    static MenuResize(st, index) {
-        Lumi.EndEdit()
-        count := [4, 8, 9][Max(1, Min(3, index))]
-        if (count = st.count || !Atlas.DlgAlive(st))
-            return
-        if (st.ref > g_Cfg["menus"].Length
-            || !Lumi.Same(g_Cfg["menus"][st.ref], st.original)) {
-            Lumi.Toast("This menu changed elsewhere. Close the editor and reopen it.", "warn")
-            return
-        }
-        ; Rows the new size has no slot for: warn before the draft loses them
-        kept := Map()
-        for src in MenuKeepMap(st.count, count)
-            kept[src] := 1
-        occupied := false
-        for i, r in st.rows {
-            if kept.Has(i)
-                continue
-            if (Trim(Lumi.FieldValue(r.label)) != ""
-                || Atlas.ActCode(r.act) != "none")
-                occupied := true
-        }
-        if (occupied && MsgBox("Switch to " count " slots?`n`nCommands in the "
-            . "slots that go away will be removed from this draft. The ones "
-            . "that stay keep their place. Cancel the editor to keep the saved menu.",
-            "RadMapper", "YesNo Icon? Owner" Lumi.HwndOf(st.dlg)) != "Yes") {
-            st.size.index := st.count = 9 ? 3 : (st.count = 8 ? 2 : 1)
-            Lumi.__SelectLabel(st.size)
-            Lumi.Refresh(st.dlg)
-            return
-        }
-        menu := Atlas.MenuDraftFrom(st)
-        menu["slices"] := ResizeMenuSlices(menu["slices"], count)
-        draft := {ref: st.ref, menu: menu}
-        ; Unwind the dropdown callback before disposing its owning layer.
-        SetTimer(() => (Atlas.DlgAlive(st)
-            ? Atlas.OpenDlg(() => Atlas.MenuDlg(draft)) : 0), -1)
-    }
-
-    static SaveMenu(st) {
-        return (*) => Atlas.DoSaveMenu(st)
-    }
-
-    static DoSaveMenu(st) {
-        Lumi.EndEdit()
-        if (!st.ref || st.ref > MGet(g_Cfg, "menus", []).Length) {
-            Lumi.Toast("That menu is no longer there", "warn")
-            Atlas.CloseDlg()
-            return
-        }
-        if !Lumi.Same(g_Cfg["menus"][st.ref], st.original) {
-            Lumi.Toast("This menu changed elsewhere. Close this editor and reopen it.", "warn")
-            return
-        }
-        hwnd := Lumi.HwndOf(st.dlg)
-        name := Trim(Lumi.FieldValue(st.name))
-        if (name = "") {
-            Lumi.Toast("A menu needs a name — that is how a button finds it",
-                "warn")
-            return
-        }
-        for i, other in g_Cfg["menus"] {
-            if (i != st.ref && MGet(other, "name", "") = name) {
-                Lumi.Toast("There is already a menu called “" name "”", "warn")
-                return
-            }
-        }
-        apps := AppChoices()
-        code := AppCodeFromDisp(apps.Has(st.app.index)
-            ? apps[st.app.index] : "Global (all apps)")
-        app := (code = "*") ? "" : code
-        count := st.count
-
-        ; Validate EVERY row before writing ANY of them, exactly as the wheel
-        ; deck does: a menu half-applied because slice six had a typo is
-        ; worse than one refused, because you cannot see which five landed.
-        plan := []
-        i := 1
-        for r in st.rows {
-            if (i > count)
-                break
-            atype := Atlas.ActCode(r.act)
-            val := Lumi.FieldValue(r.value)
-            lbl := Trim(Lumi.FieldValue(r.label))
-            if (atype != "none") {
-                ok := true
-                val := ValidateActionValue(hwnd, atype, val, &ok)
-                if !ok
-                    return
-                ; A live slice with no label is a slice you cannot read in the
-                ; wheel. Name it after its action rather than refusing.
-                if (lbl = "")
-                    lbl := ActLabelOf(atype)
-            } else
-                val := ""
-            plan.Push(MenuSlice(lbl, atype, val,
-                RADIAL_ICONS.Has(r.icon.index) ? RADIAL_ICONS[r.icon.index] : ""))
-            i += 1
-        }
-        ; A menu that fires nothing anywhere is allowed -- that is what a
-        ; half-authored PACS menu is -- but say so, because it is also what a
-        ; menu looks like when you have picked the wrong row.
-        live := 0
-        for one in plan {
-            if (MGet(one["action"], "type", "none") != "none")
-                live += 1
-        }
-        m := g_Cfg["menus"][st.ref]
-        oldName := m["name"]
-        m["name"] := name
-        m["app"] := app
-        m["slices"] := plan
-        RenameMenuBindings(oldName, name)
+    static LayerHostsCommit(hs, msg) {
+        g_Cfg["layerHosts"] := CleanLayerHosts(hs)
+        Atlas.layerIdx := 1                  ; tab positions just moved
+        Atlas.selWant := 0
         AfterCfgChange()
-        if !SaveCfg() {
-            Lumi.Toast("Changes are in memory only. Check the settings folder, then Save again.", "danger", 5000)
-            return
-        }
-        Atlas.CloseDlg()
-        Atlas.Build()
-        Lumi.Toast(live = 0
-            ? ("Saved “" name "” — no slice does anything yet")
-            : ("Saved “" name "” — " live " of " count " slices filled"),
-            live = 0 ? "warn" : "jade")
+        Atlas.SaveOrWarn()
+        Lumi.Toast(msg, "jade")
+        ; rebuilt in place, after this click unwinds (the button is on it)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), -1)
     }
 
     ; ── LIVE STATUS ─────────────────────────────────────────────────────────
@@ -19857,596 +16897,13 @@ class Atlas {
             Atlas.Build()
             return
         }
-        sig := (g_Enabled ? "1" : "0")
+        sig := (g_Enabled ? "1" : "0") (IsObject(g_Bypass) ? "B" : "")
             . (IsObject(g_ClickLock) ? g_ClickLock.held : "")
-            . (IsObject(g_ScrollPtr) ? "S" : "")
-            . ActiveAppName() "|" CurrentLayerDisp() "|" g_Problems.Length "|" g_CfgSaveFailed
+            . ActiveAppName() "|" CurrentLayerDisp() "|" g_ProblemSeq "|" g_CfgSaveFailed
         if (sig = Atlas.lastSig)
             return
         Atlas.lastSig := sig
         Atlas.Build()
-    }
-}
-
-
-; ══════════════════════════════════════════════════════════════════════════════
-;  §14c  SHELF -- clipboard history and scratchpad
-; ══════════════════════════════════════════════════════════════════════════════
-;
-;  Two summonable panels that share one implementation because they differ in
-;  exactly two things: where the items come from, and whether they survive a
-;  restart.
-;
-;    CLIPBOARD  -- the last 25 things copied, captured automatically.
-;                  MEMORY ONLY. Never written to disk, cleared on exit.
-;    SCRATCHPAD -- snippets you put there on purpose. Saved in the config.
-;
-;  THAT SPLIT IS DELIBERATE AND IS NOT A DETAIL. This runs on a SHARED
-;  hospital workstation, and a clipboard on a reading station holds patient
-;  identifiers, accession numbers and report text. Persisting that history to
-;  %APPDATA% would write PHI to disk, silently, on a machine other people use
-;  -- so the clipboard history never touches disk. The scratchpad DOES persist,
-;  because canned phrases are the entire point of it, and the panel says so on
-;  screen: what you deliberately put in a scratchpad is your call, what merely
-;  passed through your clipboard is not.
-;
-;  ON DRAG AND DROP. Real OLE drag-and-drop (IDropTarget / DoDragDrop) is not
-;  implemented, and the panel does not pretend otherwise. Building a COM drop
-;  target by hand for a GDI+ layered window is a large, fragile piece of work,
-;  and it would still land on the inconsistent drop targets of PACS, PS and
-;  Epic. What is implemented is the thing that actually works everywhere:
-;
-;    INTO the shelf   -- anything you copy anywhere lands in the clipboard
-;                        list by itself, and "Grab selection" pulls the
-;                        current selection out of the window you came from.
-;    OUT of the shelf -- press a row and drag onto any window. On release
-;                        RadMapper sets the clipboard, clicks where you let
-;                        go (which is what places the caret), and pastes.
-;
-;  It is a simulated drop, and it behaves like a drop in every app tested
-;  against the same technique, because paste is the one interchange format
-;  all of them agree on.
-;
-;  The panel is summoned AT THE CURSOR, which is the same deliberate exception
-;  the radial-menu research reserves: v0.4.0 moved every passive HUD into a
-;  corner because a notification over the image is a notification over the
-;  finding, but this is modal, requested, and dismissed the moment it is used.
-
-global g_Clip := []            ; newest FIRST. Memory only, by design.
-global g_ClipMine := 0         ; tick of a clipboard write WE made
-
-/** Registered in Init. Text only -- an image on the clipboard is ignored. */
-ClipChanged(type) {
-    global g_Clip, g_ClipMine
-    if (type != 1)                           ; 1 = text
-        return
-    ; OnClipboardChange is a hook: Windows can call it in the middle of the
-    ; auto-execute thread, before the statements further down this file have
-    ; run. That is how "g_ClipMine has not been assigned a value" fell out of
-    ; a load-time error dialog. Init() runs last now, so this is belt and
-    ; braces -- but the hook must never be the thing that raises the error.
-    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
-        return
-    ; NEVER read the clipboard from inside the hook. This runs on the message
-    ; that announces the change, and A_Clipboard blocks until the owning
-    ; application renders the text -- a hung viewer or a remote-session
-    ; clipboard proxy would stall our hook, and a stalled clipboard hook
-    ; stalls Ctrl+C for every application on the station. Harvest off-thread.
-    SetTimer(ClipHarvest, -1)
-}
-
-/** The rest of ClipChanged, run off the hook's own thread. */
-ClipHarvest() {
-    global g_Clip, g_ClipMine
-    if (!IsSet(g_Clip) || !IsSet(g_ClipMine))
-        return
-    if (A_TickCount - g_ClipMine < 1200)     ; our own paste, not the user's
-        return
-    try {
-        txt := A_Clipboard
-    } catch {
-        return
-    }
-    if (txt = "" || StrLen(txt) > 20000)
-        return
-    if (g_Clip.Length > 0 && g_Clip[1] = txt)
-        return
-    ; Move an existing copy to the front rather than growing a duplicate.
-    i := g_Clip.Length
-    while (i >= 1) {
-        if (g_Clip[i] = txt)
-            g_Clip.RemoveAt(i)
-        i -= 1
-    }
-    g_Clip.InsertAt(1, txt)
-    while (g_Clip.Length > Shelf.MAXCLIP)
-        g_Clip.RemoveAt(g_Clip.Length)
-}
-
-class Shelf {
-    static MAXCLIP := 25
-    static VIS := 11               ; rows on screen at once
-    static W := 660
-    static ROWH := 30
-
-    static lyr := 0
-    static kind := "clip"          ; "clip" | "scratch"
-    static prevWin := 0            ; the window we were summoned over
-    static items := []
-    static sel := 1
-    static top := 1
-    static escBound := false
-    static busy := false
-
-    ; ── lifecycle ───────────────────────────────────────────────────────────
-
-    static Toggle(kind) {
-        if (IsObject(Shelf.lyr) && Shelf.kind = kind) {
-            Shelf.Close()
-            return
-        }
-        Shelf.Show(kind)
-    }
-
-    static Show(kind) {
-        Shelf.Close()
-        ; Captured BEFORE our own layer appears: this is the window a paste
-        ; has to go back to, and once we are activated it is too late to ask.
-        Shelf.prevWin := WinExist("A")
-        Shelf.kind := kind
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Load()
-        prev := LayerStack.ActiveLayer
-        h := Shelf.Height()
-        lyr := Layer(Shelf.W, h, "RadMapperShelf")
-        Shelf.lyr := lyr
-        LayerStack.ActiveLayer := lyr
-        try {
-            Atlas.Own(lyr)
-            lyr.TopMost(true)
-            lyr.Drag()
-            Shelf.Place(lyr)
-            Shelf.BindEsc()
-            Shelf.Paint()
-            lyr.Activate()
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static Close(*) {
-        if IsObject(Shelf.lyr) {
-            try Atlas.Disown(Shelf.lyr)
-            try Shelf.lyr.Dispose()
-        }
-        Shelf.lyr := 0
-    }
-
-
-    static Place(lyr) {
-        PlaceAtCursor(lyr)
-    }
-
-    static Height() {
-        n := Min(Max(Shelf.items.Length, 1), Shelf.VIS)
-        return 74 + n * Shelf.ROWH + 76
-    }
-
-    static Load() {
-        if (Shelf.kind = "clip") {
-            Shelf.items := g_Clip
-            return
-        }
-        if !g_Cfg.Has("snippets")
-            g_Cfg["snippets"] := []
-        Shelf.items := g_Cfg["snippets"]
-    }
-
-    ; ── escape ──────────────────────────────────────────────────────────────
-
-    static BindEsc() {
-        if Shelf.escBound
-            return
-        try {
-            HotIf(ObjBindMethod(Shelf, "IsFront"))
-            Hotkey("Escape", ObjBindMethod(Shelf, "EscKey"), "On")
-            Shelf.escBound := true
-        } catch {
-        } finally {
-            HotIf()
-        }
-    }
-
-    static IsFront(*) {
-        if !IsObject(Shelf.lyr)
-            return 0
-        try
-            return WinActive("ahk_id " Shelf.lyr.hwnd) ? 1 : 0
-        return 0
-    }
-
-    static EscKey(*) {
-        Lumi.EndEdit()
-        Shelf.Defer(ObjBindMethod(Shelf, "Close"))
-    }
-
-    /**
-     * Every row and button action goes through here.
-     *
-     * All of them either repaint (which calls lyr.Clear() and disposes every
-     * shape) or close the layer outright -- and all of them are invoked from
-     * inside GpGFX's shape dispatch, with the shape that was clicked live on
-     * the stack. Running them inline returns into a disposed shape. The -1
-     * timer lets the dispatch unwind first. Same rule as the resize grip.
-     */
-    static Defer(fn) {
-        SetTimer(fn, -1)
-    }
-
-    ; ── paint ───────────────────────────────────────────────────────────────
-
-    static Paint() {
-        lyr := Shelf.lyr
-        if !IsObject(lyr)
-            return
-        prev := LayerStack.ActiveLayer
-        LayerStack.ActiveLayer := lyr
-        try {
-            Shelf.__Paint(lyr)
-        } finally {
-            if (IsObject(prev) && !Lumi.Same(prev, lyr))
-                LayerStack.ActiveLayer := prev
-        }
-    }
-
-    static __Paint(lyr) {
-        Shelf.Load()
-        lyr.Clear()
-        w := Shelf.W
-        h := Shelf.Height()
-        try {
-            lyr.Resize(w, h)
-            lyr.Move(, , w, h)
-        }
-        clip := (Shelf.kind = "clip")
-
-        Lumi.Card(0, 0, w, h, "surface", 0)
-        Rectangle(0, 0, w, 3, clip ? Lumi.C["cyan"] : Lumi.C["jade"], true)
-        Lumi.Label(18, 12, 400, clip ? "Clipboard" : "Scratchpad", "title")
-        Lumi.Label(18, 38, w - 200,
-            clip ? "Last " Shelf.MAXCLIP " copies · memory only, never saved to disk"
-                 : "Saved snippets · stored in your config file",
-            "mute", "left", 18)
-        Lumi.Btn(w - 44, 12, 30, 26, "X",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "Close")), "ghost")
-        Lumi.Rule(18, 66, w - 36)
-
-        ; A backdrop that carries the wheel handlers, drawn BEFORE the rows so
-        ; the rows still win the hit test (the v0.3.8 dropdown fix, same shape).
-        vis := Min(Max(Shelf.items.Length, 1), Shelf.VIS)
-        listH := vis * Shelf.ROWH
-        back := Rectangle(10, 74, w - 20, listH, Lumi.C["abyss"], true)
-        back.OnEvent("MouseScrollUp", ObjBindMethod(Shelf, "Scroll", -1))
-        back.OnEvent("MouseScrollDown", ObjBindMethod(Shelf, "Scroll", 1))
-
-        if (Shelf.items.Length = 0) {
-            Lumi.Label(30, 74, w - 60,
-                clip ? "Nothing copied yet."
-                     : "Empty — use “Add from clipboard” or “Grab selection”.",
-                "mute", "left", listH)
-        }
-
-        i := Shelf.top
-        r := 0
-        while (r < vis && i <= Shelf.items.Length) {
-            ry := 74 + r * Shelf.ROWH
-            active := (i = Shelf.sel)
-            if active {
-                Rectangle(14, ry, w - 28, Shelf.ROWH - 2,
-                    Lumi.C["raised2"], true)
-                Rectangle(14, ry, 2, Shelf.ROWH - 2, Lumi.C["magenta"], true)
-            }
-            Lumi.Label(26, ry, 26, String(i), "mute", "left", Shelf.ROWH - 2)
-            Lumi.Label(56, ry, w - 90, Shelf.Preview(Shelf.items[i]),
-                active ? "body" : "dim", "left", Shelf.ROWH - 2)
-            hit := Container(14, ry, w - 28, Shelf.ROWH - 2)
-            hit.OnEvent("LeftMouseDown", ObjBindMethod(Shelf, "RowDown", i))
-            ; Right-click SELECTS without acting, so Copy / Send to scratchpad
-            ; / Del have a way to reach a row other than the one a left click
-            ; would have already pasted and closed on.
-            hit.OnEvent("RightMouseDown", ObjBindMethod(Shelf, "RowPick", i))
-            hit.OnEvent("MouseScrollUp", ObjBindMethod(Shelf, "Scroll", -1))
-            hit.OnEvent("MouseScrollDown", ObjBindMethod(Shelf, "Scroll", 1))
-            i += 1
-            r += 1
-        }
-
-        by := 74 + listH + 12
-        Lumi.Label(18, by, w - 36,
-            "Click a row to paste it back · drag a row onto any window to "
-            . "drop it there · right-click to select without pasting",
-            "mute", "left", 18)
-        by += 22
-        ; UseSel / CopySel / ToScratchSel, not ObjBindMethod(..., Shelf.sel):
-        ; a bound argument is captured when the button is PAINTED, and the
-        ; selection moves after that, so every one of these would have acted
-        ; on whatever was selected when the panel was drawn.
-        Lumi.Btn(18, by, 130, 30, "Paste",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "UseSel")), "primary")
-        Lumi.Btn(156, by, 110, 30, "Copy",
-            (*) => Shelf.Defer(ObjBindMethod(Shelf, "CopySel")), "accent")
-        if clip {
-            Lumi.Btn(274, by, 150, 30, "Send to scratchpad",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "ToScratchSel")),
-                "ghost")
-            Lumi.Btn(432, by, 130, 30, "Clear list",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "ClearAll")), "danger")
-        } else {
-            Lumi.Btn(274, by, 160, 30, "Add from clipboard",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "AddFromClip")), "ghost")
-            Lumi.Btn(442, by, 130, 30, "Grab selection",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "GrabSelection")), "ghost")
-            Lumi.Btn(580, by, 62, 30, "Del",
-                (*) => Shelf.Defer(ObjBindMethod(Shelf, "DeleteSel")), "danger")
-        }
-
-        Lumi.FullErase(lyr)      ; rebuilt in place -- no ghosts
-        lyr.Draw()
-    }
-
-    /** One line, no tabs or newlines, trimmed to something that fits. */
-    static Preview(s) {
-        s := StrReplace(StrReplace(StrReplace(s, "`r`n", " "), "`n", " "), "`t", " ")
-        s := Trim(s)
-        while InStr(s, "  ")
-            s := StrReplace(s, "  ", " ")
-        return (StrLen(s) > 92) ? SubStr(s, 1, 91) "…" : s
-    }
-
-    static Scroll(d, *) {
-        if (Shelf.items.Length <= Shelf.VIS)
-            return
-        t := Shelf.top + d
-        t := Min(Max(t, 1), Shelf.items.Length - Shelf.VIS + 1)
-        if (t = Shelf.top)
-            return
-        Shelf.top := t
-        Shelf.Defer(ObjBindMethod(Shelf, "Paint"))
-    }
-
-    ; ── rows: click to paste, drag to drop ──────────────────────────────────
-
-    /**
-     * A press on a row is not yet a click. It becomes a drag if the pointer
-     * leaves a small threshold before release, and a paste if it does not --
-     * so one gesture covers both without a modifier or a second button.
-     */
-    static RowDown(i, shp := 0, mx := 0, my := 0) {
-        Shelf.sel := i
-        Shelf.Defer(ObjBindMethod(Shelf, "RowDrag", i))
-    }
-
-    static RowPick(i, shp := 0, mx := 0, my := 0) {
-        Shelf.sel := i
-        Shelf.Defer(ObjBindMethod(Shelf, "Paint"))
-    }
-
-    static UseSel() => Shelf.Use(Shelf.sel)
-    static CopySel() => Shelf.CopyOnly(Shelf.sel)
-    static ToScratchSel() => Shelf.ToScratch(Shelf.sel)
-
-    static RowDrag(i) {
-        if Shelf.busy
-            return
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        text := Shelf.items[i]               ; the row AS GRABBED
-        Shelf.busy := true
-        moved := false
-        ex := 0
-        ey := 0
-        try {
-            CoordMode("Mouse", "Screen")
-            MouseGetPos(&sx, &sy)
-            while GetKeyState("LButton", "P") {
-                MouseGetPos(&cx, &cy)
-                if (Abs(cx - sx) > 12 || Abs(cy - sy) > 12)
-                    moved := true
-                Sleep(15)
-            }
-            MouseGetPos(&ex, &ey)
-        } finally {
-            Shelf.busy := false
-        }
-        ; Escape (or the X button) during the drag closes the shelf, and the
-        ; wait loop above yields, so that really happens mid-gesture. A
-        ; cancelled drag must not still paste into the study.
-        if !IsObject(Shelf.lyr)
-            return
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        ; Shelf.items IS g_Clip for the clipboard shelf, and ClipChanged
-        ; re-orders it from a copy made in another window while we waited --
-        ; row i may no longer be the row that was grabbed.
-        if (Shelf.items[i] !== text) {
-            HUD("The list changed — nothing was pasted", "warn")
-            return
-        }
-        if moved
-            Shelf.Drop(text, ex, ey)
-        else
-            Shelf.Use(i)
-    }
-
-    /**
-     * Simulated drop: close, click where the pointer was released so the
-     * target places its caret there, then paste. Closing FIRST matters --
-     * otherwise the click lands on our own panel.
-     */
-    static Drop(text, x, y) {
-        Shelf.Close()
-        Sleep(40)                            ; let the layer actually go away
-        CoordMode("Mouse", "Screen")         ; CoordMode is per-THREAD
-        hwnd := 0
-        try {
-            MouseGetPos(, , &hwnd)
-        }
-        if (!hwnd || g_OurHwnds.Has(hwnd)) {
-            HUD("Dropped nowhere — release over a window", "warn")
-            return
-        }
-        Shelf.SetClip(text)
-        try {
-            WinActivate("ahk_id " hwnd)
-            if !WinWaitActive("ahk_id " hwnd, , 1)
-                return                       ; never paste into the wrong window
-            Sleep(40)
-            Click(x " " y)               ; v2 Click takes ONE options string
-            Sleep(40)
-            SafeSend("^v")
-        }
-    }
-
-    ; ── actions ─────────────────────────────────────────────────────────────
-
-    static SetClip(text) {
-        global g_ClipMine
-        g_ClipMine := A_TickCount            ; so ClipChanged ignores this one
-        A_Clipboard := text
-        ClipWait(1, 1)
-    }
-
-    /** Paste into the window we were summoned over. */
-    static Use(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        text := Shelf.items[i]
-        win := Shelf.prevWin
-        Shelf.Close()
-        Shelf.SetClip(text)
-        if (!win || !WinExist("ahk_id " win)) {
-            HUD("Copied — no window to paste into", "warn")
-            return
-        }
-        try {
-            WinActivate("ahk_id " win)
-            if !WinWaitActive("ahk_id " win, , 1)
-                return
-            Sleep(40)
-            SafeSend("^v")
-        }
-    }
-
-    static CopyOnly(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        Shelf.SetClip(Shelf.items[i])
-        Shelf.Close()
-        HUD("Copied to clipboard", "jade")
-    }
-
-    static ToScratch(i) {
-        if (i < 1 || i > Shelf.items.Length)
-            return
-        Shelf.AddSnippet(Shelf.items[i])
-        Shelf.Paint()
-        HUD("Saved to scratchpad", "jade")
-    }
-
-    static AddSnippet(text) {
-        text := Trim(text)
-        if (text = "")
-            return
-        if !g_Cfg.Has("snippets")
-            g_Cfg["snippets"] := []
-        for s in g_Cfg["snippets"] {
-            if (s = text)
-                return                       ; already there
-        }
-        g_Cfg["snippets"].InsertAt(1, text)
-        if !Atlas.SaveOrWarn()
-            HUD("Applied for now — not written to disk", "danger")
-    }
-
-    static AddFromClip() {
-        try {
-            Shelf.AddSnippet(A_Clipboard)
-        }
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Paint()
-    }
-
-    /**
-     * Pull the current selection out of the window we were summoned over.
-     * This is the "drag something INTO the shelf" gesture, done the way that
-     * works in every one of these applications: activate, Ctrl+C, read it.
-     */
-    static GrabSelection() {
-        win := Shelf.prevWin
-        if (!win || !WinExist("ahk_id " win)) {
-            HUD("No window to grab from", "warn")
-            return
-        }
-        Shelf.Close()
-        try {
-            WinActivate("ahk_id " win)
-            if !WinWaitActive("ahk_id " win, , 1) {
-                HUD("Could not focus that window", "warn")
-                return
-            }
-            Sleep(40)
-            ; ClipWait is true the moment the clipboard holds ANY text, so
-            ; with nothing selected it returns on whatever was there before
-            ; -- and that went straight into the config file on disk. Empty
-            ; the clipboard first: then only a copy that actually happened
-            ; can satisfy the wait. The user's clipboard is put back.
-            before := A_Clipboard
-            A_Clipboard := ""
-            SafeSend("^c")
-            if !ClipWait(1, 0) {
-                A_Clipboard := before
-                HUD("Nothing was selected", "warn")
-                return
-            }
-            got := A_Clipboard
-            A_Clipboard := before
-            Shelf.AddSnippet(got)
-            HUD("Selection saved to scratchpad", "jade")
-        }
-    }
-
-    static DeleteSel() {
-        i := Shelf.sel
-        if (Shelf.kind != "scratch" || i < 1 || i > Shelf.items.Length)
-            return
-        ; A snippet is typed once and kept for months; deleting it was one
-        ; keypress with no question and no undo. Show what is about to go.
-        gone := g_Cfg["snippets"][i]
-        head := (StrLen(gone) > 80) ? SubStr(gone, 1, 80) "…" : gone
-        if !Atlas.Confirm("Delete this snippet?`n`n" head)
-            return
-        g_Cfg["snippets"].RemoveAt(i)
-        ok := Atlas.SaveOrWarn()
-        Shelf.sel := Max(1, Min(i, g_Cfg["snippets"].Length))
-        Shelf.top := 1
-        Shelf.Paint()
-        HUD(ok ? "Snippet deleted" : "Applied for now — not written to disk",
-            ok ? "magenta" : "danger")
-    }
-
-    /** Clipboard list only -- the scratchpad is deleted a row at a time. */
-    static ClearAll() {
-        global g_Clip
-        if (Shelf.kind != "clip")
-            return
-        g_Clip := []
-        Shelf.sel := 1
-        Shelf.top := 1
-        Shelf.Paint()
-        HUD("Clipboard history cleared", "magenta")
     }
 }
 
@@ -20514,6 +16971,7 @@ class Chooser {
             try Chooser.lyr.Dispose()
         }
         Chooser.lyr := 0
+        Chooser.KeysOn(false)
     }
 
     static Height() {
@@ -20527,11 +16985,28 @@ class Chooser {
         SetTimer(fn, -1)
     }
 
-    static BindEsc() {
-        if Chooser.escBound
+    static ctxFn := 0
+
+    static KeysOn(on) {
+        if !Chooser.escBound
             return
         try {
-            HotIf(ObjBindMethod(Chooser, "IsFront"))
+            HotIf(Chooser.ctxFn)
+            for hk in ["Escape", "Up", "Down", "Enter"]
+                try Hotkey(hk, on ? "On" : "Off")
+        } finally {
+            HotIf()
+        }
+    }
+
+    static BindEsc() {
+        if Chooser.escBound {
+            Chooser.KeysOn(true)
+            return
+        }
+        Chooser.ctxFn := ObjBindMethod(Chooser, "IsFront")
+        try {
+            HotIf(Chooser.ctxFn)
             Hotkey("Escape", ObjBindMethod(Chooser, "EscKey"), "On")
             ; A list of choices should work like a list of choices. These
             ; are scoped by the same IsFront context as Escape, so they are
@@ -20811,18 +17286,15 @@ class Warp {
             HUD("Keyboard pointer needs the overlay kit (not in this build)", "warn")
             return
         }
-        ; A radial menu, the app switcher and the timing calibrator all own
-        ; the keyboard (or a held button) while they are up. Opening an
+        ; The app switcher owns a held button while it is up. Opening an
         ; InputHook that swallows every key on top of one of them leaves the
         ; menu unable to hear its own cancel key and the switcher unable to
         ; hear its release -- and the user with two overlays and no way out
         ; but Esc. Refuse instead; the menu is one keystroke from gone.
         busy := ""
-        if IsObject(g_Radial)
-            busy := "menu"
-        else if IsObject(g_AppSw)
+        if IsObject(g_AppSw)
             busy := "window switcher"
-        ; The settings window is the fourth: it drives itself from Tab,
+        ; The settings window is the other: it drives itself from Tab,
         ; Space, Enter and the arrows (Lumi.Focus), and an InputHook that
         ; swallows all of them on top of it leaves the window looking
         ; focused and answering nothing.
@@ -20911,7 +17383,8 @@ class Warp {
     static StartHook() {
         Warp.StopHook()
         ih := InputHook()
-        ih.VisibleText := false
+        ih.MinSendLevel := 1                 ; our own sends (ps_next's Tab)
+        ih.VisibleText := false              ; reach their app, not the grid
         ih.VisibleNonText := false
         ih.KeyOpt("{All}", "N")
         ih.KeyOpt("{LShift}{RShift}{LCtrl}{RCtrl}{LAlt}{RAlt}{LWin}{RWin}", "V")
@@ -21692,6 +18165,16 @@ class Warp {
 ;  NOT load-bearing: `#Warn` is not positional (AutoHotkey applies it to the
 ;  whole script wherever it appears), which is exactly why modification 1
 ;  below switches it off rather than relying on section order.
+;
+;  PRUNED (RadMapper 0.7.2): about 3,500 lines the app can never reach were
+;  deleted -- the worker pool and its shared-memory/mutex classes, Debug,
+;  Dialog, systext, Signal, Time, FrameTimer, Palette/ColorLUT,
+;  CachedBitmap, the unused Shape subclasses (Arc, Pie, Polygon, Bezier,
+;  Curve, Square, Triangle, Point, Lines, Button, the Filled* and alias
+;  classes) and unused global helpers. A few members of the classes that
+;  remain still NAME a deleted class (Layer.Async/Step, Layer.GetMonitor*,
+;  Shape.Animate, GdipBitmap.ApplyLUT); nothing calls them, and with #Warn
+;  off an unreachable name costs nothing. Everything else is as vendored.
 ;
 ;  NOTE ON OMISSIONS: core/Worker.ahk is NOT bundled. It is a standalone
 ;  worker PROCESS that GpGFX launches as its own script file, it carries
@@ -23290,10 +19773,6 @@ class Color {
     static Buf    => ColorBuffer
 }
 
-; Global aliases
-RAL_load() => Color.RAL_load()
-ColorBuf(params*) => ColorBuffer(params*)
-
 /**
  * 1D continuous multi-stop color gradient lookup table (LUT) in unmanaged memory.
  * Pre-computes continuous linear interpolation across N color stops into a flat binary buffer.
@@ -23538,513 +20017,6 @@ class ColorBuffer {
             "0xFF000000", "0xFFFFFFFF"]))
     }
     static BW => this.Grayscale
-}
-
-/**
- * 256-entry channel lookup table (LUT) transformation.
- * Executes x64 assembly directly across GDI+ 32bpp Bitmap Scan0 unmanaged memory.
- * Transforms a 1080p frame in ~0.3 ms and 4K UHD in ~0.8 ms.
- */
-class ColorLUT {
-
-    static mcodeB64 := "hdJBidJIichBVA+ewkWFwFUPnsFXCMpWU0yLXCRQSItcJFhIi3QkYEiL" . 
-    "fCRoD4WQAAAASIXAD4SHAAAASIX/D4SFAAAATWPhMe1JicEPHwBMicgx0mZmLg8fhAAAAAAAZmY" . 
-    "uDx+EAAAAAABmZi4PH4QAAAAAAGYuDx+EAAAAAAAPtgiDwgFIg8AEQQ+2DAuISPwPtkj9D7YMC4" . 
-    "hI/Q+2SP4PtgwOiEj+D7ZI/w+2DA+ISP9BOdJ/yIPFAU0B4UE56H+NW15fXUFcw0lj+THtSYnBZ" . 
-    "mYuDx+EAAAAAAAPHwBMicgx0mZmLg8fhAAAAAAAZmYuDx+EAAAAAAAPH0QAAA+2CIPCAUiDwARB" . 
-    "D7YMC4hI/A+2SP0PtgwLiEj9D7ZI/g+2DA6ISP5BOdJ/04PFAUkB+UE56H+oW15fXUFcwzHAww=="
-
-    static pMCode := 0
-
-    /**
-     * Initializes the x64 assembly routine on-demand.
-     */
-    static __InitMCode() {
-        if (this.pMCode)
-            return
-        local len := 0, buf := Buffer(len, 0), oldProt := 0
-        DllCall("crypt32\CryptStringToBinaryA", "astr", this.mcodeB64, "uint", 0, "uint", 1, "ptr", 0, "uint*", &len, "ptr", 0, "ptr", 0)
-        DllCall("crypt32\CryptStringToBinaryA", "astr", this.mcodeB64, "uint", 0, "uint", 1, "ptr", buf.ptr, "uint*", &len, "ptr", 0, "ptr", 0)
-        DllCall("VirtualProtect", "ptr", buf.ptr, "uptr", len, "uint", 0x40, "uint*", &oldProt)
-        this.pMCode := buf
-    }
-
-    /**
-     * Applies a 256-entry color lookup table (LUT) transformation directly to a GDI+ Bitmap.
-     *
-     * @param {Pointer|Bitmap|Object} targetBitmap GDI+ pBitmap pointer or Bitmap instance
-     * @param {Array|Buffer} lutB 256-byte table for Blue channel (B' = lutB[B])
-     * @param {Array|Buffer} lutG 256-byte table for Green channel (G' = lutG[G])
-     * @param {Array|Buffer} lutR 256-byte table for Red channel (R' = lutR[R])
-     * @param {Array|Buffer} [lutA] Optional 256-byte table for Alpha channel (A' = lutA[A])
-     * @returns {Boolean} True on success
-     *
-     * @example
-     * ; 1. High-contrast threshold
-     * tTable := ColorLUT.Threshold(128)
-     * ColorLUT.Apply(myBitmap, tTable, tTable, tTable)
-     *
-     * ; 2. Invert specific channels
-     * ColorLUT.Apply(myBitmap, ColorLUT.Invert(), ColorLUT.Identity(), ColorLUT.Invert())
-     */
-    static Apply(targetBitmap, lutB, lutG, lutR, lutA?) {
-        local pBitmap, w, h, stride, scan0, bufB, bufG, bufR, ptrA, bufA, status
-
-        if (!this.pMCode)
-            this.__InitMCode()
-
-        pBitmap := (IsObject(targetBitmap) && targetBitmap.HasProp("ptr")) ? targetBitmap.ptr : targetBitmap
-        if (!pBitmap)
-            throw ValueError("[!] Invalid pBitmap pointer")
-
-        w := 0
-        h := 0
-        DllCall("gdiplus\GdipGetImageWidth", "ptr", pBitmap, "uint*", &w:=0)
-        DllCall("gdiplus\GdipGetImageHeight", "ptr", pBitmap, "uint*", &h:=0)
-        if (w <= 0 || h <= 0)
-            return false
-
-        static rect := Buffer(16, 0)
-        NumPut("int", 0, rect, 0)
-        NumPut("int", 0, rect, 4)
-        NumPut("int", w, rect, 8)
-        NumPut("int", h, rect, 12)
-
-        ; BitmapData structure: Width, Height, Stride, PixelFormat, Scan0, Reserved
-        static bmd := Buffer(32, 0)
-        ; PixelFormat32bppARGB (0x26200A), ImageLockModeRead | ImageLockModeWrite (3)
-        status := DllCall("gdiplus\GdipBitmapLockBits", "ptr", pBitmap, "ptr", rect, "uint", 3, "int", 0x26200A, "ptr", bmd)
-        if (status != 0)
-            throw Error("[!] GdipBitmapLockBits failed with status: " status)
-
-        stride := NumGet(bmd, 8, "int")
-        scan0  := NumGet(bmd, 16, "ptr")
-
-        bufB := this.__ToBuffer(lutB)
-        bufG := this.__ToBuffer(lutG)
-        bufR := this.__ToBuffer(lutR)
-        ptrA := 0
-        bufA := 0
-        if (IsSet(lutA)) {
-            bufA := this.__ToBuffer(lutA)
-            ptrA := bufA.ptr
-        }
-
-        ; Call x64 machine code
-        DllCall(this.pMCode.ptr, "ptr", scan0, "int", w, "int", h, "int", stride, "ptr", bufB.ptr, "ptr", bufG.ptr, "ptr", bufR.ptr, "ptr", ptrA, "cdecl")
-
-        DllCall("gdiplus\GdipBitmapUnlockBits", "ptr", pBitmap, "ptr", bmd)
-        return true
-    }
-
-    /**
-     * Normalizes an Array or Buffer into a 256-byte binary lookup buffer.
-     */
-    static __ToBuffer(lut) {
-        local buf, i, v
-        if (lut is Buffer && lut.Size >= 256)
-            return lut
-        buf := Buffer(256, 0)
-        loop 256 {
-            i := A_Index - 1
-            v := (lut.Has(i + 1)) ? lut[i + 1] : i
-            NumPut("uchar", Max(0, Min(255, v)), buf, i)
-        }
-        return buf
-    }
-
-    /**
-     * Identity (pass-through) table: `f(x) = x`. Leaves channel unmodified.
-     *
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Identity() {
-        local buf := Buffer(256, 0)
-        loop 256
-            NumPut("uchar", A_Index - 1, buf, A_Index - 1)
-        return buf
-    }
-
-    /**
-     * Invert table: `f(x) = 255 - x`. Inverts channel intensity.
-     *
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Invert() {
-        local buf := Buffer(256, 0)
-        loop 256
-            NumPut("uchar", 255 - (A_Index - 1), buf, A_Index - 1)
-        return buf
-    }
-
-    /**
-     * Posterize (color quantization) table. Reduces continuous tones into N discrete stepped levels.
-     *
-     * @param {Integer} [levels=4] Number of discrete steps (2 to 256)
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Posterize(levels := 4) {
-        local buf := Buffer(256, 0), step, i, bucket
-        step := 255 / Max(1, levels - 1)
-        loop 256 {
-            i := A_Index - 1
-            bucket := Round(i / (256 / levels))
-            NumPut("uchar", Min(255, Round(bucket * step)), buf, i)
-        }
-        return buf
-    }
-
-    /**
-     * High-contrast binary threshold table. Values below cutoff become 0, >= cutoff become 255.
-     *
-     * @param {Integer} [cutoff=128] Threshold cutoff boundary (0 to 255)
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Threshold(cutoff := 128) {
-        local buf := Buffer(256, 0), i
-        loop 256 {
-            i := A_Index - 1
-            NumPut("uchar", (i >= cutoff) ? 255 : 0, buf, i)
-        }
-        return buf
-    }
-
-    /**
-     * Solarization tone curve table. Inverts tonal values above a specified pivot point.
-     *
-     * @param {Integer} [cutoff=128] Inversion pivot point (0 to 255)
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Solarize(cutoff := 128) {
-        local buf := Buffer(256, 0), i
-        loop 256 {
-            i := A_Index - 1
-            NumPut("uchar", (i < cutoff) ? i : (255 - i), buf, i)
-        }
-        return buf
-    }
-
-    /**
-     * Brightness and contrast adjustment tone table.
-     *
-     * @param {Float|Integer} [brightness=0] Additive brightness offset (-255 to 255)
-     * @param {Float|Integer} [contrast=0] Multiplicative contrast slope factor (-255 to 255)
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static BrightnessContrast(brightness := 0, contrast := 0) {
-        local buf := Buffer(256, 0), factor, val, adjusted
-        factor := (259 * (contrast + 255)) / (255 * (259 - contrast))
-        loop 256 {
-            val := A_Index - 1
-            adjusted := Round(factor * (val - 128) + 128 + brightness)
-            NumPut("uchar", Max(0, Min(255, adjusted)), buf, val)
-        }
-        return buf
-    }
-
-    /**
-     * Non-linear gamma correction tone table: `f(x) = 255 * (x / 255) ^ (1 / gamma)`.
-     *
-     * @param {Float} [gamma=2.2] Gamma exponent value (> 0.0)
-     * @returns {Buffer} 256-byte binary buffer
-     */
-    static Gamma(gamma := 2.2) {
-        local buf := Buffer(256, 0), invGamma, i, norm
-        invGamma := 1.0 / gamma
-        loop 256 {
-            i := A_Index - 1
-            norm := i / 255.0
-            NumPut("uchar", Round(255.0 * (norm ** invGamma)), buf, i)
-        }
-        return buf
-    }
-
-    /**
-     * Generates a 3-channel (B, G, R) LUT buffer array from a ColorBuffer gradient palette.
-     *
-     * @param {ColorBuffer} colorBuffer ColorBuffer gradient instance (e.g. `ColorBuffer.Thermal`, `ColorBuffer.Turbo`)
-     * @returns {Array<Buffer>} Array of 3 buffers: `[bufB, bufG, bufR]`
-     */
-    static FromGradient(colorBuffer) {
-        local bufB, bufG, bufR, i, clr, pGrad
-        bufB := Buffer(256, 0)
-        bufG := Buffer(256, 0)
-        bufR := Buffer(256, 0)
-        pGrad := colorBuffer.ptr
-        loop 256 {
-            i := A_Index - 1
-            clr := NumGet(pGrad, i * 4, "uint")
-            NumPut("uchar", clr & 0xFF, bufB, i)
-            NumPut("uchar", (clr >> 8) & 0xFF, bufG, i)
-            NumPut("uchar", (clr >> 16) & 0xFF, bufR, i)
-        }
-        return [bufB, bufG, bufR]
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/Palette.ahk
-; --------------------------------------------------------------------------
-; Script:    Palette.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX Color Palette & Theme Engine
- *
- * Provides curated design palettes with pre-computed continuous gradient lookup tables (ColorBuffer)
- * for instant ~2 ns real-time color sampling without runtime interpolation math.
- *
- * Features:
- * - Curated themes: Catppuccin, Nord, Gruvbox, TokyoNight, Dracula, Solarized, Cyberpunk, Monokai.
- * - Semantic roles: .primary, .accent, .highlight, .secondary, .bg, .text, .surface, .accent2.
- * - Array indexing: pal[1] swatch access, pal[0.75] continuous gradient float sampling.
- * - Custom palette registration via Palette.Create(name, colors, bg, text).
- */
-class Palette {
-
-    ; Registry of all instantiated palettes
-    static __registry := Map()
-
-    /**
-     * Retrieves a palette by name or returns the default Catppuccin palette.
-     *
-     * @param {String} [name="Catppuccin"] Palette name (e.g. "Catppuccin", "Nord", "Gruvbox", "TokyoNight", "Dracula", "Solarized", "Cyberpunk", "Monokai")
-     * @returns {PaletteInstance}
-     *
-     * @example
-     * ; 1. Get Nord palette
-     * pal := Palette.Get("Nord")
-     *
-     * ; 2. Direct property access
-     * pal := Palette.Dracula
-     */
-    static Get(name := "Catppuccin") {
-        local n := StrLower(name)
-        if (this.__registry.Has(n))
-            return this.__registry[n]
-        if (this.HasOwnProp(name))
-            return this.%name%
-        return this.Catppuccin
-    }
-
-    /**
-     * Samples a color from a named palette across normalized distance 0.0 .. 1.0 or 0 .. 255.
-     *
-     * @param {String} name Palette name
-     * @param {Float|Integer} [t=0.0] Position in palette gradient (0.0 to 1.0, or 0 to 255)
-     * @returns {Integer} 32-bit ARGB uint
-     *
-     * @example
-     * ; Sample midpoint color from TokyoNight
-     * color := Palette.Sample("TokyoNight", 0.5)
-     */
-    static Sample(name, t := 0.0) {
-        return this.Get(name).Sample(t)
-    }
-
-    /**
-     * Returns a random swatch color from the specified palette.
-     *
-     * @param {String} [name="Catppuccin"] Palette name
-     * @returns {Integer} 32-bit ARGB uint
-     *
-     * @example
-     * randColor := Palette.Random("Nord")
-     */
-    static Random(name := "Catppuccin") {
-        return this.Get(name).Random()
-    }
-
-    /**
-     * Creates and registers a custom color palette.
-     *
-     * @param {String} name Unique palette name
-     * @param {Array} colors Array of core colors [c1, c2, c3, ...]
-     * @param {Integer|String} [bg="0xFF181825"] Background color
-     * @param {Integer|String} [text="0xFFFFFFFF"] Text / foreground color
-     * @param {Integer|String} [surface="0xFF282838"] Surface / card color
-     * @param {Integer|String} [accent2="0xFFE0AF68"] Secondary accent color
-     * @returns {PaletteInstance}
-     *
-     * @example
-     * ; Create custom Sunset theme
-     * myTheme := Palette.Create("Sunset", ["#FF5E36", "#FFAE34", "#FF007F", "#7800A8"], "#120520", "#FFFFFF")
-     * c := Palette.Sample("Sunset", 0.3)
-     */
-    static Create(name, colors, bg := "0xFF181825", text := "0xFFFFFFFF", surface := "0xFF282838", accent2 := "0xFFE0AF68") {
-        local pal := PaletteInstance(name, colors, bg, text, surface, accent2)
-        this.__registry[StrLower(name)] := pal
-        return pal
-    }
-
-    ; Curated Built-in Design Palettes
-
-    ; Catppuccin Mocha
-    static Catppuccin := PaletteInstance("Catppuccin"
-        , ["0xFF89B4FA", "0xFFCBA6F7", "0xFFF38BA8", "0xFFA6E3A1"] ; Blue, Mauve, Red, Green
-        , "0xFF1E1E2E" ; Base (Dark Background)
-        , "0xFFCDD6F4" ; Text
-        , "0xFF313244" ; Surface0
-        , "0xFFFAB387") ; Peach (Accent 2)
-
-    ; Nord Theme
-    static Nord := PaletteInstance("Nord"
-        , ["0xFF88C0D0", "0xFF81A1C1", "0xFFA3BE8C", "0xFFBF616A"] ; Frost Blue, Slate, Green, Red
-        , "0xFF2E3440" ; Polar Night
-        , "0xFFECEFF4" ; Snow Storm
-        , "0xFF3B4252" ; Surface
-        , "0xFFEBCB8B") ; Yellow
-
-    ; Gruvbox Dark
-    static Gruvbox := PaletteInstance("Gruvbox"
-        , ["0xFF83A598", "0xFFFABD2F", "0xFFFB4934", "0xFFB8BB26"] ; Blue, Yellow, Red, Green
-        , "0xFF282828" ; Dark0
-        , "0xFFEBDBB2" ; Light0
-        , "0xFF3C3836" ; Dark1
-        , "0xFFFE8019") ; Orange
-
-    ; Tokyo Night
-    static TokyoNight := PaletteInstance("TokyoNight"
-        , ["0xFF7AA2F7", "0xFFBB9AF7", "0xFFF7768E", "0xFF9ECE6A"] ; Blue, Purple, Red, Green
-        , "0xFF1A1B26" ; Background
-        , "0xFFC0CAF5" ; Foreground
-        , "0xFF24283B" ; Surface
-        , "0xFFE0AF68") ; Yellow
-
-    ; Dracula
-    static Dracula := PaletteInstance("Dracula"
-        , ["0xFFBD93F9", "0xFF50FA7B", "0xFFFF79C6", "0xFFFF5555"] ; Purple, Green, Pink, Red
-        , "0xFF282A36" ; Background
-        , "0xFFF8F8F2" ; Foreground
-        , "0xFF44475A" ; Current Line
-        , "0xFF8BE9FD") ; Cyan
-
-    ; Solarized Dark
-    static Solarized := PaletteInstance("Solarized"
-        , ["0xFF268BD2", "0xFF859900", "0xFFDC322F", "0xFF2AA198"] ; Blue, Green, Red, Cyan
-        , "0xFF002B36" ; Base03
-        , "0xFFFDF6E3" ; Base3
-        , "0xFF073642" ; Base02
-        , "0xFFB58900") ; Yellow
-
-    ; Cyberpunk Neon
-    static Cyberpunk := PaletteInstance("Cyberpunk"
-        , ["0xFF00F0FF", "0xFFFCEE0A", "0xFFFF003C", "0xFF7122FA"] ; Cyan, Yellow, Neon Red, Purple
-        , "0xFF0D0221" ; Void
-        , "0xFFFFFFFF" ; White
-        , "0xFF261447" ; Deep Purple
-        , "0xFF05D9E8") ; Laser Blue
-
-    ; Monokai Pro
-    static Monokai := PaletteInstance("Monokai"
-        , ["0xFF78DCE8", "0xFFFFD866", "0xFFFF6188", "0xFFA9DC76"] ; Cyan, Yellow, Pink, Green
-        , "0xFF2D2A2E" ; Charcoal
-        , "0xFFFCFCFA" ; Text
-        , "0xFF403E41" ; Surface
-        , "0xFFAB9DF2") ; Purple
-}
-
-/**
- * Concrete palette instance representing a cohesive color scheme with background, surface,
- * text roles, and a pre-calculated 256-step continuous ARGB gradient buffer.
- */
-class PaletteInstance {
-
-    name := ""
-    colors := []
-    bg := 0xFF181825
-    text := 0xFFFFFFFF
-    surface := 0xFF282838
-    accent2 := 0xFFE0AF68
-
-    ; High-performance pre-computed ColorBuffer instance
-    buffer := 0
-    pGradient => this.buffer.ptr
-    __bufGradient => this.buffer.buf
-
-    /**
-     * Initializes a new PaletteInstance.
-     *
-     * @param {String} name Palette name
-     * @param {Array} colors Swatch colors
-     * @param {Integer|String} [bg="0xFF181825"] Background color
-     * @param {Integer|String} [text="0xFFFFFFFF"] Text color
-     * @param {Integer|String} [surface="0xFF282838"] Surface color
-     * @param {Integer|String} [accent2="0xFFE0AF68"] Secondary accent
-     */
-    __New(name, colors, bg := "0xFF181825", text := "0xFFFFFFFF", surface := "0xFF282838", accent2 := "0xFFE0AF68") {
-        local i, c
-        this.name := name
-        this.colors := []
-        for i, c in colors {
-            this.colors.Push(Color(c))
-        }
-        this.bg := Color(bg)
-        this.text := Color(text)
-        this.surface := Color(surface)
-        this.accent2 := Color(accent2)
-
-        ; Register in global palette map
-        Palette.__registry[StrLower(name)] := this
-
-        ; Pre-compute continuous gradient buffer across colors
-        this.buffer := ColorBuffer(this.colors)
-    }
-
-    /**
-     * Array-like indexing for core colors:
-     * - `pal[1]`, `pal[2]` -> Discrete swatch colors
-     * - `pal[0.5]` -> Continuous gradient sampling
-     *
-     * @param {Integer|Float} index 1-based swatch index or 0.0-1.0 gradient position
-     * @returns {Integer} 32-bit ARGB uint
-     *
-     * @example
-     * pal := Palette.Nord
-     * c1 := pal[1]    ; First swatch
-     * cMid := pal[0.5] ; Smooth interpolated midpoint
-     */
-    __Item[index] {
-        get {
-            if (index is Float)
-                return this.buffer.Sample(index)
-            local idx := Integer(index)
-            if (idx >= 1 && idx <= this.colors.Length)
-                return this.colors[idx]
-            return this.colors[1]
-        }
-    }
-
-    ; Semantic role getters
-    primary   => this.colors[1]
-    accent    => (this.colors.Length >= 2) ? this.colors[2] : this.colors[1]
-    highlight => (this.colors.Length >= 3) ? this.colors[3] : this.accent
-    secondary => (this.colors.Length >= 4) ? this.colors[4] : this.accent
-
-    /**
-     * Samples a color from the pre-computed gradient lookup table in ~2 nanoseconds.
-     *
-     * @param {Float|Integer} [t=0.0] Position in gradient: normalized 0.0 .. 1.0, or integer 0 .. 255
-     * @returns {Integer} 32-bit ARGB uint
-     *
-     * @example
-     * pal := Palette.Dracula
-     * color := pal.Sample(0.75)
-     */
-    Sample(t := 0.0) => this.buffer.Sample(t)
-
-    /**
-     * Returns a random color from the palette's swatch colors.
-     *
-     * @returns {Integer} 32-bit ARGB uint
-     *
-     * @example
-     * randColor := Palette.Gruvbox.Random()
-     */
-    Random() => this.colors[Random(1, this.colors.Length)]
 }
 
 ; --------------------------------------------------------------------------
@@ -25359,74 +21331,6 @@ GdiBitmap := GdipBitmap
 GpImage := GdipBitmap
 
 /**
- * GDI+ CachedBitmap class for ultra-high-speed static sprite and layer blitting.
- * Pre-renders and compiles a Bitmap into the native pixel format of the target Device Context (2x - 3x faster than standard DrawImage calls).
- */
-class CachedBitmap {
-    ptr := 0
-    w   := 0
-    h   := 0
-
-    /**
-     * Pre-compiles a GDI+ Bitmap into the native pixel format of the target Graphics DC.
-     *
-     * @constructor
-     * @param {GdipBitmap|Ptr} bmp Source GdipBitmap instance or native pBitmap pointer
-     * @param {Graphics|Layer|Ptr} gfx Target Graphics context, Layer instance, or native pGraphics pointer
-     *
-     * @example
-     * ; Compile a static sprite for fast blitting onto a layer
-     * sprite := GdipBitmap("character.png")
-     * cachedSprite := CachedBitmap(sprite, mainLayer)
-     *
-     * ; Inside render loop:
-     * cachedSprite.Draw(mainLayer, 100, 100)
-     */
-    __New(bmp, gfx) {
-        local pBmp, pGfx, pCached
-        pBmp := (IsObject(bmp)) ? (bmp.ptr || bmp) : bmp
-        pGfx := (IsObject(gfx)) ? ((gfx is Layer) ? gfx.gfx.ptr : (gfx.ptr || gfx)) : gfx
-        pCached := 0
-
-        if (pBmp && pGfx) {
-            DllCall("gdiplus\GdipCreateCachedBitmap", "ptr", pBmp, "ptr", pGfx, "ptr*", &pCached:=0)
-            this.ptr := pCached
-            this.w := (IsObject(bmp) && (bmp.w || 0)) ? bmp.w : 0
-            this.h := (IsObject(bmp) && (bmp.h || 0)) ? bmp.h : 0
-        }
-    }
-
-    /**
-     * Blits the pre-compiled cached bitmap directly to the target graphics DC.
-     *
-     * @param {Graphics|Layer|Ptr} gfx Target Graphics context or Layer instance
-     * @param {Integer} [x=0] X position on destination surface
-     * @param {Integer} [y=0] Y position on destination surface
-     * @returns {Integer} GDI+ status code (0 = success)
-     */
-    Draw(gfx, x := 0, y := 0) {
-        local pGfx := (IsObject(gfx)) ? ((gfx is Layer) ? gfx.gfx.ptr : (gfx.ptr || gfx)) : gfx
-        if (this.ptr && pGfx) {
-            return DllCall("gdiplus\GdipDrawCachedBitmap", "ptr", pGfx, "ptr", this.ptr, "int", Round(x), "int", Round(y))
-        }
-        return 2 ; InvalidParameter
-    }
-
-    /**
-     * Releases the native GDI+ cached bitmap handle.
-     */
-    Dispose() {
-        if (this.ptr) {
-            local p := this.ptr
-            this.ptr := 0
-            DllCall("gdiplus\GdipDeleteCachedBitmap", "ptr", p)
-        }
-    }
-
-    __Delete() => this.Dispose()
-}
-
-/**
  * Pre-defined 5x5 Color Matrices for high-speed hardware-accelerated color filtering.
  */
 class ColorMatrix {
@@ -26131,7 +22035,9 @@ class TextLayout {
     static Prepare(shape) {
         local val, rawSegments, seg, strRaw, defaultClr, currentClr, currentStyle, baseStyle, baseFnt, runFont, pos, textLen, strInput, tagPos, chunk, closeBrace, tagContent, clrSpec, m, matchedClr, mTag, mClr, parts, part, foundAny
 
-        if (shape.__str == "" || shape.__str == 0) {
+        ; Only an EMPTY string is "no text". `== 0` compared numerically, so a
+        ; label that is exactly "0" (the 0 key, a zero count) drew blank.
+        if (shape.__str == "") {
             shape.__isRichText := false
             shape.__textRuns := []
             shape.__textLines := []
@@ -26142,7 +22048,10 @@ class TextLayout {
         }
 
         ; Check if formatted rich text or monospaced multiline layout (Array of [Color, Text] OR String with tags {...}, <...>, `t, or multiline monospaced text)
-        if (Type(shape.__str) == "Array" || (Type(shape.__str) == "String" && (InStr(shape.__str, "{") || InStr(shape.__str, "<") || InStr(shape.__str, "`t") || (shape.Font && shape.Font.HasProp("isMonospace") && shape.Font.isMonospace && InStr(shape.__str, "`n"))))) {
+        ; RadMapper: {..} / <..> markup is OPT-IN (shape.markup). Send syntax
+        ; is full of braces -- "^{c}" drew as "^" ({c} is a reset tag) and
+        ; "{Del}" drew struck through.
+        if (Type(shape.__str) == "Array" || (Type(shape.__str) == "String" && ((shape.HasProp("markup") && (InStr(shape.__str, "{") || InStr(shape.__str, "<"))) || InStr(shape.__str, "`t") || (shape.Font && shape.Font.HasProp("isMonospace") && shape.Font.isMonospace && InStr(shape.__str, "`n"))))) {
             shape.__isRichText := true
             shape.__textRuns := []
             strRaw := ""
@@ -26169,7 +22078,7 @@ class TextLayout {
                 textLen := StrLen(strInput)
 
                 while (pos <= textLen) {
-                    if (!RegExMatch(strInput, "\{([^{}]*)\}|\<([a-zA-Z0-9_\/#\:\,\s\*\.\-]+)\>", &mTag, pos)) {
+                    if (!shape.HasProp("markup") || !RegExMatch(strInput, "\{([^{}]*)\}|\<([a-zA-Z0-9_\/#\:\,\s\*\.\-]+)\>", &mTag, pos)) {
                         chunk := SubStr(strInput, pos)
                         if (chunk != "") {
                             runFont := (!baseFnt) ? 0 : (currentStyle == baseStyle ? baseFnt : Font(baseFnt.family, baseFnt.size, currentStyle, currentClr, baseFnt.quality))
@@ -27228,11 +23137,6 @@ class PathGradientBrush extends Brush {
 
     ResetTransform() => DllCall("gdiplus\GdipResetPathGradientTransform", "ptr", this.ptr)
 }
-
-; Tool Factory Aliases
-PathGradient(args*)     => PathGradientBrush(args*)
-PathGradientTool(args*) => PathGradientBrush(args*)
-RadialGradient(args*)   => PathGradientBrush.Radial(args*)
 
 ; --------------------------------------------------------------------------
 ; GpGFX component: core/Layer.ahk
@@ -29687,209 +25591,6 @@ get_ShapePoint(offset, shapeObj) => NumGet(shapeObj.pPoints, offset, "float")
 set_ShapePoint(offset, shapeObj, value) => (NumPut("float", value, shapeObj.pPoints, offset), value)
 
 /**
- * Creates a structured grid of shapes with automatic spacing and centering.
- *
- * @param {Integer} [row=3] Number of rows
- * @param {Integer} [col=3] Number of columns
- * @param {Integer} [x] Starting X coordinate (centered on layer if omitted)
- * @param {Integer} [y] Starting Y coordinate (centered on layer if omitted)
- * @param {Integer} [w=0] Width per cell (calculated from layer dimensions if 0)
- * @param {Integer} [h=0] Height per cell (calculated from layer dimensions if 0)
- * @param {Integer} [pad=25] Padding between cells in pixels
- * @param {Integer|String} [colour=0xFF000000] Default shape fill/stroke color
- * @param {Layer} [layer=LayerStack.ActiveLayer] Target layer instance
- * @returns {Array<Shape>} Array of created Rectangle shapes
- *
- * @example
- * ; Create a 4x4 grid of cards
- * grid := CreateGraphicsObject(4, 4, , , 100, 100, 15, "0xFF2E3440")
- */
-CreateGraphicsObject(row := 3, col := 3, x?, y?, w := 0, h := 0, pad := 25, colour := 0xFF000000, layer := LayerStack.ActiveLayer) {
-    if (!layer)
-        throw Error("CreateGraphicsObject: No active layer available.")
-
-    local totalWidth, totalHeight, baseX, baseY, objx, objy, i, j
-    local width  := layer.gfx.w
-    local height := layer.gfx.h
-    local obj    := []
-
-    ; Calculate dimensions based on layer bounds and padding if not specified
-    if (!w && !h) {
-        w := (width  - (col + 1) * pad) // col
-        h := (height - (row + 1) * pad) // row
-        if (w != h)
-            w := h := Min(w, h)
-    }
-
-    totalWidth  := col * w + (col - 1) * pad
-    totalHeight := row * h + (row - 1) * pad
-
-    baseX := (!IsSet(x)) ? (width - totalWidth) // 2   : x
-    baseY := (!IsSet(y)) ? (height - totalHeight) // 2 : y
-
-    loop row {
-        i := A_Index
-        loop col {
-            j := A_Index
-            objx := baseX + (j - 1) * (w + pad)
-            objy := baseY + (i - 1) * (h + pad)
-            obj.Push(Rectangle(objx, objy, w, h, colour))
-        }
-    }
-    return obj
-}
-
-/**
- * Reactive Signal state variable for zero-CPU event-driven graphics and reactive HUDs.
- * Shapes and Layers can bind directly to signals via `shape.Bind(sig)` or `layer.Draw(sig)`.
- * Modifying `sig.Value := newVal` automatically notifies all bound subscribers and triggers layer redraws.
- */
-class Signal {
-
-    __val := 0
-    __subscribers := []
-
-    /**
-     * Creates a new reactive Signal instance.
-     *
-     * @param {Any} [initialValue=0] The initial value of the signal (number, string, object, array, etc.)
-     *
-     * @example
-     * ; 1. Numeric signal
-     * sigHealth := Signal(100)
-     *
-     * ; 2. Object state signal
-     * sigPlayer := Signal({ x: 100, y: 200, score: 0 })
-     */
-    __New(initialValue := 0) {
-        this.__val := initialValue
-    }
-
-    /**
-     * Gets or sets the signal's current value.
-     * Modifying this property notifies all subscribers and triggers redraws of bound shapes/layers.
-     * @type {Any}
-     */
-    Value {
-        get => this.__val
-        set {
-            if (this.__val !== value) {
-                this.__val := value
-                this.Notify()
-            }
-        }
-    }
-
-    /**
-     * Subscribes a callback function to value change notifications.
-     *
-     * @param {Function} fn Callback executed on change: `fn(newVal)`
-     * @returns {Signal} this (for chaining)
-     *
-     * @example
-     * sig.Subscribe((newVal) => ToolTip("Value changed to: " newVal))
-     */
-    Subscribe(fn) {
-        this.__subscribers.Push(fn)
-        return this
-    }
-
-    /**
-     * Unsubscribes a previously registered callback function.
-     *
-     * @param {Function} fn The callback function to remove
-     * @returns {void}
-     */
-    Unsubscribe(fn) {
-        local i := this.__subscribers.Length
-        while (i > 0) {
-            if (this.__subscribers[i] == fn)
-                this.__subscribers.RemoveAt(i)
-            i--
-        }
-    }
-
-    /**
-     * Manually triggers notification of all subscribers with the current value.
-     *
-     * @returns {void}
-     */
-    Notify() {
-        local fn
-        for fn in this.__subscribers {
-            try (fn)(this.__val)
-        }
-    }
-
-    /**
-     * Smoothly animates a Signal from a start value to an end value over durationMs using delta time.
-     * Non-blocking (runs on background high-precision timer at ~60fps).
-     *
-     * @param {Signal} sig The Signal instance to animate
-     * @param {Float|Integer} fromVal Starting value
-     * @param {Float|Integer} toVal Ending value
-     * @param {Integer} [durationMs=400] Duration of the animation in milliseconds
-     * @param {String|Function} [easing="easeInOut"] Easing function ("linear", "easeIn", "easeOut", "easeInOut", "sine", "bounce", or custom fn(t))
-     * @param {Function} [onDone] Optional callback executed when animation completes: fn(sig)
-     * @returns {Signal} sig
-     *
-     * @example
-     * sigHeight := Signal(0)
-     * rect.Bind(sigHeight, (h, shp) => shp.h := h)
-     * Signal.Animate(sigHeight, 0, 400, 500, "easeOut")
-     */
-    static Animate(sig, fromVal, toVal, durationMs := 400, easing := "easeInOut", onDone?) {
-        static PI := 3.141592653589793
-        local easeFn
-
-        if (IsObject(easing)) {
-            easeFn := easing
-        }
-        else {
-            switch StrLower(String(easing)), 0 {
-                case "linear":      easeFn := (t) => t
-                case "easein":      easeFn := (t) => t * t * t
-                case "easeout":     easeFn := (t) => 1 - ((1 - t) ** 3)
-                case "sine", "sin": easeFn := (t) => (1 - Cos(t * PI)) / 2
-                case "bounce":      easeFn := (t) => (
-                    t < 0.3636 ? 7.5625 * t * t :
-                    t < 0.7272 ? 7.5625 * (t -= 0.5454) * t + 0.75 :
-                    t < 0.9090 ? 7.5625 * (t -= 0.8181) * t + 0.9375 :
-                    7.5625 * (t -= 0.9545) * t + 0.984375
-                )
-                default: easeFn := (t) => (t < 0.5 ? 4 * t * t * t : 1 - ((-2 * t + 2) ** 3) / 2)
-            }
-        }
-
-        local startTick := A_TickCount
-        sig.Value := fromVal
-
-        local timerFn
-        timerFn := () => (
-            __Tick()
-        )
-
-        __Tick() {
-            local elapsed := A_TickCount - startTick
-            local progress := durationMs > 0 ? Min(1.0, elapsed / durationMs) : 1.0
-            local easedProgress := easeFn(progress)
-            local currentVal := fromVal + (toVal - fromVal) * easedProgress
-            sig.Value := currentVal
-
-            if (progress >= 1.0) {
-                SetTimer(timerFn, 0)
-                sig.Value := toVal
-                if (IsSet(onDone) && IsObject(onDone))
-                    (onDone)(sig)
-            }
-        }
-
-        SetTimer(timerFn, 16)
-        return sig
-    }
-}
-
-/**
  * Core vector shape container and graphics object base class.
  */
 class Shape {
@@ -30189,7 +25890,10 @@ class Shape {
     str {
         get => this.__str
         set {
-            if (this.__str == value)
+            ; Exact match only: `==` is numeric between numeric strings, so
+            ; "0" -> "00" or "1" -> "1.0" would never repaint.
+            if (Type(this.__str) == Type(value) && (IsObject(value)
+                ? this.__str == value : StrCompare(this.__str, value, true) == 0))
                 return
             this.__str := value
             this.PrepareTextLayout()
@@ -31569,9 +27273,6 @@ getDefLayerDim(&w, &h) {
     h := (lyr) ? lyr.h : Layer.h
 }
 
-getDefLayerW() => (LayerStack.ActiveLayer ? LayerStack.ActiveLayer.w : Layer.w)
-getDefLayerH() => (LayerStack.ActiveLayer ? LayerStack.ActiveLayer.h : Layer.h)
-
 ; Bounding Box Calculators
 
 /**
@@ -31755,27 +27456,6 @@ class Rectangle extends Shape {
     }
 }
 
-class FilledRectangle extends Rectangle {
-    /**
-     * Creates a filled rectangle.
-     * 
-     * @constructor
-     * @overload FilledRectangle() - Full layer area, default white, filled
-     * @overload FilledRectangle(colour) - Full layer area with specified color
-     * @overload FilledRectangle(w, h, colour?) - Centered rectangle of size w×h
-     * @overload FilledRectangle(x, y, w, h, colour?) - Rectangle at explicit coordinates
-     *
-     * @param {Integer|String|Array} [x] X position, width, or colour
-     * @param {Integer|Boolean} [y] Y position, height, or colour
-     * @param {Integer|String|Array} [w] Width or colour
-     * @param {Integer|Boolean} [h] Height or colour
-     * @param {String|Integer|Array} [colour=0xFFFFFFFF] Fill colour
-     */
-    __New(x?, y?, w?, h?, colour?) {
-        super.__New(x?, y?, w?, h?, colour?, true)
-    }
-}
-
 class RoundedRectangle extends Shape {
     /**
      * Creates a rounded rectangle shape.
@@ -31886,84 +27566,6 @@ class RoundedRectangle extends Shape {
     }
 }
 
-class RoundRect extends RoundedRectangle {   
-}
-class RoundRectangle extends RoundedRectangle {
-}
-
-class FilledRoundedRectangle extends RoundedRectangle {
-    /**
-     * Creates a filled rounded rectangle.
-     */
-    __New(x?, y?, w?, h?, r?, colour?, extraParams*) {
-        super.__New(x?, y?, w?, h?, r?, colour?, true, extraParams*)
-    }
-}
-
-class FilledRoundRect extends FilledRoundedRectangle {
-}
-
-class Square extends Shape {
-    /**
-     * Creates a square shape.
-     * 
-     * @constructor
-     * @overload Square() - Full centered square fitting layer bounds
-     * @overload Square(colour, filled?) - Centered square with colour
-     * @overload Square(size, colour?, filled?) - Centered square of given size
-     * @overload Square(x, y, size, colour?, filled?) - Square at explicit (x, y) coordinates
-     * 
-     * @param {Integer|String|Array} [x] X position, size, or colour
-     * @param {Integer|String|Array} [y] Y position, colour, or filled flag
-     * @param {Integer} [size] Size (width & height) in pixels
-     * @param {String|Integer|Array} [colour=0xFFFFFFFF] Fill/stroke colour
-     * @param {Boolean} [filled=true] True for SolidBrush fill, false for Pen outline
-     */
-    __New(x?, y?, size?, colour?, filled?) {
-        local posX, posY, sz, col, fil, defW, defH
-        getDefLayerDim(&defW, &defH)
-
-        if (!IsSet(x)) {
-            sz := Min(defW, defH)
-            posX := (defW - sz) // 2
-            posY := (defH - sz) // 2
-            col := 0xFFFFFFFF
-            fil := true
-        }
-        else if (isColourParam(x?) && !IsSet(size)) {
-            sz := Min(defW, defH)
-            posX := (defW - sz) // 2
-            posY := (defH - sz) // 2
-            col := x
-            fil := IsSet(y) ? y : true
-        }
-        else if (IsSet(x) && (!IsSet(y) || isColourParam(y?))) {
-            sz := x
-            posX := (defW - sz) // 2
-            posY := (defH - sz) // 2
-            col := IsSet(y) ? y : 0xFFFFFFFF
-            fil := IsSet(size) ? size : true
-        }
-        else {
-            posX := x
-            posY := y
-            sz := IsSet(size) ? size : Min(defW, defH)
-            col := IsSet(colour) ? colour : 0xFFFFFFFF
-            fil := IsSet(filled) ? filled : true
-        }
-        super.__New({ x: posX, y: posY, w: sz, h: sz, colour: col, filled: fil })
-    }
-}
-
-class FilledSquare extends Square {
-    /**
-     * Creates a filled square.
-     */
-    __New(x?, y?, size?, colour?) {
-        super.__New(x?, y?, size?, colour?, true)
-    }
-}
-
 class Ellipse extends Shape {
     /**
      * Creates an ellipse shape.
@@ -31976,15 +27578,6 @@ class Ellipse extends Shape {
      */
     __New(x?, y?, w?, h?, colour?, filled?) {
         super.__New(getParamsNormal(x?, y?, w?, h?, colour?, filled?))
-    }
-}
-
-class FilledEllipse extends Ellipse {
-    /**
-     * Creates a filled ellipse.
-     */
-    __New(x?, y?, w?, h?, colour?) {
-        super.__New(x?, y?, w?, h?, colour?, true)
     }
 }
 
@@ -32040,239 +27633,6 @@ class Circle extends Ellipse {
     }
 }
 
-class FilledCircle extends Circle {
-    /**
-     * Creates a filled circle.
-     */
-    __New(x?, y?, r?, colour?) {
-        super.__New(x?, y?, r?, colour?, true)
-    }
-}
-
-class Arc extends Shape {
-    /**
-     * Creates an arc stroke shape.
-     * 
-     * @constructor
-     * @overload Arc() - Full layer area, 0° to 360° arc
-     * @overload Arc(colour, penwidth?) - Full layer arc with colour
-     * @overload Arc(w, h, colour?, penwidth?, startangle?, sweepangle?) - Centered arc of size w×h
-     * @overload Arc(x, y, w, h, colour?, penwidth?, startangle?, sweepangle?) - Arc at explicit coordinates
-     */
-    __New(x?, y?, w?, h?, colour?, penwidth := 1, startangle := 0, sweepangle := 360) {
-        local posX, posY, width, height, clr, pw, startA, sweepA
-
-        posX := 0
-        posY := 0
-        getDefLayerDim(&width, &height)
-        clr := "0xFFFFFFFF"
-        pw := 1
-        startA := 0
-        sweepA := 360
-
-        if (isColourParam(x?) && !IsSet(w) && !IsSet(h)) {
-            clr := x
-            pw := IsSet(y) ? y : 1
-        } else {
-            posX := IsSet(x) ? x : 0
-            posY := IsSet(y) ? y : 0
-            width := IsSet(w) ? w : 50
-            height := IsSet(h) ? h : 50
-            clr := IsSet(colour) ? colour : 0xFFFFFFFF
-            pw := penwidth
-            startA := startangle
-            sweepA := sweepangle
-        }
-
-        super.__New({
-            x: posX,
-            y: posY,
-            w: width,
-            h: height,
-            colour: clr,
-            filled: false,
-            penwidth: pw,
-            startangle: startA,
-            sweepangle: sweepA
-        })
-    }
-}
-
-class Pie extends Shape {
-    /**
-     * Creates a pie (wedge) shape.
-     * 
-     * @constructor
-     * @overload Pie() - Full layer area, 0° to 360° pie wedge, filled
-     * @overload Pie(colour, filled?) - Full layer pie with colour
-     * @overload Pie(w, h, startangle?, sweepangle?, colour?, filled?) - Centered pie wedge
-     * @overload Pie(x, y, w, h, startangle?, sweepangle?, colour?, filled?) - Pie wedge at explicit (x, y)
-     */
-    __New(x?, y?, w?, h?, startangle := 0, sweepangle := 360, colour?, filled := true) {
-        local posX, posY, width, height, actualStart, actualSweep, actualColour, actualFilled, defW, defH
-        
-        getDefLayerDim(&defW, &defH)
-        posX := 0
-        posY := 0
-        width := defW
-        height := defH
-        
-        actualStart := 0
-        actualSweep := 360
-        actualColour := 0xFFFFFFFF
-        actualFilled := true
-        
-        if (isColourParam(x?) && !IsSet(w) && !IsSet(h)) {
-            actualColour := x
-            actualFilled := IsSet(y) ? y : true
-        }
-        else if (IsSet(startangle) && isColourParam(startangle)) {
-            posX := IsSet(x) ? x : 0
-            posY := IsSet(y) ? y : 0
-            width := IsSet(w) ? w : 50
-            height := IsSet(h) ? h : 50
-            actualColour := startangle
-            actualFilled := IsSet(sweepangle) ? sweepangle : true
-            actualStart := IsSet(colour) ? colour : 0
-            actualSweep := IsSet(filled) ? filled : 360
-        } else {
-            posX := IsSet(x) ? x : 0
-            posY := IsSet(y) ? y : 0
-            width := IsSet(w) ? w : 50
-            height := IsSet(h) ? h : 50
-            actualStart := IsSet(startangle) ? startangle : 0
-            actualSweep := IsSet(sweepangle) ? sweepangle : 360
-            actualColour := IsSet(colour) ? colour : 0xFFFFFFFF
-            actualFilled := IsSet(filled) ? filled : true
-        }
-
-        super.__New({
-            x: posX,
-            y: posY,
-            w: width,
-            h: height,
-            colour: actualColour,
-            filled: actualFilled,
-            startangle: actualStart,
-            sweepangle: actualSweep
-        })
-    }
-}
-
-class FilledPie extends Pie {
-    /**
-     * Creates a filled pie (wedge).
-     */
-    __New(x?, y?, w?, h?, startangle := 0, sweepangle := 360, colour?) {
-        super.__New(x?, y?, w?, h?, startangle, sweepangle, colour?, true)
-    }
-}
-
-class Triangle extends Shape {
-    /**
-     * Creates a triangle shape.
-     * 
-     * @constructor
-     * @overload Triangle() - Default centered triangle
-     * @overload Triangle(colour, filled?) - Default centered triangle with colour
-     * @overload Triangle(x1, y1, x2, y2, x3, y3, colour?, filled?) - Triangle with explicit vertex coordinates
-     */
-    __New(x1 := 0, y1 := 0, x2 := 0, y2 := 0, x3 := 0, y3 := 0, colour?, filled?) {
-        local pts, clr, fld, defW, defH
-        getDefLayerDim(&defW, &defH)
-        
-        if (isColourParam(x1)) {
-            pts := [0, 0, defW // 2, defH, defW, 0]
-            clr := x1
-            fld := IsSet(y1) ? y1 : true
-        } else {
-            pts := [x1, y1, x2, y2, x3, y3]
-            clr := IsSet(colour) ? colour : 0xFFFFFFFF
-            fld := IsSet(filled) ? filled : true
-        }
-        super.__New({ points: pts, colour: clr, filled: fld, fillmode: 1 })
-    }
-}
-
-class FilledTriangle extends Triangle {
-    /**
-     * Creates a filled triangle.
-     */
-    __New(x1 := 0, y1 := 0, x2 := 0, y2 := 0, x3 := 0, y3 := 0, colour?) {
-        super.__New(x1, y1, x2, y2, x3, y3, colour?, true)
-    }
-}
-
-class Polygon extends Shape {
-    /**
-     * Creates a polygon shape from a flat array of points `[x1,y1, x2,y2, ...]`.
-     * 
-     * @constructor
-     * @overload Polygon(pointsArray, colour?, filled?, fillmode?)
-     * @overload Polygon(colour?, filled?, fillmode?, pointsArray?)
-     */
-    __New(colour?, filled := true, fillmode := 1, aPoints?) {
-        local pts, clr, fld, fmode
-        if (IsSet(colour) && colour is Array) {
-            pts := colour
-            clr := IsSet(filled) ? filled : 0xFFFFFFFF
-            fld := IsSet(fillmode) ? fillmode : true
-            fmode := IsSet(aPoints) ? aPoints : 1
-        } else {
-            clr := IsSet(colour) ? colour : 0xFFFFFFFF
-            fld := filled
-            fmode := fillmode
-            pts := IsSet(aPoints) ? aPoints : []
-        }
-        super.__New({ points: pts, colour: clr, filled: fld, fillmode: fmode, penwidth: 1 })
-    }
-}
-
-class FilledPolygon extends Polygon {
-    /**
-     * Creates a filled polygon.
-     */
-    __New(colour?, fillmode := 1, aPoints?) {
-        super.__New(colour?, true, fillmode, aPoints?)
-    }
-}
-
-class Bezier extends Shape {
-    /**
-     * Creates a cubic Bezier curve stroke between start (x1,y1) and end (x4,y4) with two control points.
-     */
-    __New(x1 := 0, y1 := 0, x2 := 0, y2 := 0, x3 := 0, y3 := 0, x4 := 0, y4 := 0, colour?, penwidth := 1) {
-        super.__New({
-            x1: x1, y1: y1,
-            x2: x2, y2: y2,
-            x3: x3, y3: y3,
-            x4: x4, y4: y4,
-            colour: (IsSet(colour) ? colour : 0xFFFFFFFF),
-            penwidth: penwidth,
-            filled: false
-        })
-    }
-}
-
-class Beziers extends Shape {
-    /**
-     * Creates multiple connected Bezier spline curves from a point array.
-     */
-    __New(colour?, penwidth := 1, aPoints?) {
-        local pts, clr, pw
-        if (IsSet(colour) && colour is Array) {
-            pts := colour
-            clr := IsSet(penwidth) ? penwidth : 0xFFFFFFFF
-            pw := IsSet(aPoints) ? aPoints : 1
-        } else {
-            clr := IsSet(colour) ? colour : 0xFFFFFFFF
-            pw := penwidth
-            pts := IsSet(aPoints) ? aPoints : []
-        }
-        super.__New({ points: pts, colour: clr, penwidth: pw, filled: false })
-    }
-}
-
 class Line extends Shape {
     /**
      * Creates a straight line stroke between two points (x1,y1) and (x2,y2).
@@ -32285,86 +27645,6 @@ class Line extends Shape {
             penwidth: penwidth,
             filled: false
         })
-    }
-}
-
-class Lines extends Shape {
-    /**
-     * Creates connected polyline segments from a flat vertex array `[x1,y1, x2,y2, ...]`.
-     */
-    __New(colour?, penwidth := 1, aPoints?) {
-        local pts, clr, pw
-        if (IsSet(colour) && (colour is Array)) {
-            pts := colour
-            clr := IsSet(penwidth) ? penwidth : 0xFFFFFFFF
-            pw := IsSet(aPoints) ? aPoints : 1
-        } else {
-            clr := IsSet(colour) ? colour : 0xFFFFFFFF
-            pw := penwidth
-            pts := IsSet(aPoints) ? aPoints : []
-        }
-        super.__New({ points: pts, colour: clr, penwidth: pw, filled: false })
-    }
-}
-
-class Point extends Shape {
-    /**
-     * Creates a single pixel dot shape.
-     */
-    __New(x := 0, y := 0, colour?, size := 1) {
-        super.__New({
-            x: x, y: y,
-            colour: (IsSet(colour) ? colour : 0xFFFFFFFF),
-            w: size, h: size,
-            penwidth: 1,
-            filled: true
-        })
-    }
-}
-
-class Curve extends Shape {
-    /**
-     * Creates an open cardinal spline passing smoothly through a given point array.
-     */
-    __New(pointsOrColour?, colourOrPenwidth?, penwidthOrTension := 1, tensionOrPoints := 0.5) {
-        local pts := [], clr := 0xFFFFFFFF, pw := 1, t := 0.5
-
-        if (IsSet(pointsOrColour) && (pointsOrColour is Array)) {
-            pts := pointsOrColour
-            clr := IsSet(colourOrPenwidth) ? colourOrPenwidth : 0xFFFFFFFF
-            pw := IsSet(penwidthOrTension) ? penwidthOrTension : 1
-            t := IsSet(tensionOrPoints) ? tensionOrPoints : 0.5
-        } else {
-            clr := IsSet(pointsOrColour) ? pointsOrColour : 0xFFFFFFFF
-            pw := IsSet(colourOrPenwidth) ? colourOrPenwidth : 1
-            t := IsSet(penwidthOrTension) ? penwidthOrTension : 0.5
-            pts := IsSet(tensionOrPoints) && (tensionOrPoints is Array) ? tensionOrPoints : []
-        }
-        super.__New({ points: pts, colour: clr, penwidth: pw, tension: t, filled: false })
-    }
-}
-
-class ClosedCurve extends Shape {
-    /**
-     * Creates a closed cardinal spline passing smoothly through a given point array.
-     */
-    __New(pointsOrColour?, colourOrFilled?, filledOrTension := true, tensionOrFillmode := 0.5, fillmodeOrPoints := 0) {
-        local pts := [], clr := 0xFFFFFFFF, fld := true, t := 0.5, fmode := 0
-
-        if (IsSet(pointsOrColour) && (pointsOrColour is Array)) {
-            pts := pointsOrColour
-            clr := IsSet(colourOrFilled) ? colourOrFilled : 0xFFFFFFFF
-            fld := IsSet(filledOrTension) ? filledOrTension : true
-            t := IsSet(tensionOrFillmode) ? tensionOrFillmode : 0.5
-            fmode := IsSet(fillmodeOrPoints) ? fillmodeOrPoints : 0
-        } else {
-            clr := IsSet(pointsOrColour) ? pointsOrColour : 0xFFFFFFFF
-            fld := IsSet(colourOrFilled) ? colourOrFilled : true
-            t := IsSet(filledOrTension) ? filledOrTension : 0.5
-            fmode := IsSet(tensionOrFillmode) ? tensionOrFillmode : 0
-            pts := IsSet(fillmodeOrPoints) && (fillmodeOrPoints is Array) ? fillmodeOrPoints : []
-        }
-        super.__New({ points: pts, colour: clr, filled: fld, tension: t, fillmode: fmode, penwidth: 1 })
     }
 }
 
@@ -32386,9 +27666,6 @@ class Container extends Shape {
             isDummy: true
         })
     }
-}
-
-class Dummy extends Container {
 }
 
 class Text extends Shape {
@@ -32598,87 +27875,6 @@ class Picture extends Shape {
     static FromMemory(pData, size) => GdipBitmap.FromMemory(pData, size)
 }
 
-class Bitmap extends Picture {
-}
-class Image extends Picture {
-}
-
-class Button extends RoundedRectangle {
-    /**
-     * Interactive Button component with automatic hover glow, click routing, and centered label.
-     *
-     * @example
-     * ; 1-line interactive button with callback
-     * Button(20, 210, 160, 36, "Launch", () => MsgBox("Launched!"))
-     */
-    __New(label?, onClick?, hoverColour?, bgColour?, r := 8, extraParams*) {
-        local args, v, posX, posY, width, height, radius
-        local sLabel, fnClick, clrHover, clrBg, clrText, aLen, firstArg
-        
-        args := []
-        IsSet(label) && args.Push(label)
-        IsSet(onClick) && args.Push(onClick)
-        IsSet(hoverColour) && args.Push(hoverColour)
-        IsSet(bgColour) && args.Push(bgColour)
-        IsSet(r) && args.Push(r)
-        if (extraParams.Length) {
-            for v in extraParams {
-                args.Push(v)
-            }
-        }
-
-        posX := 0
-        posY := 0
-        width := 160
-        height := 36
-        radius := 8
-        
-        sLabel := ""
-        clrBg := 0xFF2D2A3E
-        clrText := 0xFFFFFFFF
-        aLen := args.Length
-
-        if (aLen == 0) {
-            super.__New(posX, posY, width, height, radius, clrBg, true)
-            this.Button()
-            return
-        }
-
-        firstArg := (args.Has(1)) ? args[1] : unset
-
-        if (IsSet(firstArg) && (firstArg is String || firstArg is Array)) {
-            sLabel := firstArg
-            (aLen >= 2 && args.Has(2)) && fnClick := args[2]
-            (aLen >= 3 && args.Has(3)) && clrHover := args[3]
-            (aLen >= 4 && args.Has(4)) && clrBg := args[4]
-            (aLen >= 5 && args.Has(5)) && radius := args[5]
-        }
-        else if (aLen >= 3 && args.Has(3) && (args[3] is String || args[3] is Array)) {
-            posX := args.Has(1) ? args[1] : 0
-            posY := args.Has(2) ? args[2] : 0
-            sLabel := args[3]
-            (aLen >= 4 && args.Has(4)) && fnClick := args[4]
-            (aLen >= 5 && args.Has(5)) && clrHover := args[5]
-            (aLen >= 6 && args.Has(6)) && clrBg := args[6]
-            (aLen >= 7 && args.Has(7)) && radius := args[7]
-        }
-        else {
-            args.Has(1) && posX   := args[1]
-            args.Has(2) && posY   := args[2]
-            args.Has(3) && width  := args[3]
-            args.Has(4) && height := args[4]
-            args.Has(5) && sLabel := args[5]
-            args.Has(6) && fnClick := args[6]
-            args.Has(7) && clrHover := args[7]
-            args.Has(8) && clrBg  := args[8]
-            args.Has(9) && radius := args[9]
-        }
-
-        super.__New(posX, posY, width, height, radius, clrBg, true)
-        this.Button(sLabel, fnClick?, clrHover?, clrText)
-    }
-}
-
 ; --------------------------------------------------------------------------
 ; GpGFX component: core/Draw.ahk
 ; --------------------------------------------------------------------------
@@ -32783,7 +27979,7 @@ Draw(lyr) {
     for v in lyr.drawSequence {
 
         ; Direct bypass for invisible dummy shapes without text or bitmap
-        if (v.shape == "Dummy" && (v.str == "" || v.str == 0) && (!v.Bitmap || !v.Bitmap.ptr))
+        if (v.shape == "Dummy" && v.str == "" && (!v.Bitmap || !v.Bitmap.ptr))
             continue
 
         ; Get reference to the shape's tool (Brush, Pen, or raw pointer)
@@ -33111,7 +28307,7 @@ Draw(lyr) {
         }
 
         ; 1.6 TYPOGRAPHIC RICH TEXT & EMOJI RENDERING
-        if (v.str !== "" && v.str !== 0) {
+        if (v.str != "") {                   ; not `!== 0`: numeric, hid "0"
             if (!IsObject(v.Font) || !v.Font.HasProp("hFont") || !v.Font.hFont) {
                 v.Font := Font.getStock()
             }
@@ -33519,127 +28715,6 @@ class Render {
 }
 
 ; --------------------------------------------------------------------------
-; GpGFX component: core/Time.ahk
-; --------------------------------------------------------------------------
-; Script:    Time.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX time, duration and animation easing
- *
- * Provides microsecond-level QueryPerformanceCounter timing, duration helpers,
- * responsive non-blocking delays, and standard animation easing interpolation curves.
- */
-class Time {
-
-    static Frequency := (DllCall("QueryPerformanceFrequency", "int64*", &freq:=0), freq)
-
-    /**
-     * Gets the current high-precision timestamp in fractional seconds.
-     *
-     * @returns {Float} High-precision timestamp in seconds
-     *
-     * @example
-     * t0 := Time.Now()
-     * ; ... do work ...
-     * elapsedMs := (Time.Now() - t0) * 1000.0
-     */
-    static Now() {
-        local count := 0
-        return (DllCall("QueryPerformanceCounter", "int64*", &count:=0), count / this.Frequency)
-    }
-
-    /**
-     * Gets elapsed time in milliseconds since a previous timestamp.
-     *
-     * @param {Float} start Starting timestamp from Time.Now()
-     * @returns {Float} Milliseconds elapsed
-     *
-     * @example
-     * start := Time.Now()
-     * ; ... perform rendering ...
-     * dtMs := Time.Since(start)
-     */
-    static Since(start) {
-        return (this.Now() - start) * 1000.0
-    }
-
-    /**
-     * Returns raw QueryPerformanceCounter tick count.
-     *
-     * @returns {Integer} Raw 64-bit QPC tick count
-     */
-    static Qpc() {
-        local count := 0
-        DllCall("QueryPerformanceCounter", "int64*", &count:=0)
-        return count
-    }
-
-    ; Duration conversions
-    static FromSeconds(s) => Float(s) * 1000.0
-    static FromMilliseconds(ms) => Float(ms)
-    static FromMinutes(m) => Float(m) * 60000.0
-    static FromHours(h) => Float(h) * 3600000.0
-
-    /**
-     * Delays execution for a specified duration in milliseconds while keeping the OS message loop responsive.
-     *
-     * @param {Float} ms Milliseconds to wait
-     * @returns {void}
-     *
-     * @example
-     * Time.Delay(16.67) ; Delay 1 frame duration
-     */
-    static Delay(ms) {
-        local start := this.Now()
-        local targetSec := ms / 1000.0
-        while ((this.Now() - start) < targetSec) {
-            Sleep(0)
-        }
-    }
-
-    /**
-     * Standard animation easing interpolation curves (0.0 -> 1.0).
-     */
-    class Ease {
-        static Linear(t) => Max(0.0, Min(1.0, Float(t)))
-        static InQuad(t) => (t := Max(0.0, Min(1.0, Float(t)))) * t
-        static OutQuad(t) => (t := Max(0.0, Min(1.0, Float(t)))) * (2.0 - t)
-        
-        static InOutQuad(t) {
-            t := Max(0.0, Min(1.0, Float(t)))
-            return (t < 0.5) ? (2.0 * t * t) : (-1.0 + (4.0 - 2.0 * t) * t)
-        }
-        
-        static InCubic(t) => (t := Max(0.0, Min(1.0, Float(t)))) * t * t
-        
-        static OutCubic(t) {
-            t := Max(0.0, Min(1.0, Float(t))) - 1.0
-            return t * t * t + 1.0
-        }
-        
-        static InOutCubic(t) {
-            t := Max(0.0, Min(1.0, Float(t)))
-            return (t < 0.5) ? (4.0 * t * t * t) : ((t - 1.0) * (2.0 * t - 2.0) * (2.0 * t - 2.0) + 1.0)
-        }
-        
-        static SmoothStep(t) {
-            t := Max(0.0, Min(1.0, Float(t)))
-            return t * t * (3.0 - 2.0 * t)
-        }
-
-        static Sine(t) {
-            static PI := 3.141592653589793
-            t := Max(0.0, Min(1.0, Float(t)))
-            return (1.0 - Cos(t * PI)) / 2.0
-        }
-    }
-}
-
-; --------------------------------------------------------------------------
 ; GpGFX component: core/Fps.ahk
 ; --------------------------------------------------------------------------
 ; Script:    Fps.ahk
@@ -33970,1524 +29045,6 @@ class Fps {
     }
 }
 
-; --------------------------------------------------------------------------
-; GpGFX component: core/FrameTimer.ahk
-; --------------------------------------------------------------------------
-; Script:    FrameTimer.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX Frame Timer Controller
- *
- * Provides asynchronous, event-driven frame rate pacing for non-blocking animation loops:
- * - How it works:
- *   1. Launches a dedicated background C thread in GpGFX.Core.dll at THREAD_PRIORITY_TIME_CRITICAL.
- *   2. Uses sub-millisecond QPC spin-waiting to reach target frame deadlines (e.g. 16.666 ms for 60 FPS, 6.944 ms for 144 FPS).
- *   3. When each frame deadline arrives, the background thread posts a lightweight Windows message (HWND_MESSAGE) to AutoHotkey.
- *   4. AutoHotkey receives the message via OnMessage() and automatically triggers your callback function or draws registered layers on the main thread.
- * - Automatic Fallback: Smoothly falls back to an internal AHK SetTimer loop when GpGFX.Core.dll is not present.
- * - Difference from Render: Render is synchronous (for tight while/loop blocks), while FrameTimer is asynchronous (event-driven, leaves the main script responsive).
- */
-class FrameTimer {
-
-    static hLib := 0
-    static hMsgWnd := 0
-    static msgId := 0
-    static isRunning := false
-    static callback := 0
-    static layers := []
-    static fps := 60.0
-    static autoMode := 1
-
-    ; DLL export function pointers
-    static pStart := 0
-    static pStop := 0
-    static pSetFPS := 0
-    static pAck := 0
-    static pStats := 0
-
-    /**
-     * Initializes and loads GpGFX.Core.dll if available.
-     * Searches root, native/bin/, and script directory.
-     *
-     * @returns {Boolean} True if native DLL loaded and initialized, false otherwise
-     */
-    static Init() {
-        local dllPaths, path, hDll, HWND_MESSAGE
-
-        if (this.hLib)
-            return true
-
-        dllPaths := [
-            A_LineFile "\..\GpGFX.Core.dll",
-            A_LineFile "\..\native\bin\GpGFX.Core.dll",
-            A_WorkingDir "\GpGFX.Core.dll",
-            A_WorkingDir "\native\bin\GpGFX.Core.dll"
-        ]
-
-        for path in dllPaths {
-            if (FileExist(path)) {
-                hDll := DllCall("LoadLibrary", "str", path, "ptr")
-                if (hDll) {
-                    this.hLib    := hDll
-                    this.pStart  := DllCall("GetProcAddress", "ptr", hDll, "astr", "StartFrameTimer", "ptr")
-                    this.pStop   := DllCall("GetProcAddress", "ptr", hDll, "astr", "StopFrameTimer", "ptr")
-                    this.pSetFPS := DllCall("GetProcAddress", "ptr", hDll, "astr", "SetTargetFPS", "ptr")
-                    this.pAck    := DllCall("GetProcAddress", "ptr", hDll, "astr", "FrameCompleted", "ptr")
-                    this.pStats  := DllCall("GetProcAddress", "ptr", hDll, "astr", "GetFrameStats", "ptr")
-                    break
-                }
-            }
-        }
-
-        if (!this.hLib || !this.pStart)
-            return false
-
-        ; Create hidden message-only window (HWND_MESSAGE = -3)
-        if (!this.hMsgWnd) {
-            this.msgId := DllCall("RegisterWindowMessage", "str", "GpGFX_FrameReady", "uint")
-            HWND_MESSAGE := -3
-            this.hMsgWnd := DllCall("CreateWindowEx"
-                , "uint", 0, "str", "STATIC", "str", "", "uint", 0
-                , "int", 0, "int", 0, "int", 0, "int", 0
-                , "ptr", HWND_MESSAGE
-                , "ptr", 0, "ptr", 0, "ptr", 0, "ptr")
-
-            OnMessage(this.msgId, ObjBindMethod(this, "__OnNativeFrame"))
-        }
-
-        return true
-    }
-
-    /**
-     * Checks if the native C throttle DLL is loaded and ready.
-     *
-     * @returns {Boolean}
-     */
-    static IsAvailable => (this.hLib && this.pStart)
-
-    /**
-     * Starts the frame timer with a target callback function or layer list.
-     *
-     * @param {Func|Array|Layer} target Callback function or Layer(s) to render on each frame
-     * @param {Float} [fps=60.0] Target frame rate
-     * @param {Integer} [autoMode=1] 1 = continuous pulse (default), 0 = wait for FrameCompleted() handshake
-     * @returns {Boolean} True on success
-     *
-     * @example
-     * ; 1. Render a layer at 60 FPS
-     * FrameTimer.Start(myLayer, 60.0)
-     *
-     * ; 2. Custom game loop callback at 144 FPS
-     * FrameTimer.Start(UpdateGame, 144.0)
-     */
-    static Start(target, fps := 60.0, autoMode := 1) {
-        local success, interval
-
-        this.fps := fps
-        this.autoMode := autoMode
-
-        if (IsObject(target) && target.HasMethod("Call")) {
-            this.callback := target
-            this.layers := []
-        } else if (target is Array) {
-            this.layers := target
-            this.callback := 0
-        } else if (IsObject(target)) {
-            this.layers := [target]
-            this.callback := 0
-        }
-
-        ; If native DLL is available, launch native thread
-        if (this.Init()) {
-            success := DllCall(this.pStart
-                , "ptr",    this.hMsgWnd
-                , "uint",   this.msgId
-                , "double", Float(fps)
-                , "int",    Integer(autoMode)
-                , "int")
-
-            if (success) {
-                this.isRunning := true
-                return true
-            }
-        }
-
-        ; Fallback: Pure AHK timer loop if native DLL is not present
-        this.isRunning := true
-        interval := Max(1, Floor(1000.0 / fps))
-        SetTimer(ObjBindMethod(this, "__FallbackTick"), interval)
-        return true
-    }
-
-    /**
-     * Stops the frame timer.
-     *
-     * @returns {void}
-     *
-     * @example
-     * FrameTimer.Stop()
-     */
-    static Stop() {
-        if (!this.isRunning)
-            return
-
-        if (this.hLib && this.pStop) {
-            DllCall(this.pStop)
-        }
-
-        SetTimer(ObjBindMethod(this, "__FallbackTick"), 0)
-        this.isRunning := false
-    }
-
-    /**
-     * Updates the target frame rate dynamically while running.
-     *
-     * @param {Float} fps New target frame rate
-     * @returns {void}
-     *
-     * @example
-     * FrameTimer.SetFPS(120.0)
-     */
-    static SetFPS(fps) {
-        local interval
-        this.fps := fps
-        if (this.hLib && this.pSetFPS) {
-            DllCall(this.pSetFPS, "double", Float(fps))
-        } else if (this.isRunning) {
-            interval := Max(1, Floor(1000.0 / fps))
-            SetTimer(ObjBindMethod(this, "__FallbackTick"), interval)
-        }
-    }
-
-    /**
-     * Retrieves live frame pacing statistics from the native thread.
-     *
-     * @returns {Object} { lastDeltaMs: Float, avgFps: Float, totalFrames: Integer }
-     *
-     * @example
-     * stats := FrameTimer.Stats
-     * MsgBox("Average FPS: " stats.avgFps)
-     */
-    static Stats {
-        get {
-            local lastDelta := 0.0, avgFps := 0.0, totalFrames := 0
-            if (this.hLib && this.pStats) {
-                DllCall(this.pStats, "double*", &lastDelta:=0, "double*", &avgFps:=0, "uint64*", &totalFrames:=0)
-                return { lastDeltaMs: lastDelta, avgFps: avgFps, totalFrames: totalFrames }
-            }
-            return {lastDeltaMs: 1000.0 / Max(1, this.fps), avgFps: this.fps, totalFrames: 0}
-        }
-    }
-
-    /**
-     * Internal handler invoked when WM_GPGFX_FRAME message arrives from native C thread.
-     */
-    static __OnNativeFrame(wParam, lParam, msg, hwnd) {
-        local lyr, fn
-
-        if (!this.isRunning)
-            return
-
-        if (this.callback) {
-            fn := this.callback
-            fn()
-        } else {
-            for lyr in this.layers {
-                if (lyr.visible)
-                    Draw(lyr)
-            }
-        }
-
-        ; If handshake mode, acknowledge frame completion back to native thread
-        if (!this.autoMode && this.hLib && this.pAck) {
-            DllCall(this.pAck)
-        }
-    }
-
-    /**
-     * Internal fallback tick when native DLL is not loaded.
-     */
-    static __FallbackTick() {
-        local lyr, fn
-
-        if (!this.isRunning)
-            return
-
-        if (this.callback) {
-            fn := this.callback
-            fn()
-        } else {
-            for lyr in this.layers {
-                if (lyr.visible)
-                    Draw(lyr)
-            }
-        }
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/IPC.ahk
-; --------------------------------------------------------------------------
-; Script:    IPC.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX Inter-Process Communication (IPC)
- *
- * Provides low-level Win32 shared memory and synchronization for multi-process concurrency:
- * - FileMapping: Named shared memory in RAM (CreateFileMapping / MapViewOfFile) for zero-copy binary communication between processes.
- * - Mutex: Named Win32 mutual exclusion lock to prevent concurrent write collisions in shared buffers.
- * - Semaphore: Named Win32 counting semaphore for instant task queue signaling between master and worker processes.
- * - Worker: Background AHK worker process controller for offloading intensive tasks.
- *
- * When to use:
- * - Heavy particle simulation (thousands of objects) without dropping frame rates on the main UI thread.
- * - Multi-process rendering and coordinate processing across multiple CPU cores via WorkerPool.
- * - Sharing large binary buffers (such as raw pixel arrays or physics matrices) between separate scripts.
- *
- * Where it is used:
- * - Used directly by WorkerPool.ahk (multi-core worker orchestration), Layer.ahk (worker assignment), and Worker.ahk (background execution loop).
- *
- * Acknowledgments and credits:
- * - Descolada & iseahound: AHK v2 IPC reference and architecture foundations
- *   https://www.autohotkey.com/boards/viewtopic.php?t=124720
- */
-class FileMapping {
-
-    /**
-     * Creates or opens a named shared memory mapping.
-     *
-     * @param {String} [szName="Local\GpGFX_SharedMem"] Unique system-wide mapping name
-     * @param {Integer} [dwDesiredAccess=0xF001F] File map access flags (0xF001F = FILE_MAP_ALL_ACCESS)
-     * @param {Integer} [flProtect=0x4] Memory protection (0x4 = PAGE_READWRITE)
-     * @param {Integer} [dwSize=65536] Buffer size in bytes (default 64 KB)
-     *
-     * @example
-     * ; 1. Create a 1 MB shared memory block
-     * fm := FileMapping("Local\MySharedBuffer", , , 1048576)
-     *
-     * ; 2. Open an existing shared buffer created by another process
-     * fmClient := FileMapping("Local\MySharedBuffer")
-     */
-    __New(szName := "Local\GpGFX_SharedMem", dwDesiredAccess := 0xF001F, flProtect := 0x4, dwSize := 65536) {
-        static INVALID_HANDLE_VALUE := -1
-        this.BUF_SIZE := dwSize
-        this.szName := szName
-
-        ; Open existing or create new file mapping object
-        if !(this.hMapFile := DllCall("OpenFileMapping", "uint", dwDesiredAccess, "int", 0, "str", szName, "ptr")) {
-            if !(this.hMapFile := DllCall("CreateFileMapping", "ptr", INVALID_HANDLE_VALUE, "ptr", 0, "uint", flProtect, "uint", 0, "uint", dwSize, "str", szName, "ptr"))
-                throw Error("[!] Unable to create or open FileMapping: " szName " (LastError: " A_LastError ")")
-        }
-
-        ; Map view of file - use 0 for dwNumberOfBytesToMap to map entire object
-        if !(this.pBuf := DllCall("MapViewOfFile", "ptr", this.hMapFile, "uint", dwDesiredAccess, "uint", 0, "uint", 0, "uptr", 0, "ptr"))
-            throw Error("[!] Unable to map view of FileMapping (LastError: " A_LastError ")")
-    }
-
-    /**
-     * Writes string or binary Buffer data into shared memory at a specific offset.
-     *
-     * @param {String|Buffer} data Data payload to write
-     * @param {Integer} [offset=0] Byte offset within the shared buffer
-     * @returns {void}
-     *
-     * @example
-     * ; Write a string
-     * fm.Write("Hello from Process 1", 0)
-     *
-     * ; Write a binary Buffer
-     * rawBuf := Buffer(16, 0)
-     * NumPut("float", 123.45, rawBuf, 0)
-     * fm.Write(rawBuf, 64)
-     */
-    Write(data, offset := 0) {
-        if (!this.pBuf)
-            throw Error("[!] FileMapping is closed")
-
-        if (data is String)
-            StrPut(data, this.pBuf + offset, this.BUF_SIZE - offset)
-        else if (data is Buffer)
-            DllCall("RtlCopyMemory", "ptr", this.pBuf + offset, "ptr", data, "int", Min(data.Size, this.BUF_SIZE - offset))
-        else
-            throw TypeError("[!] Data must be a String or Buffer")
-    }
-
-    /**
-     * Reads string or binary data from shared memory.
-     *
-     * @param {Buffer} [buffer] Optional destination Buffer to receive raw binary data. If omitted, reads a null-terminated UTF-16 string
-     * @param {Integer} [offset=0] Byte offset within shared memory
-     * @param {Integer} [size] Maximum bytes to read into destination buffer
-     * @returns {String|Integer} String content when buffer is omitted, or bytes copied when buffer is provided
-     *
-     * @example
-     * ; Read string
-     * str := fm.Read(, 0)
-     *
-     * ; Read binary struct into local Buffer
-     * destBuf := Buffer(16, 0)
-     * fm.Read(destBuf, 64, 16)
-     * val := NumGet(destBuf, 0, "float")
-     */
-    Read(buffer?, offset := 0, size?) {
-        local readSize := 0
-
-        if (!this.pBuf)
-            throw Error("[!] FileMapping is closed")
-
-        if (IsSet(buffer)) {
-            readSize := Min(buffer.size, this.BUF_SIZE - offset, IsSet(size) ? size : (this.BUF_SIZE - offset))
-            return DllCall("RtlCopyMemory", "ptr", buffer, "ptr", this.pBuf + offset, "int", readSize)
-        }
-        return StrGet(this.pBuf + offset)
-    }
-
-    /**
-     * Closes memory view and releases Win32 file mapping handle.
-     *
-     * @returns {void}
-     */
-    Close() {
-        if (this.pBuf) {
-            DllCall("UnmapViewOfFile", "ptr", this.pBuf)
-            this.pBuf := 0
-        }
-        if (this.hMapFile) {
-            DllCall("CloseHandle", "ptr", this.hMapFile)
-            this.hMapFile := 0
-        }
-    }
-
-    __Delete() => this.Close()
-}
-
-/**
- * Win32 Named Mutex for inter-process mutual exclusion synchronization.
- */
-class Mutex {
-
-    /**
-     * Creates or opens a named Mutex object.
-     *
-     * @param {String} [name="Local\GpGFX_TaskMutex"] Unique system-wide mutex name
-     * @param {Boolean} [initialOwner=false] If true, caller acquires initial ownership
-     * @param {Integer} [securityAttributes=0] Optional pointer to SECURITY_ATTRIBUTES
-     *
-     * @example
-     * mtx := Mutex("Local\MyProcessLock")
-     */
-    __New(name := "Local\GpGFX_TaskMutex", initialOwner := 0, securityAttributes := 0) {
-        if !(this.ptr := DllCall("CreateMutex", "ptr", securityAttributes, "int", !!initialOwner, "str", name, "ptr"))
-            throw Error("[!] Unable to create or open Mutex: " name)
-    }
-
-    /**
-     * Acquires exclusive lock on the mutex.
-     *
-     * @param {Integer} [timeout=0xFFFFFFFF] Milliseconds to wait (0xFFFFFFFF = INFINITE)
-     * @returns {Integer} 0 = WAIT_OBJECT_0 (acquired), 0x80 = WAIT_ABANDONED, 0x120 = WAIT_TIMEOUT
-     *
-     * @example
-     * if (mtx.Lock(1000) == 0) {
-     *     ; Critical section: safe to read/write shared memory
-     *     mtx.Release()
-     * }
-     */
-    Lock(timeout := 0xFFFFFFFF) => DllCall("WaitForSingleObject", "ptr", this.ptr, "int", timeout, "int")
-
-    /**
-     * Releases ownership of the mutex so other waiting processes can acquire it.
-     *
-     * @returns {Boolean} Non-zero on success
-     */
-    Release() => DllCall("ReleaseMutex", "ptr", this.ptr)
-
-    /**
-     * Closes the Win32 mutex handle.
-     */
-    Close() {
-        if (this.ptr) {
-            DllCall("CloseHandle", "ptr", this.ptr)
-            this.ptr := 0
-        }
-    }
-
-    __Delete() => this.Close()
-}
-
-/**
- * Win32 Counting Semaphore for inter-process task signaling and producer-consumer queues.
- */
-class Semaphore {
-
-    /**
-     * Creates or opens a named or anonymous counting Semaphore.
-     *
-     * @param {Integer} [initialCount=0] Initial count available to callers
-     * @param {Integer} [maximumCount=1000] Maximum count limit
-     * @param {String} [name] Optional unique system-wide name. If omitted, creates an anonymous semaphore
-     * @param {Integer} [securityAttributes=0] Optional pointer to SECURITY_ATTRIBUTES
-     *
-     * @example
-     * ; Producer-consumer task semaphore
-     * semTask := Semaphore(0, 100, "Local\GpGFX_WorkerTask")
-     */
-    __New(initialCount := 0, maximumCount := 1000, name?, securityAttributes := 0) {
-        if (IsSet(name) && name != "") {
-            ; Try open first
-            if (this.ptr := DllCall("OpenSemaphore", "uint", 0x1F0003, "int", 0, "str", name, "ptr"))
-                return
-            ; Otherwise create
-            if (!this.ptr := DllCall("CreateSemaphore", "ptr", securityAttributes, "int", initialCount, "int", maximumCount, "str", name, "ptr"))
-                throw Error("[!] Unable to create Semaphore: " name)
-        } else {
-            if (!this.ptr := DllCall("CreateSemaphore", "ptr", securityAttributes, "int", initialCount, "int", maximumCount, "ptr", 0, "ptr"))
-                throw Error("[!] Unable to create anonymous Semaphore")
-        }
-    }
-
-    /**
-     * Waits for the semaphore count to be greater than 0, then decrements it.
-     *
-     * @param {Integer} [timeout=0xFFFFFFFF] Milliseconds to wait (0xFFFFFFFF = INFINITE)
-     * @returns {Integer} 0 = WAIT_OBJECT_0 (signaled), 0x120 = WAIT_TIMEOUT
-     *
-     * @example
-     * ; Wait for master process to post a task
-     * if (semTask.Wait(500) == 0) {
-     *     ; Process task...
-     * }
-     */
-    Wait(timeout := 0xFFFFFFFF) => DllCall("WaitForSingleObject", "ptr", this.ptr, "int", timeout, "int")
-
-    /**
-     * Increments the semaphore count by a specified amount, waking waiting processes.
-     *
-     * @param {Integer} [count=1] Amount to increment
-     * @returns {Boolean} Non-zero on success
-     *
-     * @example
-     * ; Signal worker that 1 task is ready
-     * semTask.Release(1)
-     */
-    Release(count := 1) => DllCall("ReleaseSemaphore", "ptr", this.ptr, "int", count, "ptr", 0)
-
-    /**
-     * Closes the Win32 semaphore handle.
-     */
-    Close() {
-        if (this.ptr) {
-            DllCall("CloseHandle", "ptr", this.ptr)
-            this.ptr := 0
-        }
-    }
-
-    __Delete() => this.Close()
-}
-
-/**
- * Manages a background AutoHotkey worker process for task offloading.
- */
-class Worker {
-
-    static fm := 0
-    static mtx := 0
-    static process := 0
-    static msgTask := 0
-    static isReady := false
-
-    /**
-     * Spawns a background worker process communicating over shared memory.
-     *
-     * @returns {void}
-     */
-    static Spawn() {
-        local scriptPath, pid, e
-
-        if (this.process)
-            return
-
-        ; Initialize shared memory and synchronization mutex
-        this.fm := FileMapping("Local\GpGFX_WorkerMem", , , 4096)
-        this.mtx := Mutex("Local\GpGFX_WorkerMutex")
-
-        ; Register custom window notification message
-        this.msgTask := DllCall("RegisterWindowMessage", "str", "GpGFX_TaskMessage")
-
-        ; Worker script path
-        scriptPath := A_LineFile "\..\worker.ahk"
-
-        try {
-            pid := Run(A_AhkPath ' "' scriptPath '" Local\GpGFX_WorkerMem Local\GpGFX_WorkerMutex', , "Hide")
-            this.process := {pid: pid}
-            this.isReady := true
-        } catch as e {
-            GpGFX.DebugLog("[!] Failed to spawn worker: " e.Message "`n")
-        }
-    }
-
-    /**
-     * Offloads high-precision QPC sleep to the background worker.
-     *
-     * @param {Integer} targetTick Target QPC tick count to reach
-     * @returns {void}
-     */
-    static OffloadQpcSleep(targetTick) {
-        if (!this.isReady)
-            this.Spawn()
-
-        this.mtx.Lock()
-        ; Slot 0: TaskType (1 = QPC Sleep), Param1 = targetTick (int64), State (1 = QUEUED)
-        NumPut("int", 1, this.fm.pBuf, 0)            ; TaskType = 1 (Sleep)
-        NumPut("int", 1, this.fm.pBuf, 4)            ; State = 1 (QUEUED)
-        NumPut("int64", targetTick, this.fm.pBuf, 8) ; Param1 = targetTick
-        this.mtx.Release()
-
-        ; Notify worker via PostMessage broadcast
-        PostMessage(this.msgTask, 0, 0, , 0xFFFF)
-    }
-
-    /**
-     * Cleanly shuts down the background worker process.
-     *
-     * @returns {void}
-     */
-    static Shutdown() {
-        if (!this.process)
-            return
-
-        try {
-            this.mtx.Lock()
-            NumPut("int", 99, this.fm.pBuf, 0) ; TaskType = 99 (EXIT)
-            this.mtx.Release()
-            PostMessage(this.msgTask, 0, 0, , 0xFFFF)
-        }
-        this.process := 0
-        this.isReady := false
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/WorkerPool.ahk
-; --------------------------------------------------------------------------
-; Script:    WorkerPool.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX Multi-Process Worker Pool Coordinator
- *
- * Why:
- * AutoHotkey v2 is single-threaded. CPU-heavy operations such as rendering large shape hierarchies,
- * calculating continuous physics simulations, or processing multiple layers can cause UI latency and
- * frame drops. WorkerPool spawns and manages background AutoHotkey worker processes (Worker.ahk) to
- * distribute rendering workloads across multiple CPU cores in parallel.
- *
- * When to Use:
- * - Complex scenes with many shapes: Use WorkerPool.AutoDispatch(layer) to automatically split
- *   shape rendering across background workers when complexity exceeds single-thread thresholds.
- * - Multi-layer compositing: Use WorkerPool.Composite(masterLayer, layer1, layer2, ...) to render
- *   separate layers in parallel on different CPU cores, merging them into a single window update.
- * - Independent physics / simulations: Use WorkerPool.StepWorker(workerId, dt) to run particle loops
- *   in background workers without blocking the main script.
- *
- * How It Works:
- * 1. Process Spawning: Spawns N background worker processes (Worker.ahk) with High process priority.
- * 2. Shared Memory: Allocates an 8 MB shared RAM mapping (FileMapping) per worker.
- * 3. Synchronization: Uses named Windows Mutexes and Semaphores:
- *    - semTask: Notifies the worker process when a task is queued.
- *    - semDone: Notifies the main script when the worker finishes rendering.
- * 4. Zero-Copy Compositing: GdipCreateBitmapFromScan0 binds the worker's shared RAM directly
- *    into a GDI+ Bitmap in the main process, allowing fast hardware-level alpha blending.
- * 5. Screen Update: Composites all rendered worker buffers into a single UpdateLayeredWindow call.
- */
-class WorkerPool {
-
-    static workers := []
-    static maxWorkers := 4
-    static isInitialized := false
-    static nextWorkerId := 1
-
-    /**
-     * Initializes the worker pool by spawning N background worker processes.
-     *
-     * @param {Integer} [count=4] Number of worker processes to spawn
-     * @returns {void}
-     *
-     * @example
-     * ; Initialize pool with 4 background rendering workers
-     * WorkerPool.Init(4)
-     */
-    static Init(count := 4) {
-        local workerScript, idx, memName, mtxName, semTaskName, semDoneName
-        local fm, mtx, semTask, semDone, cmd, pid, startIdx, toSpawn, pSharedBmp, e
-
-        if (this.isInitialized && count <= this.workers.Length)
-            return
-
-        this.maxWorkers := Max(count, this.workers.Length)
-        workerScript := A_LineFile "\..\Worker.ahk"
-        startIdx := this.workers.Length + 1
-        toSpawn := count - this.workers.Length
-
-        loop toSpawn {
-            idx := startIdx + A_Index - 1
-            memName := "Local\GpGFX_WorkerMem_" idx
-            mtxName := "Local\GpGFX_WorkerMutex_" idx
-            semTaskName := "Local\GpGFX_WorkerSemTask_" idx
-            semDoneName := "Local\GpGFX_WorkerSemDone_" idx
-
-            fm := FileMapping(memName, , , 8388608)
-            mtx := Mutex(mtxName)
-            semTask := Semaphore(0, 100, semTaskName)
-            semDone := Semaphore(0, 100, semDoneName)
-
-            pSharedBmp := 0
-            DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", Layer.w, "int", Layer.h, "int", Layer.w * 4, "int", 0x26200A, "ptr", fm.pBuf + 65536, "ptr*", &pSharedBmp:=0)
-
-            try {
-                cmd := Format('"{1}" "{2}" "{3}" "{4}" "{5}" "{6}" {7}', 
-                    A_AhkPath, workerScript, memName, mtxName, semTaskName, semDoneName, idx)
-                pid := Run(cmd, , "Hide")
-                
-                this.workers.Push({
-                    id: idx,
-                    pid: pid,
-                    fm: fm,
-                    mtx: mtx,
-                    semTask: semTask,
-                    semDone: semDone,
-                    pSharedBitmap: pSharedBmp,
-                    busy: false,
-                    assignedLayer: 0
-                })
-            } catch as e {
-                GpGFX.DebugLog("[!] Failed to spawn worker " idx ": " e.Message "`n")
-            }
-        }
-
-        if (!this.isInitialized) {
-            this.isInitialized := true
-            OnExit((*) => WorkerPool.Shutdown())
-        }
-    }
-
-    /**
-     * Assigns a background worker from the pool to a layer instance in round-robin sequence.
-     *
-     * @param {Layer} layerObj Target layer instance
-     * @returns {Integer} Assigned worker ID (1..maxWorkers)
-     *
-     * @example
-     * workerId := WorkerPool.AssignWorker(myLayer)
-     */
-    static AssignWorker(layerObj) {
-        local id := this.nextWorkerId
-        this.nextWorkerId := (this.nextWorkerId >= this.maxWorkers) ? 1 : (this.nextWorkerId + 1)
-        if (id <= this.workers.Length) {
-            this.workers[id].assignedLayer := layerObj
-        }
-        return id
-    }
-
-    /**
-     * Sends a step simulation command to a specific worker to calculate physics and render in parallel.
-     *
-     * @param {Integer} workerIdx Worker ID (1..N)
-     * @param {Float} [dt=0.03] Delta time in seconds
-     * @returns {void}
-     *
-     * @example
-     * WorkerPool.StepWorker(1, 0.016)
-     */
-    static StepWorker(workerIdx, dt := 0.03) {
-        local w, lyr, pBuf
-        if (workerIdx <= this.workers.Length) {
-            w := this.workers[workerIdx]
-            lyr := w.assignedLayer
-            pBuf := w.fm.pBuf
-
-            w.mtx.Lock()
-            NumPut("int", 3, pBuf, 0)          ; TaskType = 3 (Compute Math + Render)
-            NumPut("int", 1, pBuf, 4)          ; State = QUEUED
-            NumPut("int", lyr.w, pBuf, 8)      ; Width
-            NumPut("int", lyr.h, pBuf, 12)     ; Height
-            NumPut("float", dt, pBuf, 24)      ; Delta Time
-            w.mtx.Release()
-
-            w.busy := true
-            w.semTask.Release(1)
-        }
-    }
-
-    /**
-     * Serializes visible vector shapes from a layer into binary memory structs in the worker's shared buffer.
-     *
-     * @param {Layer} lyr Layer instance
-     * @param {Integer} workerIndex Worker ID (1..N)
-     * @returns {Integer} Total number of packed shapes
-     */
-    static PackLayer(lyr, workerIndex) {
-        local w := this.workers[workerIndex]
-        local pBuf := w.fm.pBuf
-        local offset := 64
-        local shapeCount := 0
-        local shp, sName, shpType, fillFlag, clr, penW, rx, ry, rw, rh, extra1, extra2
-
-        w.mtx.Lock()
-
-        NumPut("int", 2, pBuf, 0)
-        NumPut("int", 1, pBuf, 4)
-        NumPut("int", lyr.w, pBuf, 8)
-        NumPut("int", lyr.h, pBuf, 12)
-        NumPut("uint", 0x00FFFFFF, pBuf, 20)
-
-        for shp in lyr.shapes {
-            if (!shp.Visible || shp.shape == "Container" || shp.shape == "Dummy" || shp.shape == "Text" || (shp.HasProp("isDummy") && shp.isDummy && !shp.Filled))
-                continue
-
-            sName := shp.HasProp("shape") ? String(shp.shape) : "Rectangle"
-            shpType := (InStr(sName, "Round")) ? 2
-                     : (InStr(sName, "Ellipse") || InStr(sName, "Circle")) ? 3
-                     : (InStr(sName, "Line")) ? 4
-                     : (InStr(sName, "Polygon") || InStr(sName, "Triangle")) ? 5
-                     : 1
-
-            fillFlag := (shp.HasProp("Filled") && shp.Filled) ? 1 : 0
-            clr := Color(shp.Color)
-            penW := Float(shp.HasProp("penwidth") && shp.penwidth ? shp.penwidth : 1.0)
-            rx := Float(shp.x)
-            ry := Float(shp.y)
-            rw := Float(shp.w)
-            rh := Float(shp.h)
-            extra1 := Float(shp.HasProp("radius") && shp.radius ? shp.radius : 0.0)
-            extra2 := 0
-
-            NumPut("uint", shpType, pBuf, offset + 0)
-            NumPut("uint", fillFlag, pBuf, offset + 4)
-            NumPut("uint", clr, pBuf, offset + 8)
-            NumPut("float", penW, pBuf, offset + 12)
-            NumPut("float", rx, pBuf, offset + 16)
-            NumPut("float", ry, pBuf, offset + 20)
-            NumPut("float", rw, pBuf, offset + 24)
-            NumPut("float", rh, pBuf, offset + 28)
-            NumPut("float", extra1, pBuf, offset + 32)
-            NumPut("uint", extra2, pBuf, offset + 36)
-
-            offset += 48
-            shapeCount++
-
-            if (offset >= 130000)
-                break
-        }
-
-        NumPut("int", shapeCount, pBuf, 16)
-        w.mtx.Release()
-
-        return shapeCount
-    }
-
-    /**
-     * Scores layer complexity and routes rendering to local thread or background workers.
-     *
-     * @param {Layer} lyr Layer instance
-     * @returns {void}
-     *
-     * @example
-     * WorkerPool.AutoDispatch(myLayer)
-     */
-    static AutoDispatch(lyr) {
-        local totalScore := 0, shp, sName, weight
-        local shapeCount, chunkSize, workerIdx, startIdx, endIdx
-
-        shapeCount := lyr.shapes.Length
-        if (shapeCount == 0)
-            return
-
-        for shp in lyr.shapes {
-            if (!shp.Visible)
-                continue
-            sName := shp.HasProp("shape") ? String(shp.shape) : "Rectangle"
-            weight := (InStr(sName, "Round") || InStr(sName, "Ellipse") || InStr(sName, "Circle")) ? 1.5
-                    : (InStr(sName, "Polygon") || InStr(sName, "Text")) ? 3.0
-                    : 1.0
-            totalScore += weight
-        }
-
-        if (totalScore <= 1500 || this.maxWorkers <= 1) {
-            Draw(lyr)
-            return
-        }
-
-        if (!this.isInitialized)
-            this.Init()
-
-        chunkSize := Ceil(shapeCount / this.maxWorkers)
-        loop this.maxWorkers {
-            workerIdx := A_Index
-            startIdx := (workerIdx - 1) * chunkSize + 1
-            endIdx := Min(workerIdx * chunkSize, shapeCount)
-
-            if (startIdx <= shapeCount) {
-                this.PackShapeSlice(lyr, workerIdx, startIdx, endIdx)
-                this.workers[workerIdx].busy := true
-                this.workers[workerIdx].semTask.Release(1)
-            }
-        }
-
-        this.WaitForAll()
-    }
-
-    /**
-     * Packs a subset slice of shapes into a worker's shared memory.
-     *
-     * @param {Layer} lyr Layer instance
-     * @param {Integer} workerIndex Worker ID (1..N)
-     * @param {Integer} startIdx 1-based start shape index
-     * @param {Integer} endIdx 1-based end shape index
-     * @returns {Integer} Number of packed shapes
-     */
-    static PackShapeSlice(lyr, workerIndex, startIdx, endIdx) {
-        local w := this.workers[workerIndex]
-        local pBuf := w.fm.pBuf
-        local offset := 64
-        local shapeCount := 0
-        local idx, shp, sName, shpType, fillFlag, clr, penW, rx, ry, rw, rh, extra1, extra2
-
-        w.mtx.Lock()
-        NumPut("int", 2, pBuf, 0)
-        NumPut("int", 1, pBuf, 4)
-        NumPut("int", lyr.w, pBuf, 8)
-        NumPut("int", lyr.h, pBuf, 12)
-        NumPut("uint", 0x00FFFFFF, pBuf, 20)
-
-        idx := startIdx
-        while (idx <= endIdx && idx <= lyr.shapes.Length) {
-            shp := lyr.shapes[idx]
-            idx++
-            if (!shp.Visible || shp.shape == "Container" || shp.shape == "Dummy" || shp.shape == "Text" || (shp.HasProp("isDummy") && shp.isDummy && !shp.Filled))
-                continue
-
-            sName := shp.HasProp("shape") ? String(shp.shape) : "Rectangle"
-            shpType := (InStr(sName, "Round")) ? 2
-                     : (InStr(sName, "Ellipse") || InStr(sName, "Circle")) ? 3
-                     : (InStr(sName, "Line")) ? 4
-                     : (InStr(sName, "Polygon") || InStr(sName, "Triangle")) ? 5
-                     : 1
-
-            fillFlag := (shp.HasProp("Filled") && shp.Filled) ? 1 : 0
-            clr := Color(shp.Color)
-            penW := Float(shp.HasProp("penwidth") && shp.penwidth ? shp.penwidth : 1.0)
-            rx := Float(shp.x)
-            ry := Float(shp.y)
-            rw := Float(shp.w)
-            rh := Float(shp.h)
-            extra1 := Float(shp.HasProp("radius") && shp.radius ? shp.radius : 0.0)
-            extra2 := 0
-
-            NumPut("uint", shpType, pBuf, offset + 0)
-            NumPut("uint", fillFlag, pBuf, offset + 4)
-            NumPut("uint", clr, pBuf, offset + 8)
-            NumPut("float", penW, pBuf, offset + 12)
-            NumPut("float", rx, pBuf, offset + 16)
-            NumPut("float", ry, pBuf, offset + 20)
-            NumPut("float", rw, pBuf, offset + 24)
-            NumPut("float", rh, pBuf, offset + 28)
-            NumPut("float", extra1, pBuf, offset + 32)
-            NumPut("uint", extra2, pBuf, offset + 36)
-
-            offset += 48
-            shapeCount++
-            if (offset >= 130000)
-                break
-        }
-
-        NumPut("int", shapeCount, pBuf, 16)
-        w.mtx.Release()
-        return shapeCount
-    }
-
-    /**
-     * Dispatches a layer rendering task to a worker and signals it to begin.
-     *
-     * @param {Layer} lyr Layer instance
-     * @param {Integer} workerIndex Worker ID (1..N)
-     * @returns {void}
-     */
-    static Dispatch(lyr, workerIndex) {
-        local w
-        if (!this.isInitialized)
-            this.Init()
-
-        w := this.workers[workerIndex]
-        this.PackLayer(lyr, workerIndex)
-        w.busy := true
-        w.assignedLayer := lyr
-        w.semTask.Release(1)
-    }
-
-    /**
-     * Waits for all active workers in the pool to complete and updates the screen.
-     *
-     * @param {Integer} [timeout=1000] Maximum milliseconds to wait
-     * @returns {void}
-     */
-    static WaitForAll(timeout := 1000) {
-        local w, lyr, byteCount, dstX, dstY, winW, winH
-        for w in this.workers {
-            if (w.busy) {
-                w.semDone.Wait(timeout)
-                w.busy := false
-                lyr := w.assignedLayer
-                if (lyr && IsObject(lyr) && lyr.HasProp("gfx") && lyr.gfx.pBits) {
-                    byteCount := lyr.w * lyr.h * 4
-                    DllCall("RtlCopyMemory", "ptr", lyr.gfx.pBits, "ptr", w.fm.pBuf + 65536, "uptr", byteCount)
-                    if (Render.UpdateWindow && lyr.visible) {
-                        dstX := Integer(lyr.x)
-                        dstY := Integer(lyr.y)
-                        winW := Max(1, Integer(lyr.w))
-                        winH := Max(1, Integer(lyr.h))
-                        DllCall("UpdateLayeredWindow"
-                            ,     "ptr", lyr.hwnd
-                            ,     "ptr", 0
-                            , "uint64*", (dstX & 0xFFFFFFFF) | ((dstY & 0xFFFFFFFF) << 32)
-                            , "uint64*", (winW & 0xFFFFFFFF) | ((winH & 0xFFFFFFFF) << 32)
-                            ,     "ptr", lyr.gfx.hdc
-                            , "uint64*", 0
-                            ,    "uint", 0
-                            ,   "uint*", (lyr.alpha << 16) | 0x01000000
-                            ,    "uint", 2)
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Renders multiple layers concurrently across workers, composites them into a single master canvas,
-     * and updates the screen with a single UpdateLayeredWindow OS call.
-     *
-     * @param {Layer} targetLayer Master layer to composite into
-     * @param {Array<Layer>} layers Layers to render in parallel
-     * @returns {void}
-     *
-     * @example
-     * WorkerPool.Composite(masterLayer, hudLayer, backgroundLayer, particlesLayer)
-     */
-    static Composite(targetLayer, layers*) {
-        local lyr, idx, w, gfx, dstX, dstY, winW, winH, pBmp
-        local numLayers := layers.Length
-
-        if (!this.isInitialized)
-            this.Init(Max(4, numLayers))
-
-        loop numLayers {
-            idx := A_Index
-            if (idx <= this.maxWorkers) {
-                lyr := layers[idx]
-                w := this.workers[idx]
-
-                if (!w.HasProp("curW") || w.curW != lyr.w || w.curH != lyr.h || !w.pSharedBitmap) {
-                    if (w.pSharedBitmap)
-                        DllCall("gdiplus\GdipDisposeImage", "ptr", w.pSharedBitmap)
-                    w.curW := lyr.w, w.curH := lyr.h
-                    pBmp := 0
-                    DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", lyr.w, "int", lyr.h, "int", lyr.w * 4, "int", 0x26200A, "ptr", w.fm.pBuf + 65536, "ptr*", &pBmp:=0)
-                    w.pSharedBitmap := pBmp
-                }
-
-                this.PackLayer(lyr, idx)
-                w.busy := true
-                w.assignedLayer := lyr
-                w.semTask.Release(1)
-            }
-        }
-
-        for w in this.workers {
-            if (w.busy) {
-                w.semDone.Wait(50)
-                w.busy := false
-            }
-        }
-
-        gfx := targetLayer.gfx.ptr
-        DllCall("gdiplus\GdipGraphicsClear", "ptr", gfx, "uint", 0x00FFFFFF)
-
-        loop numLayers {
-            idx := A_Index
-            if (idx <= this.maxWorkers && this.workers[idx].pSharedBitmap) {
-                DllCall("gdiplus\GdipDrawImage", "ptr", gfx, "ptr", this.workers[idx].pSharedBitmap, "float", 0.0, "float", 0.0)
-            }
-        }
-
-        if (Render.UpdateWindow && targetLayer.visible) {
-            dstX := Integer(targetLayer.x)
-            dstY := Integer(targetLayer.y)
-            winW := Max(1, Integer(targetLayer.w))
-            winH := Max(1, Integer(targetLayer.h))
-            DllCall("UpdateLayeredWindow"
-                ,     "ptr", targetLayer.hwnd
-                ,     "ptr", 0
-                , "uint64*", (dstX & 0xFFFFFFFF) | ((dstY & 0xFFFFFFFF) << 32)
-                , "uint64*", (winW & 0xFFFFFFFF) | ((winH & 0xFFFFFFFF) << 32)
-                ,     "ptr", targetLayer.gfx.hdc
-                , "uint64*", 0
-                ,    "uint", 0
-                ,   "uint*", (targetLayer.alpha << 16) | 0x01000000
-                ,    "uint", 2)
-        }
-    }
-
-    /**
-     * Shuts down and cleans up all background worker processes and allocated shared memory.
-     *
-     * @returns {void}
-     */
-    static Shutdown() {
-        local w
-        if (!this.isInitialized)
-            return
-
-        this.isInitialized := false
-
-        for w in this.workers {
-            if (w.pSharedBitmap) {
-                if (Gdip.pToken) {
-                    try DllCall("gdiplus\GdipDisposeImage", "ptr", w.pSharedBitmap)
-                }
-                w.pSharedBitmap := 0
-            }
-            try {
-                w.mtx.Lock()
-                NumPut("int", 99, w.fm.pBuf, 0)
-                w.mtx.Release()
-                w.semTask.Release(1)
-            }
-        }
-
-        this.workers.Length := 0
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/Debug.ahk
-; --------------------------------------------------------------------------
-; Script:    Debug.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-/**
- * GpGFX diagnostics & telemetry
- *
- * Debug provides telemetry, process resource tracking, and hardware inspection.
- *
- * Core Capabilities:
- * - Metrics: Live FPS, render latency, frametime, frame count, active layer count, and total shape count.
- * - System Resources: Process working set memory (MB), normalized process CPU usage (%), physical cores, and logical threads.
- * - Extensibility: Pluggable metric registration system (Register, Unregister, Poll, GetSummary).
- */
-class Debug {
-
-    static Layer := 0
-    static Shape := 0
-    static enabled := false
-    static updateFreq := 30
-    static collectors := Map()
-    static metrics := Map()
-
-    ; CPU sampling state
-    static __prevKernel := 0
-    static __prevUser := 0
-    static __prevTime := 0
-    static __cachedCpu := 0.0
-
-    static __New() {
-        ; Register core built-in metrics
-        this.Register("fps",       () => Round(Fps.lastfps, 1))
-        this.Register("render",    () => Round(Fps.lastrender, 2) " ms")
-        this.Register("frametime", () => Round(Fps.frametime, 2) " ms")
-        this.Register("frames",    () => Fps.frames)
-        this.Register("shapes",    () => Debug.__CountShapes())
-        this.Register("layers",    () => LayerStack.pointers.Count)
-        this.Register("mem",       () => Debug.__GetMemoryMB() " MB")
-        this.Register("cpu",       () => Debug.__GetCpuPercent() "%")
-    }
-
-    /**
-     * Registers a custom metric collector function.
-     *
-     * @param {String} name Unique identifier for the metric (case-insensitive)
-     * @param {Func} fn Function returning the metric value or formatted string
-     * @returns {void}
-     *
-     * @example
-     * ; 1. Register a custom particle count metric
-     * Debug.Register("particles", () => activeParticles.Length)
-     *
-     * ; 2. Register game score
-     * Debug.Register("score", () => "Score: " . playerScore)
-     */
-    static Register(name, fn) {
-        this.metrics[StrLower(name)] := fn
-    }
-
-    /**
-     * Unregisters a metric collector by name.
-     *
-     * @param {String} name Name of the metric to remove
-     * @returns {void}
-     *
-     * @example
-     * Debug.Unregister("score")
-     */
-    static Unregister(name) {
-        if this.metrics.Has(StrLower(name))
-            this.metrics.Delete(StrLower(name))
-    }
-
-    /**
-     * Polls all registered collectors and returns a Map containing current metric values.
-     *
-     * @returns {Map} Map of metric names to current values
-     *
-     * @example
-     * currentMetrics := Debug.Poll()
-     * fpsVal := currentMetrics["fps"]
-     * memVal := currentMetrics["mem"]
-     */
-    static Poll() {
-        local name := "", fn := 0
-        for name, fn in this.metrics {
-            try {
-                this.collectors[name] := fn()
-            } catch {
-                this.collectors[name] := "err"
-            }
-        }
-        return this.collectors
-    }
-
-    /**
-     * Formats all active metrics into a concise single-line summary string.
-     *
-     * @returns {String} Formatted telemetry string
-     *
-     * @example
-     * ; Output telemetry to status bar or console
-     * statusText.str := Debug.GetSummary()
-     */
-    static GetSummary() {
-        this.Poll()
-        return    "fps "   (this.collectors.Has("fps")    ? this.collectors["fps"]    :   "0")
-            . "   render " (this.collectors.Has("render") ? this.collectors["render"] : "0ms")
-            . "   shapes " (this.collectors.Has("shapes") ? this.collectors["shapes"] :   "0")
-            . "   layers " (this.collectors.Has("layers") ? this.collectors["layers"] :   "0")
-            . "   mem "    (this.collectors.Has("mem")    ? this.collectors["mem"]    : "0MB")
-            . "   cpu "    (this.collectors.Has("cpu")    ? this.collectors["cpu"]    :  "0%")
-    }
-
-    /**
-     * Queries kernel system information to count available physical processor cores.
-     *
-     * @returns {Integer} Total physical core count
-     *
-     * @example
-     * ; Dynamically size worker pools to match physical CPU cores
-     * numWorkers := Debug.GetPhysicalCoreCount()
-     */
-    static GetPhysicalCoreCount() {
-        local len, buf, structSize, count, physicalCores, offset, relationship
-        static cachedPhysical := 0
-        if (cachedPhysical)
-            return cachedPhysical
-
-        DllCall("Kernel32\GetLogicalProcessorInformation", "Ptr", 0, "UInt*", &len:=0)
-        buf := Buffer(len, 0)
-        if (!DllCall("Kernel32\GetLogicalProcessorInformation", "Ptr", buf, "UInt*", &len))
-            return (cachedPhysical := 1)
-        
-        structSize := 32
-        count := len // structSize
-        physicalCores := 0
-        
-        Loop count {
-            offset := (A_Index - 1) * structSize
-            relationship := NumGet(buf, offset + A_PtrSize, "UInt")
-            if (relationship == 0) ; RelationProcessorCore
-                physicalCores += 1
-        }
-        return cachedPhysical := (physicalCores) ? physicalCores : 1
-    }
-
-    /**
-     * Returns total logical processor threads (including HyperThreading / SMT).
-     *
-     * @returns {Integer} Total logical processor count
-     *
-     * @example
-     * threads := Debug.GetLogicalProcessorCount()
-     */
-    static GetLogicalProcessorCount() {
-        local sysInfo
-        static cachedLogical := 0
-        if (cachedLogical)
-            return cachedLogical
-
-        sysInfo := Buffer(48, 0)
-        DllCall("GetSystemInfo", "Ptr", sysInfo)
-        cachedLogical := NumGet(sysInfo, 32, "UInt")
-        return (cachedLogical) ? cachedLogical : (EnvGet("NUMBER_OF_PROCESSORS") || 1)
-    }
-
-    /**
-     * Returns total shape count across all currently active registered layers.
-     */
-    static __CountShapes() {
-        local count := 0, ptr := 0, lyr := 0
-        for id, ptr in LayerStack.pointers {
-            try {
-                lyr := ObjFromPtrAddRef(ptr)
-                if (IsObject(lyr) && lyr.HasProp("shapes"))
-                    count += lyr.shapes.Length
-                lyr := ""
-            }
-        }
-        return count
-    }
-
-    /**
-     * Returns the process Working Set (private committed memory) in MB.
-     */
-    static __GetMemoryMB() {
-        static pmc := Buffer(72, 0)
-        NumPut("uint", 72, pmc, 0)
-        if DllCall("psapi\GetProcessMemoryInfo", "ptr", -1, "ptr", pmc, "uint", 72)
-            return Round(NumGet(pmc, 24, "uint64") / 1048576, 1) ; WorkingSetSize
-        return 0.0
-    }
-
-    /**
-     * Calculates approximate process CPU usage % between consecutive sample intervals.
-     */
-    static __GetCpuPercent() {
-        local qpc := 0, now := 0.0, kTime := 0, uTime := 0, totalProcTime := 0, elapsedSec := 0.0, cpu := 0.0
-        static ftCreate := Buffer(8, 0), ftExit := Buffer(8, 0), ftKernel := Buffer(8, 0), ftUser := Buffer(8, 0)
-
-        DllCall("QueryPerformanceCounter", "int64*", &qpc:=0)
-        now := qpc / Render.qpf
-
-        ; Sample every 400ms at most to avoid noise and high timer overhead
-        if (this.__prevTime && (now - this.__prevTime < 0.4))
-            return this.__cachedCpu
-
-        if DllCall("GetProcessTimes", "ptr", -1, "ptr", ftCreate, "ptr", ftExit, "ptr", ftKernel, "ptr", ftUser) {
-            kTime := NumGet(ftKernel, 0, "int64")
-            uTime := NumGet(ftUser, 0, "int64")
-
-            if (this.__prevTime) {
-                totalProcTime := (kTime - this.__prevKernel) + (uTime - this.__prevUser) ; in 100-ns units
-                elapsedSec := now - this.__prevTime
-                if (elapsedSec > 0) {
-                    ; Convert 100-ns units to seconds (1 sec = 10,000,000 units), normalize by logical processors
-                    cpu := (totalProcTime / 10000000) / elapsedSec / Debug.GetLogicalProcessorCount() * 100
-                    this.__cachedCpu := Round(Max(0.0, Min(100.0, cpu)), 1)
-                }
-            }
-
-            this.__prevKernel := kTime
-            this.__prevUser := uTime
-            this.__prevTime := now
-        }
-
-        return this.__cachedCpu
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/Function.ahk
-; --------------------------------------------------------------------------
-; Script:    Function.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * GpGFX Global Helper and Utility Functions
- *
- * Core utilities:
- * - Screen & Window: Capture desktop / window screenshots (Screenshot), enumerate multi-monitor geometry (GetMonitorInfo), query true visible window bounds (WinGetVisiblePos).
- * - Layer Helpers: Clear all active layered windows (Clean / Clear), export layers to disk (SaveLayer).
- * - Color & Value Validation: Format ARGB hex strings (itoARGB), validate color ranges and types (IsARGB, IsAlphaValue, IsBool).
- * - Dialogs & Lifecycle: Always-on-top debug modals (TopMsg, Alert), application lifecycle helpers (End, Welcome, GoodBye).
- */
-
-/**
- * Erases and clears all currently registered layered windows from the display.
- *
- * @returns {void}
- *
- * @example
- * Clean() ; Clears all active layers
- */
-Clean() {
-    local lyr, i, ptr
-    for i, ptr in LayerStack.pointers {
-        lyr := ObjFromPtrAddRef(ptr)
-        DllCall("UpdateLayeredWindow"
-            ,   "ptr", lyr.hwnd                ; hWnd
-            ,   "ptr", 0                       ; hdcDst
-            ,   "ptr", 0                       ; *pptDst
-            ,   "ptr", 0                       ; *psize
-            ,   "ptr", 0                       ; hdcSrc
-            ,   "ptr", 0                       ; *pptSrc
-            ,  "uint", 0                       ; crKey
-            , "uint*", 0 << 16 | 0x01 << 24    ; *pblend
-            ,  "uint", 2                       ; dwFlags
-            ,   "int")                         ; Success = 1
-        lyr := ""
-    }
-}
-
-; Alias for Clean
-Clear() => Clean()
-
-/**
- * Exports a layer's rendered surface to an image file on disk.
- *
- * @param {Layer|Object} lyr Layer instance to export
- * @param {String} filepath Output file path (e.g. "screenshot.png")
- * @param {Boolean} [cropToContent=true] When true, crops image to the bounding box of visible shapes
- * @returns {Boolean} True on success, false otherwise
- *
- * @example
- * SaveLayer(myLayer, "output.png")
- */
-SaveLayer(lyr, filepath, cropToContent := true) {
-    if (IsObject(lyr) && lyr.HasMethod("toFile"))
-        return lyr.toFile(filepath, cropToContent)
-    return false
-}
-
-/**
- * Takes a screenshot of the primary screen or a specific rectangular bounding region.
- *
- * @param {String} [filepath] Optional output file path (e.g. "screen.png"). If omitted, returns a GDI+ bitmap pointer
- * @param {Integer} [x=0] Left screen coordinate
- * @param {Integer} [y=0] Top screen coordinate
- * @param {Integer} [w=0] Capture width in pixels (0 for full screen width)
- * @param {Integer} [h=0] Capture height in pixels (0 for full screen height)
- * @returns {Integer|void} GDI+ bitmap pointer if filepath is omitted, void if saved to file
- *
- * @example
- * ; 1. Capture full screen to file
- * Screenshot("desktop.png")
- *
- * ; 2. Capture a 400x300 region at (100, 100)
- * Screenshot("region.png", 100, 100, 400, 300)
- *
- * ; 3. Get in-memory GDI+ bitmap pointer
- * pBmp := Screenshot(, 0, 0, 800, 600)
- */
-Screenshot(filepath?, x := 0, y := 0, w := 0, h := 0) {
-    local hdc, bi, hbm, obm, sdc, pBitmap, pBits, pCodec
-    
-    if (!w)
-        w := A_ScreenWidth
-    if (!h)
-        h := A_ScreenHeight
-
-    hdc := DllCall("CreateCompatibleDC", "ptr", 0, "ptr")
-    bi := Buffer(40, 0)
-    NumPut(  "uint", 40, bi,  0) ; Size
-    NumPut(   "int",  w, bi,  4) ; Width
-    NumPut(   "int", -h, bi,  8) ; Height - Negative so (0, 0) is top-left
-    NumPut("ushort",  1, bi, 12) ; Planes
-    NumPut("ushort", 32, bi, 14) ; BitCount / BitsPerPixel
-    hbm := DllCall("CreateDIBSection", "ptr", hdc, "ptr", bi, "uint", 0, "ptr*", &pBits:=0, "ptr", 0, "uint", 0, "ptr")
-    obm := DllCall("SelectObject", "ptr", hdc, "ptr", hbm, "ptr")
-
-    ; Retrieve device context for the screen
-    sdc := DllCall("GetDC", "ptr", 0, "ptr")
-
-    ; Copy screen portion to memory DC
-    DllCall("gdi32\BitBlt"
-        , "ptr", hdc, "int", 0, "int", 0, "int", w, "int", h
-        , "ptr", sdc, "int", x, "int", y, "uint", 0x00CC0020 | 0x40000000) ; SRCCOPY | CAPTUREBLT
-
-    DllCall("ReleaseDC", "ptr", 0, "ptr", sdc)
-
-    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "ptr", hbm, "ptr", 0, "ptr*", &pBitmap := 0)
-
-    ; Cleanup GDI objects
-    DllCall("SelectObject", "ptr", hdc, "ptr", obm)
-    DllCall("DeleteObject", "ptr", hbm)
-    DllCall("DeleteDC",     "ptr", hdc)
-
-    if IsSet(filepath) {
-        pCodec := Buffer(16, 0)
-        DllCall("ole32\CLSIDFromString", "wstr", "{557CF406-1A04-11D3-9A73-0000F81EF32E}", "ptr", pCodec, "hresult")
-        DllCall("gdiplus\GdipSaveImageToFile", "ptr", pBitmap, "wstr", filepath, "ptr", pCodec, "ptr", 0)
-        DllCall("gdiplus\GdipDisposeImage", "ptr", pBitmap)
-        return
-    }
-    
-    return pBitmap
-}
-
-/**
- * Retrieves comprehensive geometry and work area information for all connected monitors.
- *
- * @returns {Array<Object>} List of monitor objects [{ index, name, x, y, w, h, wx, wy, ww, wh, isPrimary }, ...]
- *
- * @example
- * monitors := GetMonitorInfo()
- * for mon in monitors {
- *     ; mon.x, mon.y, mon.w, mon.h, mon.isPrimary
- * }
- */
-GetMonitorInfo() {
-    local primaryIdx := MonitorGetPrimary()
-    local list := []
-    local i, l, t, r, b, wl, wt, wr, wb, monName
-
-    loop MonitorGetCount() {
-        i := A_Index
-        l := 0, t := 0, r := 0, b := 0
-        wl := 0, wt := 0, wr := 0, wb := 0
-        MonitorGet(i, &l, &t, &r, &b)
-        MonitorGetWorkArea(i, &wl, &wt, &wr, &wb)
-        monName := ""
-        try monName := MonitorGetName(i)
-
-        list.Push({
-            index: i,
-            name: monName,
-            isPrimary: (i == primaryIdx),
-            x: l,
-            y: t,
-            w: r - l,
-            h: b - t,
-            wx: wl,
-            wy: wt,
-            ww: wr - wl,
-            wh: wb - wt
-        })
-    }
-    return list
-}
-
 /**
  * Queries the true visible bounding box of a window (excluding invisible Windows drop shadow padding).
  *
@@ -35546,9 +29103,6 @@ WinGetVisiblePos(hwnd, &outX?, &outY?, &outW?, &outH?) {
     return {x: x1, y: y1, w: w, h: h, x1: x1, y1: y1, x2: x2, y2: y2}
 }
 
-; Alias for WinGetVisiblePos
-GetWindowVisibleRect(args*) => WinGetVisiblePos(args*)
-
 /**
  * Converts a 32-bit ARGB integer into a formatted hexadecimal string ("0xAARRGGBB" or "0xRRGGBB").
  *
@@ -35563,43 +29117,6 @@ itoARGB(int, rgb := false) {
     static buf := Buffer(20, 0)
     DllCall("wsprintf", "ptr", buf, "str", (rgb) ? "0x%06X" : "0x%08X", "int", (rgb) ? int &= 0xFFFFFF : int, "Cdecl")
     return StrGet(buf)
-}
-
-; Alias for itoARGB
-intToARGB(int, rgb := false) => itoARGB(int, rgb)
-
-/**
- * Checks if a value is a boolean (0 or 1 integer).
- *
- * @param {Any} val Value to check
- * @returns {Boolean}
- */
-IsBool(val) => (val is Integer) && (val == 0 || val == 1)
-
-/**
- * Checks if an integer is a valid 8-bit alpha value (0 to 255).
- *
- * @param {Any} val Value to check
- * @returns {Boolean}
- */
-IsAlphaValue(val) => (val is Integer && val <= 0xFF && val >= 0x0)
-
-/**
- * Validates whether an input represents a valid 32-bit ARGB color (integer or hex string).
- *
- * @param {Any} ARGB Value to validate
- * @returns {Boolean}
- *
- * @example
- * IsARGB("0xFF00FF00") ; true
- * IsARGB("#78DCE8")   ; true
- */
-IsARGB(ARGB) {
-    if (ARGB is String)
-        return (RegExMatch(ARGB, "^(0x|#)?[0-9a-fA-F]{6,8}$") > 0)
-    else if (ARGB is Integer)
-        return (ARGB >= 0x00000000 && ARGB <= 0xFFFFFFFF)
-    return false
 }
 
 /**
@@ -35620,606 +29137,6 @@ PositionByNumber(n) {
         case 2: return "bottomcenter"
         case 3: return "bottomright"
         default: return "topcenter"
-    }
-}
-
-/**
- * Displays an always-on-top system modal message box for debugging.
- *
- * @param {String} [text=""] Message text
- * @param {String} [title="GpGFX Debug"] Message box title
- * @param {Integer} [options=4096] MsgBox options (default 4096 = MB_SYSTEMMODAL)
- * @returns {String} Result string from MsgBox
- *
- * @example
- * TopMsg("Value: " myVar)
- */
-TopMsg(text := "", title := "GpGFX Debug", options := 4096) {
-    DllCall("user32\ReleaseCapture")
-    return (MsgBox)(text, title, options)
-}
-
-/**
- * Displays an always-on-top task modal alert box.
- *
- * @param {String} [text=""] Alert message text
- * @param {String} [title="GpGFX Alert"] Alert box title
- * @param {Integer} [options=262144] MsgBox options (default 262144 = MB_TASKMODAL)
- * @returns {String} Result string from MsgBox
- *
- * @example
- * Alert("Operation completed successfully!")
- */
-Alert(text := "", title := "GpGFX Alert", options := 262144) {
-    DllCall("user32\ReleaseCapture")
-    return (MsgBox)(text, title, options)
-}
-
-/**
- * Offsets a shape's horizontal X coordinate.
- *
- * @param {Shape} shapeObj Target shape instance
- * @param {Number} [x=0] Offset delta to add to X
- * @returns {void}
- */
-ModifyX(shapeObj, x := 0) {
-    shapeObj.x += x
-    GpGFX.DebugLog("[!] Signal executed: " shapeObj.name ".x is now " shapeObj.x "`n")
-}
-
-/**
- * Gracefully terminates the script with an optional animated goodbye card.
- *
- * @param {Float} [delay] Optional delay in seconds before closing
- * @returns {void}
- *
- * @example
- * End()     ; Exits immediately
- * End(0.5)  ; Displays goodbye animation for 0.5s then exits
- */
-End(delay?) {
-    if (IsSet(delay))
-        GoodBye(delay)
-    ExitApp()
-}
-
-/**
- * Displays an animated typewriter welcome card.
- *
- * @param {Float} [delay=0.5] Delay in seconds before continuing
- * @returns {void}
- *
- * @example
- * Welcome()
- */
-Welcome(delay := .5) {
-    local lyr, rect, rectbot
-
-    lyr := Layer(360, 250)
-    rect := Rectangle(0, 0, 360, 240, "0x80000000")
-    rectbot := Rectangle(0, 240, 360, 10)
-    rectbot.Color := [Color.Random("Red|Yellow|Violet|Blue|Lime")
-                    , Color.Random("Red|Yellow|Violet|Blue|Lime")]
-    rect.Text("", "white", 24)
-
-    Clean()
-    loop parse, systext.welcome {
-        rect.str .= A_LoopField
-        if (A_LoopField !== "`n")
-            Sleep(20)
-        Draw(lyr)
-    }
-
-    Sleep(200)
-    Draw(lyr)
-    Sleep(delay * 1000)
-}
-
-/**
- * Displays an animated goodbye card on script termination.
- *
- * @param {Float} [delay=0.25] Delay in seconds before exiting
- * @returns {void}
- */
-GoodBye(delay := .25) {
-    local lyr, rect, rectbot
-    static called := false
-    if (called)
-        return
-
-    lyr := Layer(360, 260)
-    rect := Rectangle(0, 0, 360, 240, "0x80000000")
-    rectbot := Rectangle(0, 240, 360, 10)
-    rectbot.Color := [Color.Random("Red|Yellow|Violet|Blue|Lime")
-                    , Color.Random("Red|Yellow|Violet|Blue|Lime")]
-    rect.Text(, "white", 24)
-
-    Clean()
-    loop parse, "exiting..." {
-        rect.str .= A_LoopField
-        if (A_LoopField !== "`n")
-            Sleep(10)
-        Draw(lyr)
-    }
-
-    Sleep(200)
-    Draw(lyr)
-    Sleep(delay * 1000)
-    called := true
-}
-
-/**
- * Random message generator for welcome and goodbye animations.
- */
-class systext {
-
-    static welcome {
-        get {
-            local arr := [
-                "Hello, Universe!",
-                "Greetings, Earthling!",
-                "Stay a while and listen.",
-                "Ah, a fresh soul to corrupt!",   
-                "Welcome, traveler!",             
-                "Well met!",                      
-                "Greetings, Champion!",           
-                "Ahh yes, we've`n`nbeen expecting you.",
-                "It's showtime!",                 
-                "Welcome... " A_Year "..." ]      
-            return arr[Random(1, arr.Length)]
-        }
-    }
-
-    static goodbye {
-        get {
-            local arr := [
-                "Tschüss!",
-                "Goodbye!",
-                "Au revoir!",
-                "Arrivederci!",
-                "Auf Wiedersehen!",
-                "Farewell, my friend!",
-                "Until we meet again.",
-                "Lok’tar ogar!" ,
-                "May the Force be with you." ]
-            return arr[Random(1, arr.Length)]
-        }
-    }
-}
-
-; --------------------------------------------------------------------------
-; GpGFX component: core/Dialog.ahk
-; --------------------------------------------------------------------------
-; Script:    Dialog.ahk
-; License:   MIT License
-; Author:    Bence Markiel (bceenaeiklmr)
-; Github:    https://github.com/bceenaeiklmr/GpGFX
-
-
-/**
- * Modern Minimalist Vector Dialog & MsgBox Engine for GpGFX.
- * Features:
- *   - Clean, high-readability typography (13pt titles, 11.5pt body with auto word-wrapping).
- *   - Monokai, Catppuccin, Nord, TokyoNight, and Cyberpunk theme palettes.
- *   - Rich text formatting support: `{color:Red}Word{color}` or `{color:#78DCE8}Accent{color}`.
- *   - Non-blocking vector dragging and fluid button hover animations.
- *   - Pure GpGFX retained vector shapes with 0 Win32 child controls.
- */
-class Dialog {
-
-    ; Default active theme (can be set to "Monokai", "Catppuccin", "Nord", "TokyoNight", "Cyberpunk", "Dracula")
-    static Theme := "Monokai"
-    static DefaultStyle := "Minimal" ; "Minimal", "Glass", "Compact"
-
-    /**
-     * Resolves theme colors based on active Palette.
-     */
-    static GetThemeColors(themeName := "", customAccent := "") {
-        local tName := (themeName !== "") ? themeName : Dialog.Theme
-        local pal := Palette.Get(tName)
-
-        local bg := pal.bg
-        local surface := pal.surface
-        local text := pal.text
-        local accent := (customAccent != "") ? Color(customAccent) : pal[1] ; Primary accent (e.g. Cyan/Blue)
-        local accentWarn := pal[2] ; Yellow/Amber
-        local accentError := pal[3] ; Pink/Red
-        local accentSuccess := pal[4] ; Green
-
-        return {
-            bg: bg,
-            surface: surface,
-            text: text,
-            accent: accent,
-            warn: accentWarn,
-            error: accentError,
-            success: accentSuccess,
-            border: "0x33FCFCFA",
-            buttonBg: "0xFF2D2A2E",
-            buttonHover: "0xFF3E3A40"
-        }
-    }
-
-    /**
-     * Displays a sleek, modern vector InputBox dialog.
-     * @param {String} prompt - Prompt description text (supports {color:...} tags)
-     * @param {String} title - Dialog title (default "Input Required")
-     * @param {String} defaultText - Pre-filled text
-     * @param {String} placeholder - Dimmed hint text when empty
-     * @param {Object} options - Optional config { width, height, okText, cancelText, accent, theme }
-     * @returns {String|False} Entered string on confirmation, false on cancel
-     */
-    static Input(prompt := "Enter value:", title := "Input Required", defaultText := "", placeholder := "Type here...", options := 0) {
-        local w := (IsObject(options) && options.HasOwnProp("width")) ? options.width : 500
-        local h := (IsObject(options) && options.HasOwnProp("height")) ? options.height : 250
-        local okText := (IsObject(options) && options.HasOwnProp("okText")) ? options.okText : "Confirm"
-        local cancelText := (IsObject(options) && options.HasOwnProp("cancelText")) ? options.cancelText : "Cancel"
-        local themeName := (IsObject(options) && options.HasOwnProp("theme")) ? options.theme : Dialog.Theme
-        local customAccent := (IsObject(options) && options.HasOwnProp("accent")) ? options.accent : ""
-
-        local colors := Dialog.GetThemeColors(themeName, customAccent)
-        local accent := colors.accent
-
-        local x := (A_ScreenWidth - w) // 2
-        local y := (A_ScreenHeight - h) // 2
-        local lyrDlg := Layer(x, y, w, h, "GpGFX Dialog")
-        lyrDlg.draggable := true
-
-        local currentText := String(defaultText)
-        local isDone := false
-        local resultVal := false
-        local cursorVisible := true
-        local hoveredBtn := ""
-
-        ; Retained Vector UI Elements (Clean Minimalist Card)
-
-        ; Outer Backdrop card with rounded corners & subtle glow border
-        RoundedRectangle(10, 10, w - 20, h - 20, 16, "0xF0181822", true)
-        RoundedRectangle(10, 10, w - 20, h - 20, 16, colors.border, false)
-
-        ; Accent left tag pill
-        RoundedRectangle(26, 22, 5, 20, 3, accent, true)
-
-        ; Title (13pt Bold)
-        Rectangle(38, 16, w - 80, 32, "0x00000000", true)
-            .Text(title, "0xFFFCFCFA", 13, "Segoe UI", "Bold", 5, "left", "middle")
-
-        ; Prompt description (11.5pt Regular)
-        Rectangle(26, 52, w - 52, 28, "0x00000000", true)
-            .Text(prompt, "0xFFB0B0B8", 11.5, "Segoe UI", "", 5, "left", "middle")
-
-        ; Input field container (Elevated surface with accent stroke)
-        RoundedRectangle(26, 88, w - 52, 48, 10, "0xFF262632", true)
-        RoundedRectangle(26, 88, w - 52, 48, 10, accent, false)
-
-        ; Input text display (12pt Segoe UI)
-        local inputDisplay := Rectangle(40, 88, w - 80, 48, "0x00000000", true)
-        inputDisplay.Text(placeholder, "0xFF72707E", 12, "Segoe UI", "", 5, "left", "middle")
-
-        ; Buttons
-        local btnW := 115, btnH := 36
-        local btnY := h - 60
-
-        ; Cancel Button
-        local btnCancelBg := RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0xFF262632", true)
-        RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0x33FCFCFA", false)
-        local btnCancelText := Rectangle(w - 265, btnY, btnW, btnH, "0x00000000", true)
-            .Text(cancelText, "0xFFE0E0E6", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-
-        ; Confirm Button
-        local okBgColor := accent
-        local okTxtClr := "0xFF121218"
-        local btnOkBg := RoundedRectangle(w - 140, btnY, btnW, btnH, 8, okBgColor, true)
-        local btnOkText := Rectangle(w - 140, btnY, btnW, btnH, "0x00000000", true)
-            .Text(okText, okTxtClr, 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-
-        ; Interactive Event Handlers
-        
-        btnCancelBg.OnEvent("Click", (*) => (resultVal := false, isDone := true))
-        btnCancelText.OnEvent("Click", (*) => (resultVal := false, isDone := true))
-
-        btnOkBg.OnEvent("Click", (*) => (resultVal := currentText, isDone := true))
-        btnOkText.OnEvent("Click", (*) => (resultVal := currentText, isDone := true))
-
-        ; Mouse Hover tracking
-        lyrDlg.OnEvent("MouseMove", (lyr, mx, my) => OnDialogHover(mx, my))
-
-        OnDialogHover(mx, my) {
-            local newHov := ""
-            if (mx >= w - 265 && mx <= w - 150 && my >= btnY && my <= btnY + btnH)
-                newHov := "Cancel"
-            else if (mx >= w - 140 && mx <= w - 25 && my >= btnY && my <= btnY + btnH)
-                newHov := "OK"
-
-            if (newHov != hoveredBtn) {
-                hoveredBtn := newHov
-                btnCancelBg.Color := (hoveredBtn == "Cancel") ? "0xFF383848" : "0xFF262632"
-                btnOkBg.Color := (hoveredBtn == "OK") ? "0xFFFFFFFF" : okBgColor
-                Draw(lyrDlg)
-            }
-        }
-
-        UpdateTextDisplay() {
-            if (currentText == "") {
-                inputDisplay.Text(placeholder . (cursorVisible ? " |" : ""), "0xFF72707E", 12, "Segoe UI", "", 5, "left", "middle")
-            } else {
-                inputDisplay.Text(currentText . (cursorVisible ? "|" : ""), "0xFFFCFCFA", 12, "Segoe UI", "", 5, "left", "middle")
-            }
-            Draw(lyrDlg)
-        }
-
-        local dlgHwnd := lyrDlg.hwnd
-
-        ; Keyboard capture (Pass-through, only handles keys when dialog is focused)
-        local ih := InputHook("V")
-        ih.KeyOpt("{All}", "N")
-        ih.OnKeyDown := (hook, vk, sc) => OnDialogKey(vk, sc)
-        ih.OnChar := (hook, char) => OnDialogChar(char)
-
-        OnDialogKey(vk, sc) {
-            if (!WinActive("ahk_id " . dlgHwnd) && DllCall("user32\GetForegroundWindow", "ptr") != dlgHwnd)
-                return
-            if (vk == 13 && !GetKeyState("Shift", "P") && !GetKeyState("Ctrl", "P")) { ; Enter
-                resultVal := currentText
-                isDone := true
-            } else if (vk == 27) { ; Escape
-                resultVal := false
-                isDone := true
-            } else if (vk == 8) { ; Backspace
-                if (StrLen(currentText) > 0) {
-                    currentText := SubStr(currentText, 1, -1)
-                    UpdateTextDisplay()
-                }
-            } else if (vk == 86 && (GetKeyState("Ctrl", "P") || GetKeyState("Control", "P"))) { ; Ctrl+V Paste
-                currentText .= A_Clipboard
-                UpdateTextDisplay()
-            }
-        }
-
-        OnDialogChar(char) {
-            if (!WinActive("ahk_id " . dlgHwnd) && DllCall("user32\GetForegroundWindow", "ptr") != dlgHwnd)
-                return
-            if (Ord(char) >= 32 && !GetKeyState("Ctrl", "P") && !GetKeyState("Alt", "P")) {
-                currentText .= char
-                UpdateTextDisplay()
-            }
-        }
-
-        ; Cursor blinking timer
-        local blinkTimer := (*) => (cursorVisible := !cursorVisible, UpdateTextDisplay())
-        SetTimer(blinkTimer, 500)
-
-        ; Initial Render & Window Activation
-        UpdateTextDisplay()
-        lyrDlg.Activate()
-        ih.Start()
-
-        while (!isDone) {
-            Sleep(10)
-        }
-
-        ih.Stop()
-        SetTimer(blinkTimer, 0)
-        KeyWait("LButton")
-        KeyWait("Enter")
-        lyrDlg.Dispose()
-        lyrDlg := ""
-
-        return resultVal
-    }
-
-    /**
-     * Displays a modern minimalist vector MsgBox with rich text, theme accents, and custom buttons.
-     * @param {String} [text=""] - Message description text (supports {color:...} formatting tags)
-     * @param {String} [title="GpGFX"] - Dialog title
-     * @param {Integer|String|Object} [options=0] - Modal options ("YesNo", "OKCancel", "IconWarn", etc.)
-     * @param {Object} [config=0] - Configuration object { theme, accent, width, height, buttons, icon }
-     * @returns {String} Clicked button: "OK", "Cancel", "Yes", "No"
-     */
-    static MsgBox(text := "", title := "GpGFX", options := 0, config := 0) {
-        local w := 520
-        local h := (StrLen(text) > 140) ? 270 : 230
-        local btnType := "OK"
-        local themeName := Dialog.Theme
-        local customAccent := ""
-        local iconType := ""
-
-        ; If 4th parameter config object is provided, merge it
-        if (IsObject(config)) {
-            themeName := config.HasOwnProp("theme") ? config.theme : themeName
-            customAccent := config.HasOwnProp("accent") ? config.accent : customAccent
-            iconType := config.HasOwnProp("icon") ? config.icon : iconType
-            w := config.HasOwnProp("width") ? config.width : w
-            h := config.HasOwnProp("height") ? config.height : h
-            if (config.HasOwnProp("buttons"))
-                btnType := config.buttons
-        }
-
-        ; Parse options (Supports Integer bitmasks, String keywords, and Object configs)
-        if (IsObject(options)) {
-            btnType := options.HasOwnProp("buttons") ? options.buttons : btnType
-            themeName := options.HasOwnProp("theme") ? options.theme : themeName
-            customAccent := options.HasOwnProp("accent") ? options.accent : customAccent
-            iconType := options.HasOwnProp("icon") ? options.icon : iconType
-            w := options.HasOwnProp("width") ? options.width : w
-            h := options.HasOwnProp("height") ? options.height : h
-        } else if (IsInteger(options)) {
-            if (options & 0x01)
-                btnType := "OKCancel"
-            else if (options & 0x04)
-                btnType := "YesNo"
-            else if (options & 0x03)
-                btnType := "YesNoCancel"
-
-            if (options & 0x10)
-                iconType := "Error", customAccent := "0xFFFF6188"
-            else if (options & 0x20)
-                iconType := "Question", customAccent := "0xFFAB9DF2"
-            else if (options & 0x30)
-                iconType := "Warning", customAccent := "0xFFFFD866"
-            else if (options & 0x40)
-                iconType := "Info", customAccent := "0xFFA9DC76"
-        } else if (Type(options) == "String") {
-            local opts := StrLower(options)
-            if InStr(opts, "yesno")
-                btnType := "YesNo"
-            else if InStr(opts, "okcancel")
-                btnType := "OKCancel"
-
-            if (opts ~= "i)Icon(Info|Information|\?)|info")
-                iconType := "Info", customAccent := "0xFF78DCE8"
-            else if (opts ~= "i)Icon(Warn|Warning|Exclamation|!)|warn")
-                iconType := "Warning", customAccent := "0xFFFFD866"
-            else if (opts ~= "i)Icon(Err|Error|Stop|Critical|X)|error")
-                iconType := "Error", customAccent := "0xFFFF6188"
-            else if (opts ~= "i)Icon(Question)|question")
-                iconType := "Question", customAccent := "0xFFAB9DF2"
-            else if (opts ~= "i)Icon(Check|Success|\*)|success")
-                iconType := "Success", customAccent := "0xFFA9DC76"
-        }
-
-        ; Map icon presets
-        local hasIcon := (iconType != "")
-        local iconGlyph := "i", iconClr := 0xFF78DCE8, iconBg := 0x2278DCE8, iconBrd := 0x5578DCE8
-        if (hasIcon) {
-            switch StrLower(iconType) {
-                case "warn", "warning", "exclamation", "3", "0x30", "48":
-                    iconGlyph := "!", iconClr := 0xFFFFD866, iconBg := 0x28FFD866, iconBrd := 0x55FFD866
-                case "err", "error", "stop", "critical", "1", "0x10", "16":
-                    iconGlyph := "X", iconClr := 0xFFFF6188, iconBg := 0x28FF6188, iconBrd := 0x55FF6188
-                case "question", "?", "2", "0x20", "32":
-                    iconGlyph := "?", iconClr := 0xFFAB9DF2, iconBg := 0x28AB9DF2, iconBrd := 0x55AB9DF2
-                case "success", "check", "ok":
-                    iconGlyph := "V", iconClr := 0xFFA9DC76, iconBg := 0x28A9DC76, iconBrd := 0x55A9DC76
-                default: ; info
-                    iconGlyph := "i", iconClr := 0xFF78DCE8, iconBg := 0x2878DCE8, iconBrd := 0x5578DCE8
-            }
-        }
-
-            local colors := Dialog.GetThemeColors(themeName, customAccent)
-            local accent := colors.accent
-
-            ; Clean text string to calculate shape and dialog bounds dynamically
-            local cleanText := RegExReplace(text, "\{[^}]*\}", "")
-            local rawLines := StrSplit(cleanText, "`n")
-            local totalLineCount := 0
-            local singleLine
-            for singleLine in rawLines {
-                local lineLen := StrLen(singleLine)
-                totalLineCount += Max(1, Ceil(lineLen / 46))
-            }
-
-            local textX := hasIcon ? 76 : 26
-            local textW := hasIcon ? (w - 102) : (w - 52)
-            local textH := Max(44, totalLineCount * 24 + 10)
-            local h := (IsObject(options) && options.HasOwnProp("height")) ? options.height : Max(200, textH + 125)
-            local btnY := h - 55
-
-            local x := (A_ScreenWidth - w) // 2
-            local y := (A_ScreenHeight - h) // 2
-            local lyrDlg := Layer(x, y, w, h, "GpGFX Message Box")
-            lyrDlg.draggable := true
-
-            local isDone := false
-            local resultVal := (btnType == "YesNo") ? "No" : "Cancel"
-            local hoveredBtn := ""
-
-            ; Retained Vector UI Elements (Minimalist Monokai Card)
-
-            ; Backdrop Card (94% opacity deep obsidian) + subtle border
-            RoundedRectangle(10, 10, w - 20, h - 20, 16, "0xF0181822", true)
-            RoundedRectangle(10, 10, w - 20, h - 20, 16, colors.border, false)
-
-            ; Accent left pill tag
-            RoundedRectangle(26, 22, 5, 20, 3, accent, true)
-
-            ; Title (13pt Bold Segoe UI)
-            Rectangle(38, 16, w - 80, 32, "0x00000000", true)
-                .Text(title, "0xFFFCFCFA", 13, "Segoe UI", "Bold", 5, "left", "middle")
-
-            ; Optional Vector Icon Badge (38x38)
-            if (hasIcon) {
-                RoundedRectangle(26, 56, 38, 38, 10, iconBg, true)
-                RoundedRectangle(26, 56, 38, 38, 10, iconBrd, false)
-                Rectangle(26, 56, 38, 38, "0x00000000", true)
-                    .Text(iconGlyph, iconClr, 14, "Segoe UI", "Bold", 5, "center", "middle")
-            }
-
-            ; Body Message (11.5pt with automatic word wrapping & rich text support)
-            Rectangle(textX, 56, textW, textH, "0x00000000", true)
-                .Text(text, "0xFFD8D8E0", 11.5, "Segoe UI", "", 5, "left", "top")
-
-            ; Buttons
-            local btnW := 115, btnH := 36
-
-            if (btnType == "OK") {
-                local okBg := RoundedRectangle(w - 140, btnY, btnW, btnH, 8, accent, true)
-                local okTxt := Rectangle(w - 140, btnY, btnW, btnH, "0x00000000", true)
-                    .Text("OK", "0xFF121218", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-                okBg.OnEvent("Click", (*) => (resultVal := "OK", isDone := true))
-                okTxt.OnEvent("Click", (*) => (resultVal := "OK", isDone := true))
-            } else if (btnType == "OKCancel") {
-                local cancelBg := RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0xFF262632", true)
-                RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0x33FCFCFA", false)
-                local cancelTxt := Rectangle(w - 265, btnY, btnW, btnH, "0x00000000", true)
-                    .Text("Cancel", "0xFFE0E0E6", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-                cancelBg.OnEvent("Click", (*) => (resultVal := "Cancel", isDone := true))
-                cancelTxt.OnEvent("Click", (*) => (resultVal := "Cancel", isDone := true))
-
-                local okBg := RoundedRectangle(w - 140, btnY, btnW, btnH, 8, accent, true)
-                local okTxt := Rectangle(w - 140, btnY, btnW, btnH, "0x00000000", true)
-                    .Text("OK", "0xFF121218", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-                okBg.OnEvent("Click", (*) => (resultVal := "OK", isDone := true))
-                okTxt.OnEvent("Click", (*) => (resultVal := "OK", isDone := true))
-            } else if (btnType == "YesNo") {
-                local noBg := RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0xFF262632", true)
-                RoundedRectangle(w - 265, btnY, btnW, btnH, 8, "0x33FCFCFA", false)
-                local noTxt := Rectangle(w - 265, btnY, btnW, btnH, "0x00000000", true)
-                    .Text("No", "0xFFE0E0E6", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-                noBg.OnEvent("Click", (*) => (resultVal := "No", isDone := true))
-                noTxt.OnEvent("Click", (*) => (resultVal := "No", isDone := true))
-
-                local yesBg := RoundedRectangle(w - 140, btnY, btnW, btnH, 8, accent, true)
-                local yesTxt := Rectangle(w - 140, btnY, btnW, btnH, "0x00000000", true)
-                    .Text("Yes", "0xFF121218", 10.5, "Segoe UI", "Bold", 5, "center", "middle")
-                yesBg.OnEvent("Click", (*) => (resultVal := "Yes", isDone := true))
-                yesTxt.OnEvent("Click", (*) => (resultVal := "Yes", isDone := true))
-            }
-
-        ; Initial Render & Window Activation
-        lyrDlg.Prepare()
-        Draw(lyrDlg)
-        lyrDlg.Activate()
-
-        ; Active-window keyboard capture (Only handles keys when this dialog is focused)
-        local btnSummary := (btnType == "OK" ? "OK   " : btnType == "OKCancel" ? "OK   Cancel   " : "Yes   No   ")
-        local clipFormatted := "---------------------------`n" title . 
-        "`n---------------------------`n" cleanText . 
-        "`n---------------------------`n" btnSummary .
-        "`n---------------------------`n"
-        local dlgHwnd := lyrDlg.hwnd
-
-        local ih := InputHook("V")
-        ih.KeyOpt("{All}", "N")
-        ih.OnKeyDown := (hook, vk, sc) => (
-            (!WinActive("ahk_id " . dlgHwnd) && DllCall("user32\GetForegroundWindow", "ptr") != dlgHwnd) ? 0 :
-            (vk == 13 && !GetKeyState("Shift", "P") && !GetKeyState("Ctrl", "P") && !GetKeyState("Alt", "P")) ? (resultVal := (btnType == "YesNo" ? "Yes" : "OK"), isDone := true) :
-            (vk == 27) ? (resultVal := (btnType == "YesNo" ? "No" : "Cancel"), isDone := true) :
-            ((vk == 67 || vk == 99) && (GetKeyState("Ctrl", "P") || GetKeyState("Control", "P"))) ? (A_Clipboard := clipFormatted) : 0
-        )
-        ih.Start()
-
-        while (!isDone) {
-            Sleep(10)
-        }
-
-        ih.Stop()
-        KeyWait("LButton")
-        KeyWait("Enter")
-        lyrDlg.Dispose()
-        lyrDlg := ""
-
-        return resultVal
     }
 }
 
