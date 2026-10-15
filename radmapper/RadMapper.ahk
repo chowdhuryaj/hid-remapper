@@ -426,7 +426,7 @@ global DEFAULTS := Map(
         . "|IntelliSpacePACSRadiology.exe:MHActivationToolbar")
 
 global g_Cfg := 0              ; whole config (Map), see DefaultCfg()
-global g_BS := Map()           ; per-input live state objects
+global g_BS := IMap()          ; per-input live state objects
 global g_Enabled := true
 global g_PollSeq := 0          ; movement-poll generation counter
 global g_ClickLock := 0        ; {held, src} while a button is latched down
@@ -467,7 +467,7 @@ global g_LastEvText := "(none yet)"
 global g_FgHwnd := 0           ; foreground-hwnd micro-cache (same-ms reuse)
 global g_FgTick := -1
 global g_OurHwnds := Map()     ; our own GUI hwnds -> passthrough while active
-global g_HookState := Map()    ; input name -> 1 while its hotkeys are On
+global g_HookState := IMap()   ; input name -> 1 while its hotkeys are On
 global g_KbRegistered := []    ; keyboard hotkey strings currently registered
 ; Binding membership index (see RebuildIndex). Starts as a valid EMPTY index
 ; so the hot-path lookups never need an existence guard.
@@ -902,6 +902,15 @@ InputValueChoices(atype, cur := "") {
 ; "*" is stored in the config; the GUI shows it as an explicit Global label.
 AppDisp(code) {
     return (code = "*") ? ALL_PROGRAMS : code
+}
+
+; A case-insensitive Map (v0.7.3). Input names come from the config, which
+; may spell a key "capslock" in one row and "CapsLock" in the next; the
+; binding index already ignores case, and the live-state maps must too.
+IMap() {
+    m := Map()
+    m.CaseSense := "Off"
+    return m
 }
 
 AppCodeFromDisp(label) {
@@ -2686,7 +2695,7 @@ BypassExpire(*) {
 }
 
 ; Inputs whose next release belongs to a pause toggle (see OnReleaseHK).
-global g_SwallowUp := Map()
+global g_SwallowUp := IMap()
 
 ; A "Toggle engine pause" row on this input that applies here, or 0. Read
 ; straight from the config: while paused, the index is still built but no
@@ -2930,6 +2939,12 @@ SpecFor(btn, ctx) {
         if !LayerHostAllowed(btn)
             layerHost := false
     }
+    ; A "Pass through" hold with no tap left is the input untouched: pure,
+    ; native at the gate -- not an instant hold that re-sends the press
+    ; (dead over an elevated window). The stock-tap mirror already is. v0.7.3
+    if (!layerHost && !IsObject(tap) && IsObject(hold)
+        && hold["action"]["type"] = "stock" && !LayerParts(hold).Length)
+        hold := 0
 
     hasAny := IsObject(tap) || IsObject(hold) || layerHost
 
@@ -3144,7 +3159,8 @@ OwnWindowAt(hwnd) {
         return true
     pid := 0
     DllCall("GetWindowThreadProcessId", "ptr", hwnd, "uint*", &pid)
-    if (pid != DllCall("GetCurrentProcessId", "uint"))
+    static me := DllCall("GetCurrentProcessId", "uint")
+    if (pid != me)
         return false
     cls := ""
     try cls := WinGetClass("ahk_id " hwnd)
@@ -3211,8 +3227,17 @@ GateNative(btn) {
     try {
         ctx := CurCtx(btn)
         if IsWheel(btn) {
-            if IsObject(FindBindingFor(btn, "turn", ctx))
-                return false
+            ; a plain "native" row on this wheel direction is the wheel
+            ; doing what it does: native at the gate, not claimed and
+            ; re-sent (re-sent scrolls die over elevated windows and lose
+            ; their timing). Only a layer row must be claimed: it marks
+            ; its holder used. (v0.7.3)
+            if IsObject(b := FindBindingFor(btn, "turn", ctx)) {
+                bv := MGet(b["action"], "value", "")
+                if !(IsNativeAct(b["action"]["type"]) && (bv = "" || bv = btn)
+                    && !LayerParts(b).Length)
+                    return false
+            }
             g_WheelLast := A_TickCount       ; deck settle still sees the notch
             return true
         }
@@ -3227,7 +3252,7 @@ GateNative(btn) {
 ; main thread busy, e.g. AimFg waiting on a window): its Up must still come
 ; to the engine, or it goes out native and the late handler arms a state
 ; nothing will ever release.
-global g_GateClaim := Map()
+global g_GateClaim := IMap()
 
 ; An Up the engine has no claim on goes through untouched too.
 GateNativeClear(inp) {                   ; a Down going out natively owns no claim
@@ -3788,7 +3813,7 @@ MovePoll(btn, pollId, *) {
     dist := Sqrt(dx * dx + dy * dy)
 
     if ((st.mode = "pending" || st.mode = "armedmod") && IsPrimaryButton(btn)) {
-        if (!st.usedAsMod && dist >= Cfg("dragThreshold")) {
+        if (!st.usedAsMod && dist >= ClampInt(Cfg("dragThreshold"), 1, 200, 8)) {
             st.gen += 1                      ; the hold timer stands down
             st.mode := "passthru"            ; ...and the button goes out:
             ; a drag is a drag -- of the dragmove TARGET if the hold is one
@@ -3816,7 +3841,7 @@ MovePoll(btn, pollId, *) {
         SetTimer(, 0)
         return
     }
-    if (!st.dragOn && dist >= Cfg("dragThreshold")) {
+    if (!st.dragOn && dist >= ClampInt(Cfg("dragThreshold"), 1, 200, 8)) {
         st.dragOn := true
         v := MGet(st.holdBinding["action"], "value", "")
         st.passBtn := (v != "") ? v : btn
@@ -8019,6 +8044,17 @@ IsMouseHotkey(hk) {
     return false
 }
 
+; A Settings hotkey fires ONCE PER PRESS (v0.7.3). AHK runs a hotkey on every
+; OS auto-repeat, so holding the pause key flipped the engine about every
+; 30 ms and left it in whichever state the release landed on; holding the
+; click-lock, pointer, maximise or panic keys did the same. T1 + KeyWait drops
+; the repeats; a custom "a & b" combo has no single key to wait on.
+SettingsHkOnce(fn, thisHk) {
+    fn()
+    if !InStr(thisHk, "&")
+        try KeyWait(RegExReplace(thisHk, "i)^[\^!+#<>*~$]+|\s+up$"))
+}
+
 ; The KEY equivalent of IsMouseHotkey (v0.3). "F13" (a Settings hotkey) and
 ; "*F13" (an engine hook) are different hotkeys, and AHK prefers the EXACT
 ; match -- so an unmodified Settings hotkey on a key that Mappings also binds
@@ -8093,7 +8129,9 @@ RegisterKbHotkeys() {
             continue                         ; kill that key's Mappings rows
         }
         try {
-            Hotkey(hk, pair[2], "On")
+            ; .Bind, not a closure: a closure would capture `pair` by
+            ; reference and every hotkey would run the last action
+            Hotkey(hk, SettingsHkOnce.Bind(pair[2]), "On T1")
             g_KbRegistered.Push(hk)
         } catch {
             bad .= (bad = "" ? "" : ", ") hk
@@ -8521,6 +8559,16 @@ PanicRelease() {
                                              ; + modifiers only
     AppSwitchClose(false)                    ; panic never commits a switch, and
     for name, st in g_BS.Clone() {           ; a switcher left up would disable
+        ; as ForceReleaseActive: a release still physically coming must not
+        ; arrive as a fresh press (a held CapsLock host's repeats fired its
+        ; tap) or a lone native Up. Physical only -- a stuck state's Up is
+        ; already gone, and marking it would eat the next real one.
+        if (st.down && !IsWheel(name)) {
+            try {
+                if GetKeyState(name, "P")
+                    g_SwallowUp[name] := 1
+            }
+        }
         st.down := false                     ; the watchdog until Esc
         ClearBS(name)
     }
