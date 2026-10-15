@@ -332,6 +332,10 @@ global DEFAULTS := Map(
     "hudFollow", 1,            ; 1 = on the monitor under the cursor
     "psDictateKey", "{F4}",
     "psReturnDelay", 60,       ; ms before focus returns after firing into PS
+    "psSettleMs", 150,         ; ms after PowerScribe comes forward before the
+                               ;   keys go: WPF needs a moment to put the
+                               ;   focus back in the report (was 50; too
+                               ;   short on slower stations)
     "runElevated", 0,          ; 1 = relaunch as administrator at startup
                                ;   (set by tray > Run as administrator)
     "pacsApp", "PACS",         ; the Apps-tab profile "PACS: send keys" targets
@@ -7609,6 +7613,7 @@ PSTargetHwnd() {
 ; the dialog the editor is waiting for, and that is still a success.
 ; WinRestore is used only on a MINIMIZED window, because restoring a
 ; maximized PowerScribe un-maximizes it.
+; Returns the step that worked (1-3), or 0.
 ForceForeground(hwnd, isThere) {
     id := "ahk_id " hwnd
     try {
@@ -7616,7 +7621,8 @@ ForceForeground(hwnd, isThere) {
             WinRestore(id)
     }
     loop 3 {
-        switch A_Index {
+        step := A_Index
+        switch step {
             case 1: try WinActivate(id)
             case 2: ForegroundUnlockAndSet(hwnd)
             case 3: try DllCall("SwitchToThisWindow", "Ptr", hwnd, "Int", 1)
@@ -7624,13 +7630,13 @@ ForceForeground(hwnd, isThere) {
         t0 := A_TickCount
         loop {
             if isThere()
-                return true
+                return step
             if (A_TickCount - t0 >= 350)
                 break
             Sleep(15)
         }
     }
-    return false
+    return 0
 }
 
 ForegroundUnlockAndSet(hwnd) {
@@ -8010,7 +8016,7 @@ AppDeliverNow(appName, keys) {
             try WinActivate("ahk_id " prev)
         return
     }
-    Sleep(50)
+    Sleep(Cfg("psSettleMs"))
     ; The thread is interruptible across the waits above: a click back into
     ; the viewer in that moment must not receive the keys.
     Critical "On"
@@ -8148,7 +8154,9 @@ PSDeliverNow(keys) {
         return
     }
     prev := WinExist("A")
-    if !ForceForeground(target, PSActive) {
+    t0 := A_TickCount
+    how := ForceForeground(target, PSActive)
+    if !how {
         if (g_PSGen = gen && WinExist("ahk_id " target)) {
             ; No ControlSend fallback: WPF drops posted keys, and a
             ; modifier sent that way can stick in the active window.
@@ -8166,7 +8174,7 @@ PSDeliverNow(keys) {
             try WinActivate("ahk_id " prev)
         return
     }
-    Sleep(50)
+    Sleep(Cfg("psSettleMs"))
     ; The thread is interruptible across the waits above: a click back into
     ; the viewer in that moment must not receive the keys.
     Critical "On"
@@ -8179,6 +8187,12 @@ PSDeliverNow(keys) {
         HUD("Focus moved before the keys were sent — press it again", "warn")
         return
     }
+    ; A trace for "it still does nothing": if this line is in Diagnostics,
+    ; PowerScribe WAS in front and the keys WERE sent, so the problem is
+    ; inside PowerScribe (where its focus was), not in getting there.
+    Problem("ps-sent", "PowerScribe brought forward ("
+        . ["WinActivate", "unlock+SetForegroundWindow", "SwitchToThisWindow"][how]
+        . ", " (A_TickCount - t0) " ms) and keys sent: " keys)
     if prev {
         Sleep(Cfg("psReturnDelay"))
         if PSActive()                        ; not if the user has moved on
