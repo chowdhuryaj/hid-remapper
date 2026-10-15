@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.7.4 --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7.5 --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -31,6 +31,9 @@
 ;  v0.7.4: dictate and field navigation reach PowerScribe from any window on
 ;  every station: the right PS window, the foreground lock lifted when it is
 ;  needed, and an elevated PS/PACS detected (tray > Run as administrator).
+;  v0.7.5: on AutoHotkey before 2.0.4 (which cannot reinstall a keyboard hook
+;  Windows dropped), a lost hook is noticed on the dictate / field keys, the
+;  action still fires, and RadMapper reloads itself to get a fresh hook.
 ;==============================================================================
 
 #Requires AutoHotkey v2.0
@@ -78,7 +81,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.4"
+global RM_VERSION := "0.7.5"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -8724,6 +8727,148 @@ RegisterKbHotkeys() {
             "RadMapper", "Iconx")
     }
     g_ClashWarned := clash
+    RegHkSync()                              ; the hook-free PowerScribe keys
+}
+
+; ── LOST KEYBOARD HOOK ON AUTOHOTKEY BEFORE 2.0.4 ───────────────────────────
+; Workstations that cannot update AutoHotkey run 2.0.2. Windows silently
+; removes a low-level keyboard hook that is slow to answer, and before 2.0.4
+; AutoHotkey could not put it back ("any attempt to reinstall the keyboard or
+; mouse hook would fail if the OS had automatically uninstalled the hook",
+; fixed in 2.0.4). From then on every key binding is dead -- dictate on grave
+; included -- and HookFrontTick's reinstall cannot help. Only a fresh process
+; gets a fresh hook.
+;
+; So on those versions a 40 ms timer watches the keys that trigger dictate
+; and next/previous field. It reads them with GetAsyncKeyState, which needs
+; no hook. A_TimeIdleKeyboard is kept by the hook itself, so while a key is
+; physically down it is small if the hook is alive. Key down while the hook
+; has seen no keyboard input for over a second = the hook is gone. The
+; timer then fires that key's PowerScribe action itself (the press is not
+; lost) and reloads RadMapper once the delivery is done, which brings every
+; other binding back too.
+;
+; Only unconditional rows are watched (tap, every program, no modifier row,
+; no layer). Not while paused, and not while an elevated window is in front
+; (Windows hides input from the hook there, which looks the same).
+global g_HookWatch := []         ; [{vk, mods, type}]
+
+HookWatchWanted() {
+    return VerCompare(A_AhkVersion, "2.0.4") < 0
+}
+
+RegHkSync() {
+    global g_HookWatch
+    g_HookWatch := []
+    SetTimer(HookWatchTick, 0)
+    if !HookWatchWanted()
+        return
+    want := []                               ; [hotkey text, action type]
+    for row in MGet(g_Cfg, "bindings", []) {
+        a := MGet(row, "action", 0)
+        if !IsObject(a)
+            continue
+        t := MGet(a, "type", "")
+        if !(t = "ps_dictate" || t = "ps_next" || t = "ps_prev")
+            continue
+        if (MGet(row, "event", "") != "tap" || MGet(row, "app", "*") != "*"
+            || MGet(row, "mods", "") != "" || LayerParts(row).Length)
+            continue
+        btn := MGet(row, "button", "")
+        if IsKeyInput(btn)
+            want.Push([btn, t])
+    }
+    for pr in [["hkDictate", "ps_dictate"], ["hkNextField", "ps_next"],
+               ["hkPrevField", "ps_prev"]] {
+        if (Cfg(pr[1]) != "")
+            want.Push([Cfg(pr[1]), pr[2]])
+    }
+    for w in want {
+        hk := RegExReplace(Trim(w[1]), "[*~$]")
+        if (hk = "" || InStr(hk, "&") || RegExMatch(hk, "i)\s+up$"))
+            continue
+        mods := ""
+        while (hk != "" && InStr("^!+#<>", SubStr(hk, 1, 1))) {
+            c := SubStr(hk, 1, 1)
+            if InStr("^!+#", c)
+                mods .= c
+            hk := SubStr(hk, 2)
+        }
+        vk := 0
+        try vk := GetKeyVK(hk)
+        if vk
+            g_HookWatch.Push({vk: vk, mods: mods, type: w[2]})
+    }
+    if g_HookWatch.Length
+        SetTimer(HookWatchTick, 40)
+}
+
+HookWatchTick() {
+    static fired := false
+    if (!g_Enabled || !g_HookWatch.Length)
+        return
+    hit := 0
+    for w in g_HookWatch {
+        if !(DllCall("GetAsyncKeyState", "Int", w.vk, "Short") & 0x8000)
+            continue
+        if (w.mods = "" || HookWatchModsDown(w.mods)) {
+            hit := w
+            break
+        }
+    }
+    if !hit {
+        fired := false
+        return
+    }
+    if (fired || A_TimeIdleKeyboard < 1000)  ; the hook saw it: all is well
+        return
+    fg := DllCall("GetForegroundWindow", "Ptr")
+    pid := 0
+    try pid := WinGetPID("ahk_id " fg)
+    if (pid && !A_IsAdmin && ProcElevated(pid) = 1)
+        return                               ; UIPI, not a lost hook
+    fired := true                            ; once per press
+    switch hit.type {
+        case "ps_dictate": PSFire(Cfg("psDictateKey"))
+        case "ps_next":    PSFire("{Tab}")
+        case "ps_prev":    PSFire("+{Tab}")
+    }
+    Problem("hook-lost", "the keyboard hook is gone (AutoHotkey "
+        . A_AhkVersion " cannot reinstall it); " hit.type " was caught"
+        . " without it. Reloading to bring the other bindings back")
+    HUD("Keyboard hook lost — RadMapper is restarting itself", "warn")
+    SetTimer(HookLostReload, -300)
+}
+
+; GetAsyncKeyState, not GetKeyState(.., "P"): with the hook gone, AutoHotkey's
+; physical key table is frozen at whatever it last saw.
+HookWatchModsDown(mods) {
+    loop parse mods {
+        vks := (A_LoopField = "^") ? [0x11] : (A_LoopField = "!") ? [0x12]
+            : (A_LoopField = "+") ? [0x10] : [0x5B, 0x5C]   ; VK_LWIN, VK_RWIN
+        down := false
+        for vk in vks
+            down := down || (DllCall("GetAsyncKeyState", "Int", vk, "Short") & 0x8000)
+        if !down
+            return false
+    }
+    return true
+}
+
+; Reload once the PowerScribe delivery is done and nothing is under the hand
+; (a held button or modifier would be cut mid-gesture).
+; Bounded at ~6 s: a stale reading must not put the reload off for ever.
+HookLostReload(*) {
+    static waits := 0
+    busy := g_PSBusy || g_PSQueue.Length
+    for vk in [0x01, 0x02, 0x04, 0x10, 0x11, 0x12, 0x5B, 0x5C]
+        busy := busy || (DllCall("GetAsyncKeyState", "Int", vk, "Short") & 0x8000)
+    if (busy && waits < 20) {
+        waits += 1
+        SetTimer(HookLostReload, -300)
+        return
+    }
+    Reload()
 }
 
 ; Release every in-flight synthetic hold and clear engine state. MUST run
@@ -10408,6 +10553,7 @@ Cleanup(*) {
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
     PSTrackStop()
+    SetTimer(HookWatchTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     TeleportSignalStop()
