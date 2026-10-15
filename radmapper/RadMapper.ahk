@@ -1,5 +1,5 @@
 ;==============================================================================
-;  RadMapper v0.7.3 --  Live-configurable mouse + keyboard engine for the
+;  RadMapper v0.7.4 --  Live-configurable mouse + keyboard engine for the
 ;                       reading room (was RadMouse through v1.4.2)
 ;
 ;  *** SINGLE-FILE BUILD ***  Everything is in this one script: the engine,
@@ -27,6 +27,10 @@
 ;  drag scroll and the W/L dial are gone; mouse input follows the window
 ;  under the pointer; layer buttons are a setting; pass-through action;
 ;  freeze and bug-sweep fixes (see CHANGELOG.md).
+;
+;  v0.7.4: dictate and field navigation reach PowerScribe from any window on
+;  every station: the right PS window, the foreground lock lifted when it is
+;  needed, and an elevated PS/PACS detected (tray > Run as administrator).
 ;==============================================================================
 
 #Requires AutoHotkey v2.0
@@ -74,7 +78,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.3"
+global RM_VERSION := "0.7.4"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -88,6 +92,7 @@ global RM_VERSION := "0.7.3"
 ; up in the directive block: top-level code runs in file order, so a
 ; `global g_FgLockSaved := -1` placed below the read would wipe the value.
 global g_FgLockSaved := -1
+global g_FgLockLifted := 0
 if !IsSet(RM_TEST) {
     try {
         fgLockNow := 0
@@ -95,7 +100,11 @@ if !IsSet(RM_TEST) {
             "UInt*", &fgLockNow, "UInt", 0)
             g_FgLockSaved := fgLockNow
     }
-    DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0, "UInt", 0)
+    ; Windows refuses this from a process that is not in front, for example
+    ; one started from the Startup folder at login. Init records the refusal,
+    ; and ForegroundUnlockAndSet lifts the lock again when it is needed.
+    g_FgLockLifted := DllCall("SystemParametersInfo", "UInt", 0x2001,
+        "UInt", 0, "Ptr", 0, "UInt", 0)
 }
 
 global g_CfgRecoveryBlocked := false
@@ -323,6 +332,8 @@ global DEFAULTS := Map(
     "hudFollow", 1,            ; 1 = on the monitor under the cursor
     "psDictateKey", "{F4}",
     "psReturnDelay", 60,       ; ms before focus returns after firing into PS
+    "runElevated", 0,          ; 1 = relaunch as administrator at startup
+                               ;   (set by tray > Run as administrator)
     "pacsApp", "PACS",         ; the Apps-tab profile "PACS: send keys" targets
     "pacsWindow", "VirtualMonitor", ; preferred window TITLE (substring) of that
                                ;   app: IntelliSpace's viewer, not its worklist.
@@ -494,6 +505,9 @@ global g_ProblemSeq := 0     ; monotonic change signal (Length stalls at cap)
 global g_PSBusy := false     ; a PSDrain loop is mid-delivery
 global g_PSQueue := []       ; pending PowerScribe deliveries, FIFO
 global g_PSGen := 0          ; panic bumps this; in-flight deliveries abort
+global g_PSLastHwnd := 0     ; the PS window that last held the foreground
+global g_FgEvHook := 0       ; SetWinEventHook handle (EVENT_SYSTEM_FOREGROUND)
+global g_FgEvCb := 0         ; its CallbackCreate pointer
 global g_PSDefer := 0        ; drain deferrals while the hand is on a button
 global g_CfgDirty := false     ; a debounced config save is pending
 global g_TestUI := 0           ; the input tester window's controls, while open
@@ -7440,6 +7454,362 @@ IsPSExe(exe) {
     return false
 }
 
+; ── WHICH POWERSCRIBE WINDOW, AND HOW TO GET IT IN FRONT (v0.7.4) ─────────
+; The bug "dictate and next/previous field only work when PowerScribe is
+; already in front" has come back more than once, and it worked on AJ's
+; station but not on colleagues'. Three things produce exactly that symptom
+; on one station and not on another. Each is handled here, because nobody
+; can tell from the symptom alone which one a given station has.
+;
+;  1. THE WRONG WINDOW. WinActivate("ahk_exe Nuance.PSOne.exe") raises the
+;     process's TOP window in Z-order. PowerScribe One owns several top-level
+;     windows: the report editor, and also a floating dictation/PowerMic bar,
+;     message and spelling pop-ups. An always-on-top bar is ALWAYS above the
+;     editor. On AJ's layout the editor came first. On a colleague's (bar
+;     floating, PS on another screen) it did not, so the bar was raised. It
+;     either ignored F4/Tab or refused the focus, and nothing landed.
+;     Fix: target the PS window that last HAD the foreground (tracked by a
+;     foreground WinEvent hook, which is nearly always the editor with the
+;     report field focused). Failing that, take the first window in Z-order
+;     that can really take the foreground, with bars and dialogs last.
+;     "Already in PS?" is still answered by exe (PSActive), so any PS window
+;     in front counts.
+;  2. THE FOREGROUND LOCK. The lock is lifted once at startup, but Windows
+;     refuses that call from a process that is not in front. A copy started
+;     from the Startup folder at login is not in front, so on those stations
+;     the lock stayed on. Fix: ForceForeground re-lifts it when it is needed,
+;     right after giving Windows an input event of our own. It then escalates
+;     from WinActivate to an AttachThreadInput SetForegroundWindow to
+;     SwitchToThisWindow.
+;  3. ELEVATION. When PACS or PS runs as administrator and RadMapper does
+;     not, Windows (UIPI) hides input from our hooks while that window is in
+;     front, and drops the keys we send into it. Nothing in the script can get
+;     around that, so the script now detects it and says so (Diagnostics and a
+;     toast), and the tray offers "Run as administrator", which is remembered
+;     for later launches.
+
+PSTrackStart() {
+    global g_FgEvHook, g_FgEvCb
+    if g_FgEvHook
+        return
+    ; OUT OF CONTEXT (flag 0): Windows posts the event to OUR queue and the
+    ; callback runs on the script thread the next time it pumps messages.
+    ; It never runs inside PowerScribe's process. The callback only records a
+    ; handle, so it does nothing that could wedge input.
+    g_FgEvCb := CallbackCreate(PSFgEvent, , 7)
+    g_FgEvHook := DllCall("SetWinEventHook", "UInt", 0x0003, "UInt", 0x0003,
+        "Ptr", 0, "Ptr", g_FgEvCb, "UInt", 0, "UInt", 0, "UInt", 0, "Ptr")
+    if !g_FgEvHook {
+        CallbackFree(g_FgEvCb)
+        g_FgEvCb := 0
+        Problem("ps-track", "foreground tracking unavailable; PowerScribe"
+            . " window is picked by Z-order only")
+    }
+    PSNoteForeground(DllCall("GetForegroundWindow", "Ptr"))
+}
+
+PSTrackStop() {
+    global g_FgEvHook, g_FgEvCb
+    if g_FgEvHook
+        try DllCall("UnhookWinEvent", "Ptr", g_FgEvHook)
+    if g_FgEvCb
+        try CallbackFree(g_FgEvCb)
+    g_FgEvHook := 0
+    g_FgEvCb := 0
+}
+
+PSFgEvent(hHook, event, hwnd, idObject, idChild, thread, time) {
+    if (idObject = 0)                        ; OBJID_WINDOW
+        try PSNoteForeground(hwnd)
+    return 0
+}
+
+; Remember hwnd if it is a PowerScribe MAIN window. A tool bar, a pop-up or
+; an owned dialog that took the foreground for a moment is not where the
+; next F4/Tab belongs, so it is not recorded.
+PSNoteForeground(hwnd) {
+    global g_PSLastHwnd
+    if !hwnd
+        return
+    exe := ""
+    try exe := WinGetProcessName("ahk_id " hwnd)
+    if (IsPSExe(exe) && PSWinRank(hwnd) = 2)
+        g_PSLastHwnd := hwnd
+}
+
+; How good a target is this window for a keystroke?
+;   0 = cannot take the foreground (hidden, disabled, WS_EX_NOACTIVATE)
+;   1 = can, but is a bar or a dialog (tool window, owned, untitled or
+;       tiny)
+;   2 = a main window. Always-on-top alone does not demote a window: some
+;       readers pin the PowerScribe editor on top, and a floating bar is
+;       caught by the tool-window or size test anyway.
+; Titles are read only to test for empty. They carry the patient's name, so
+; they are never logged.
+PSWinRank(hwnd) {
+    id := "ahk_id " hwnd
+    try {
+        st := WinGetStyle(id)
+        ex := WinGetExStyle(id)
+    } catch
+        return 0
+    if (!(st & 0x10000000) || (st & 0x08000000))   ; WS_VISIBLE / WS_DISABLED
+        return 0
+    if (ex & 0x08000000)                             ; WS_EX_NOACTIVATE
+        return 0
+    if (ex & 0x80)                                   ; WS_EX_TOOLWINDOW
+        return 1
+    if DllCall("GetWindow", "Ptr", hwnd, "UInt", 4, "Ptr")   ; GW_OWNER
+        return 1
+    try {
+        if (WinGetTitle(id) = "")
+            return 1
+        if (WinGetMinMax(id) != -1) {                ; a minimized window
+            WinGetPos(, , &w, &h, id)                ; is small on purpose
+            if (w < 200 || h < 150)
+                return 1
+        }
+    } catch
+        return 1
+    return 2
+}
+
+; The window a PowerScribe delivery should bring forward, or 0 if none.
+PSTargetHwnd() {
+    if (g_PSLastHwnd && WinExist("ahk_id " g_PSLastHwnd)) {
+        exe := ""
+        try exe := WinGetProcessName("ahk_id " g_PSLastHwnd)
+        if (IsPSExe(exe) && PSWinRank(g_PSLastHwnd) = 2)
+            return g_PSLastHwnd
+    }
+    best := 0
+    bestRank := 0
+    for exe in g_Cfg["psExes"] {
+        ids := []
+        try ids := WinGetList("ahk_exe " exe)     ; Z-order, top first
+        for id in ids {
+            r := PSWinRank(id)
+            if (r = 2)
+                return id
+            if (r > bestRank) {
+                best := id
+                bestRank := r
+            }
+        }
+    }
+    if best
+        return best
+    m := PSMatch()                               ; the pre-0.7.4 choice
+    return (m = "") ? 0 : WinExist(m)
+}
+
+; Bring hwnd to the front despite Windows' foreground lock. Each step is
+; tried only if the one before did not work. isThere() decides success, so
+; for PowerScribe any PS window in front counts: PS may hand the focus on to
+; the dialog the editor is waiting for, and that is still a success.
+; WinRestore is used only on a MINIMIZED window, because restoring a
+; maximized PowerScribe un-maximizes it.
+ForceForeground(hwnd, isThere) {
+    id := "ahk_id " hwnd
+    try {
+        if (WinGetMinMax(id) = -1)
+            WinRestore(id)
+    }
+    loop 3 {
+        switch A_Index {
+            case 1: try WinActivate(id)
+            case 2: ForegroundUnlockAndSet(hwnd)
+            case 3: try DllCall("SwitchToThisWindow", "Ptr", hwnd, "Int", 1)
+        }
+        t0 := A_TickCount
+        loop {
+            if isThere()
+                return true
+            if (A_TickCount - t0 >= 350)
+                break
+            Sleep(15)
+        }
+    }
+    return false
+}
+
+ForegroundUnlockAndSet(hwnd) {
+    ; Windows lets a process take the foreground if it produced the most
+    ; recent input event. A relative mouse move of zero is an input event
+    ; that changes nothing on screen.
+    inp := Buffer(A_PtrSize = 8 ? 40 : 28, 0)          ; INPUT, type 0 = mouse
+    NumPut("UInt", 0x0001, inp, A_PtrSize = 8 ? 20 : 16) ; MOUSEEVENTF_MOVE
+    try DllCall("SendInput", "UInt", 1, "Ptr", inp, "Int", inp.Size)
+    ; Now the lock can be lifted, even if Windows refused it at startup.
+    ; Cleanup still restores the value read at startup.
+    try DllCall("SystemParametersInfo", "UInt", 0x2001, "UInt", 0, "Ptr", 0,
+        "UInt", 0)
+    ; Then share input state with the current foreground thread for the
+    ; duration of the call.
+    me := DllCall("GetCurrentThreadId", "UInt")
+    fg := DllCall("GetForegroundWindow", "Ptr")
+    fgT := fg ? DllCall("GetWindowThreadProcessId", "Ptr", fg, "Ptr", 0,
+        "UInt") : 0
+    attached := false
+    if (fgT && fgT != me)
+        attached := DllCall("AttachThreadInput", "UInt", me, "UInt", fgT,
+            "Int", 1)
+    try {
+        DllCall("BringWindowToTop", "Ptr", hwnd)
+        DllCall("SetForegroundWindow", "Ptr", hwnd)
+    } finally {
+        if attached
+            DllCall("AttachThreadInput", "UInt", me, "UInt", fgT, "Int", 0)
+    }
+}
+
+; Is the process elevated (running as administrator)? 1 = yes, 0 = no,
+; -1 = cannot tell. If we can open the process but not its token, that is
+; in practice an elevated process of the same user, so it counts as 1.
+ProcElevated(pid) {
+    h := DllCall("OpenProcess", "UInt", 0x1000, "Int", 0, "UInt", pid, "Ptr")
+    if !h                                    ; PROCESS_QUERY_LIMITED_INFORMATION
+        return -1
+    tok := 0
+    try {
+        if !DllCall("advapi32\OpenProcessToken", "Ptr", h, "UInt", 0x0008,
+            "Ptr*", &tok)
+            return (A_LastError = 5) ? 1 : -1
+        el := 0
+        got := 0
+        if !DllCall("advapi32\GetTokenInformation", "Ptr", tok, "Int", 20,
+            "UInt*", &el, "UInt", 4, "UInt*", &got)   ; TokenElevation
+            return -1
+        return el ? 1 : 0
+    } finally {
+        if tok
+            DllCall("CloseHandle", "Ptr", tok)
+        DllCall("CloseHandle", "Ptr", h)
+    }
+}
+
+; Can this copy reach an elevated window? It can if it is elevated itself, or
+; if it was started with UI Access (AutoHotkey's "Run with UI Access").
+SelfReachesElevated() {
+    static uia := -1
+    if A_IsAdmin
+        return true
+    if (uia = -1) {
+        uia := 0
+        tok := 0
+        if DllCall("advapi32\OpenProcessToken", "Ptr",
+            DllCall("GetCurrentProcess", "Ptr"), "UInt", 0x0008, "Ptr*", &tok) {
+            v := 0
+            got := 0
+            if DllCall("advapi32\GetTokenInformation", "Ptr", tok, "Int", 26,
+                "UInt*", &v, "UInt", 4, "UInt*", &got)   ; TokenUIAccess
+                uia := v ? 1 : 0
+            DllCall("CloseHandle", "Ptr", tok)
+        }
+    }
+    return uia = 1
+}
+
+; Text to add to a "would not come forward" message when elevation explains
+; it. Empty when it does not.
+ElevationNote(hwnd) {
+    if SelfReachesElevated()
+        return ""
+    pid := 0
+    try pid := WinGetPID("ahk_id " hwnd)
+    if (pid && ProcElevated(pid) = 1)
+        return " -- it runs as administrator and RadMapper does not"
+            . " (tray > Run as administrator)"
+    return ""
+}
+
+; Called from HookFrontTick. When PowerScribe or PACS is in front and runs
+; elevated while we do not, say so once per program per session. While it
+; is in front the hooks receive nothing, so this timer is the only part of
+; the script that can notice.
+ElevationCheck(hwnd, exe) {
+    static warned := Map()
+    if (exe = "" || warned.Has(exe))
+        return
+    if !(IsPSExe(exe) || ImagingExes().Has(StrLower(exe)))
+        return
+    if SelfReachesElevated() {
+        warned[exe] := true
+        return
+    }
+    pid := 0
+    try pid := WinGetPID("ahk_id " hwnd)
+    if (!pid || ProcElevated(pid) != 1)
+        return
+    warned[exe] := true
+    Problem("elevated", exe " runs as administrator and RadMapper does not."
+        . " Windows blocks RadMapper's keys and buttons while it is in front."
+        . " Tray > Run as administrator fixes it (and is remembered).")
+    HUD(exe " runs as admin — RadMapper is blocked there. Tray ▸ Run as"
+        . " administrator", "warn")
+}
+
+; Tray > "Run as administrator". Starts an elevated copy, hands over and
+; exits. The choice is saved, so later launches elevate themselves (see
+; ElevateAtLaunch). If UAC is refused, nothing changes.
+RunElevated(*) {
+    ; Saved BEFORE the new copy starts, so it can never read the old value.
+    CfgSet("runElevated", 1)
+    try SaveCfg()
+    try {
+        Run('*RunAs "' A_AhkPath '" "' A_ScriptFullPath '" --handoff '
+            . DllCall("GetCurrentProcessId", "UInt"))
+    } catch as e {
+        CfgSet("runElevated", 0)
+        try SaveCfg()
+        Problem("elevate", "Run as administrator refused or failed: "
+            . e.Message)
+        HUD("Run as administrator was cancelled", "warn")
+        return
+    }
+    ExitApp(0)
+}
+
+; At launch: if this copy was handed over by another, wait for that copy to
+; exit so the single-copy guard sees a free mutex.
+HandoffWait() {
+    global g_FgLockSaved, g_FgLockLifted
+    for i, a in A_Args {
+        if !(a = "--handoff" && i < A_Args.Length && IsInteger(A_Args[i + 1]))
+            continue
+        try ProcessWaitClose(Integer(A_Args[i + 1]), 5)
+        ; The globals section read the foreground-lock value while the old
+        ; copy still had it lifted (0). The old copy has now put the user's
+        ; value back, so read it again, or our own exit would leave it at 0.
+        v := 0
+        if DllCall("SystemParametersInfo", "UInt", 0x2000, "UInt", 0,
+            "UInt*", &v, "UInt", 0)
+            g_FgLockSaved := v
+        g_FgLockLifted := DllCall("SystemParametersInfo", "UInt", 0x2001,
+            "UInt", 0, "Ptr", 0, "UInt", 0)
+    }
+}
+
+; At launch, after the config has loaded: a station that once chose "Run as
+; administrator" starts that way every time. Returns true if this copy should
+; exit because an elevated one is starting. A copy that was itself handed
+; over never relaunches, so a refused UAC prompt cannot loop.
+ElevateAtLaunch() {
+    if (Cfg("runElevated") != 1 || SelfReachesElevated())
+        return false
+    for a in A_Args {
+        if (a = "--handoff")
+            return false
+    }
+    try {
+        Run('*RunAs "' A_AhkPath '" "' A_ScriptFullPath '" --handoff '
+            . DllCall("GetCurrentProcessId", "UInt"))
+        return true
+    } catch {
+        return false                         ; UAC refused: run as we are
+    }
+}
+
 PSFire(keys) {
     RM_PSFire(keys)
 }
@@ -7621,23 +7991,19 @@ AppDeliverNow(appName, keys) {
         return
     }
     prev := WinExist("A")
-    try {
-        if (WinGetMinMax(win) = -1)              ; only when MINIMIZED
-            WinRestore(win)
-    }
-    try WinActivate(win)
-    if !WinWaitActive(win, , 0.5) {
-        try WinActivate(win)                     ; foreground lock: one retry
-        if !WinWaitActive(win, , 0.5) {
-            if (g_PSGen = gen && WinExist(win)) {
-                ; No ControlSend fallback: WPF drops posted keys, and a
-                ; modifier sent that way can stick in the active window.
-                Problem("app-blocked", appName " would not come forward;"
-                    . " keys not sent: " keys)
-                HUD(appName " would not come forward — press it again", "warn")
-            }
-            return
+    hwnd := WinExist(win)                    ; past the foreground lock, as
+    if (!hwnd || !ForceForeground(hwnd, () => WinActive(win))) {  ; PSDeliverNow
+        if (g_PSGen = gen && WinExist(win)) {
+            ; No ControlSend fallback: WPF drops posted keys, and a
+            ; modifier sent that way can stick in the active window.
+            why := hwnd ? ElevationNote(hwnd) : ""
+            Problem("app-blocked", appName " would not come forward" why
+                . "; keys not sent: " keys)
+            HUD(appName " would not come forward"
+                . (why != "" ? " (it runs as admin)" : " — press it again"),
+                "warn")
         }
+        return
     }
     if (g_PSGen != gen) {
         if prev
@@ -7772,31 +8138,28 @@ PSDeliverNow(keys) {
         PSSendAtomic(keys)
         return
     }
-    psWin := PSMatch()
-    if (psWin = "") {
+    ; The window that last had the foreground, not the first one in Z-order,
+    ; brought forward past the foreground lock. See "WHICH POWERSCRIBE
+    ; WINDOW" above PSFire.
+    target := PSTargetHwnd()
+    if !target {
         Problem("ps-missing", "PowerScribe window not found (check Settings > PS process names)")
         HUD("PowerScribe window not found - check Settings > PS process names")
         return
     }
     prev := WinExist("A")
-    try {
-        if (WinGetMinMax(psWin) = -1)            ; only when MINIMIZED -- never
-            WinRestore(psWin)                    ; WinRestore a maximized PS window
-    }                                            ; (that would un-maximize it)
-    try WinActivate(psWin)
-    if !WinWaitActive(psWin, , 0.5) {
-        try WinActivate(psWin)                   ; foreground lock: one retry
-        if !WinWaitActive(psWin, , 0.5) {
-            if (g_PSGen = gen && WinExist(psWin)) {
-                ; No ControlSend fallback: WPF drops posted keys, and a
-                ; modifier sent that way can stick in the active window.
-                Problem("ps-blocked", "PowerScribe would not come forward;"
-                    . " keys not sent: " keys)
-                HUD("PowerScribe would not come forward — press it again",
-                    "warn")
-            }
-            return
+    if !ForceForeground(target, PSActive) {
+        if (g_PSGen = gen && WinExist("ahk_id " target)) {
+            ; No ControlSend fallback: WPF drops posted keys, and a
+            ; modifier sent that way can stick in the active window.
+            why := ElevationNote(target)
+            Problem("ps-blocked", "PowerScribe would not come forward" why
+                . "; keys not sent: " keys)
+            HUD("PowerScribe would not come forward"
+                . (why != "" ? " (it runs as admin)" : " — press it again"),
+                "warn")
         }
+        return
     }
     if (g_PSGen != gen) {            ; panic fired while we were waiting: do
         if prev                      ; not send, just put focus back
@@ -7807,8 +8170,8 @@ PSDeliverNow(keys) {
     ; The thread is interruptible across the waits above: a click back into
     ; the viewer in that moment must not receive the keys.
     Critical "On"
-    ok := (g_PSGen = gen) && WinActive(psWin)
-    if ok
+    ok := (g_PSGen = gen) && PSActive()      ; any PS window: PS may hand the
+    if ok                                    ; focus on to its own dialog
         PSSendAtomic(keys)
     Critical "Off"
     if !ok {
@@ -7818,7 +8181,7 @@ PSDeliverNow(keys) {
     }
     if prev {
         Sleep(Cfg("psReturnDelay"))
-        if WinActive(psWin)                  ; not if the user has moved on
+        if PSActive()                        ; not if the user has moved on
             try WinActivate("ahk_id " prev)
     }
 }
@@ -8542,6 +8905,12 @@ HookFrontTick(*) {
         return
     exe := ""
     try exe := WinGetProcessName("ahk_id " fg)
+    ; Two jobs that also run when PACS is not in front. Record the PS window
+    ; in case the foreground event was missed, and warn about an elevated
+    ; PS/PACS (see "WHICH POWERSCRIBE WINDOW" above PSFire).
+    if IsPSExe(exe)
+        PSNoteForeground(fg)
+    ElevationCheck(fg, exe)
     if (exe = "" || !ImagingExes().Has(StrLower(exe))) {  ; the PACS program's
         lastHwnd := 0                                       ; exes, not one name
         lastNot := fg
@@ -9969,6 +10338,8 @@ BuildTray() {
         TrayTip("Diagnostics copied — paste them into a message", "RadMapper")))
     A_TrayMenu.Add("Enabled", (*) => ToggleEnabled())
     A_TrayMenu.Add("Panic release", (*) => PanicRelease())
+    if !A_IsAdmin                            ; for a PACS/PS that runs as
+        A_TrayMenu.Add("Run as administrator", RunElevated)   ; admin
     A_TrayMenu.Add()
     A_TrayMenu.Add("Reload script", (*) => Reload())
     A_TrayMenu.Add("Exit", (*) => ExitApp())
@@ -9981,6 +10352,7 @@ Cleanup(*) {
     SetTimer(Watchdog, 0)
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
+    PSTrackStop()
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard
     TeleportSignalStop()
@@ -9988,14 +10360,19 @@ Cleanup(*) {
     if g_CfgDirty
         SaveCfg()                            ; never drop a debounced slider value
     ForceReleaseActive()
-    ; Put the user's foreground-lock timeout back. It is a per-user Windows
-    ; setting, not ours to leave changed on a shared login. -1 = never read.
+    RestoreFgLock()
+    return 0
+}
+
+; Put the user's foreground-lock timeout back. It is a per-user Windows
+; setting, not ours to leave changed on a shared login. -1 = never read.
+RestoreFgLock() {
+    global g_FgLockSaved
     if (g_FgLockSaved >= 0) {
         try DllCall("SystemParametersInfo", "UInt", 0x2001,
             "UInt", g_FgLockSaved, "Ptr", 0, "UInt", 0)
         g_FgLockSaved := -1
     }
-    return 0
 }
 
 Init() {
@@ -10007,10 +10384,20 @@ Init() {
     ; already-registered callback rather than adding it twice) and does not
     ; depend on the bundle.
     OnError(RadUnhandledError, -1)
+    HandoffWait()                            ; "Run as administrator": let
+                                             ; the old copy exit first
     if !SingleCopyGuard()
         ExitApp(0)
     ResolveCfgPaths()                        ; must precede any config I/O
     LoadCfg()
+    if ElevateAtLaunch() {                   ; an elevated copy is starting.
+        RestoreFgLock()                      ; OnExit(Cleanup) is not
+        ExitApp(0)                           ; registered yet
+    }
+    if !g_FgLockLifted
+        Problem("fglock", "Windows kept its focus-steal lock at startup"
+            . " (normal when started at login); it is lifted again at each"
+            . " PowerScribe delivery")
     SyncLayoutGuard()                        ; a layout whose guard flag is
                                              ; set was armed BEFORE the last
                                              ; exit; arm it again now
@@ -10026,6 +10413,7 @@ Init() {
                                              ; could clear theirs mid-register
     MacKeysRegister()                        ; once, under its own HotIf
     SyncFollowFocus()
+    PSTrackStart()                           ; which PS window had the focus
     StationWatchStart()                      ; recognise the screens, place windows
     OnExit(Cleanup)
     SetTimer(Watchdog, 750)                  ; physical-state reconciliation
