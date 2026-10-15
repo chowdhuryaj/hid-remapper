@@ -8052,7 +8052,7 @@ IsMouseHotkey(hk) {
 SettingsHkOnce(fn, thisHk) {
     fn()
     if !InStr(thisHk, "&")
-        try KeyWait(RegExReplace(thisHk, "i)^[\^!+#<>*~$]+|\s+up$"))
+        try KeyWait(RegExReplace(thisHk, "i)^[\^!+#<>*~$]+|\s+up$"), "P")
 }
 
 ; The KEY equivalent of IsMouseHotkey (v0.3). "F13" (a Settings hotkey) and
@@ -8587,6 +8587,16 @@ PanicRelease() {
 ; TrayTip notification.
 Problem(kind, detail) {
     global g_Problems, g_ProblemSeq
+    ; the same problem again is counted, not re-announced: g_ProblemSeq is in
+    ; the settings window's rebuild signature, so a draw that logged one error
+    ; per frame rebuilt the window every tick and swallowed clicks (v0.7.3)
+    n := g_Problems.Length
+    if (n && g_Problems[n].kind = kind && g_Problems[n].detail = detail) {
+        g_Problems[n].time := FormatTime(, "HH:mm:ss")
+        g_Problems[n].repeats := (g_Problems[n].HasOwnProp("repeats")
+            ? g_Problems[n].repeats : 1) + 1
+        return
+    }
     g_Problems.Push({time: FormatTime(, "HH:mm:ss"), kind: kind, detail: detail})
     if (g_Problems.Length > 200)
         g_Problems.RemoveAt(1)
@@ -8843,7 +8853,8 @@ ProblemsCopy() {
         . "Copied: " FormatTime(, "yyyy-MM-dd HH:mm") "`r`n"
         . "----------------------------------------------------------`r`n"
     for p in g_Problems
-        txt .= p.time "  [" p.kind "]  " p.detail "`r`n"
+        txt .= p.time "  [" p.kind "]  " p.detail
+            . (p.HasOwnProp("repeats") ? "  (x" p.repeats ")" : "") "`r`n"
     if (g_Problems.Length = 0)
         txt .= "(no problems this session)`r`n"
     A_Clipboard := txt
@@ -15879,7 +15890,8 @@ Atlas.dlg := dlg
         i := g_Problems.Length
         while (i >= 1) {
             p := g_Problems[i]
-            rows.Push({cells: [p.time, p.kind, p.detail]})
+            rows.Push({cells: [p.time, p.kind, p.detail
+                . (p.HasOwnProp("repeats") ? "  (x" p.repeats ")" : "")]})
             i -= 1
         }
         Atlas.list := Lumi.List(x, y + 66, w, h - 162, rows,
@@ -17213,7 +17225,10 @@ Atlas.dlg := dlg
         ; gone, whatever took it.
         if IsObject(Atlas.dlg) {
             gone := true
-            try gone := WinExist("ahk_id " Atlas.dlg.hwnd) ? false : true
+            ; IsWindow, not WinExist: a dialog is HIDDEN while its owner
+            ; (the main window) is minimised, and WinExist ignores hidden
+            ; windows -- the dialog was dropped while still alive (v0.7.3)
+            try gone := !DllCall("user32\IsWindow", "ptr", Atlas.dlg.hwnd)
             if gone {
                 Atlas.Disown(Atlas.dlg)
                 Atlas.dlg := 0
@@ -25701,6 +25716,25 @@ Layer_WindowProc(hwnd, uMsg, wParam, lParam) {
     ; WM_MOUSEACTIVATE (0x0021) - Ensure mouse clicks are delivered immediately without OS delay
     if (uMsg == 0x0021) {
         return 1 ; MA_ACTIVATE = 1
+    }
+
+    ; WM_CLOSE (RadMapper, v0.7.3) -- Alt+F4, the taskbar's "Close window" or
+    ; the switcher's close must never let DefWindowProc DESTROY a layer: the
+    ; settings window then held a dead hwnd (blank, and the tray could not
+    ; bring it back), and it took its owned dialogs with it. Close means hide
+    ; the window, or close the dialog.
+    if (uMsg == 0x0010) {
+        try {
+            if (IsObject(Atlas.dlg) && hwnd = Atlas.dlg.hwnd) {
+                SetTimer(() => Atlas.CloseDlg(), -1)
+                return 0
+            }
+            if (IsObject(Atlas.lyr) && hwnd = Atlas.lyr.hwnd) {
+                SetTimer(() => Atlas.Hide(), -1)
+                return 0
+            }
+        }
+        return 0
     }
 
     ; WM_SETFOCUS (0x0007) - Layer window received focus
