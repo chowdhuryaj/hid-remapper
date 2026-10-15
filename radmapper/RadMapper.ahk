@@ -12081,6 +12081,27 @@ class Atlas {
     ; ── WINDOW ──────────────────────────────────────────────────────────────
 
     static Show() {
+        ; A window that Windows has destroyed under us (its owner died, a
+        ; failed draw) leaves a Layer object with a dead hwnd: showing it did
+        ; nothing, so the tray could never bring the settings back. Drop it
+        ; and build a fresh one, and say so in Diagnostics. (v0.7.3)
+        if IsObject(Atlas.lyr) {
+            alive := false
+            try alive := DllCall("user32\IsWindow", "ptr", Atlas.lyr.hwnd)
+            if !alive {
+                Problem("ui", "settings window was destroyed; rebuilt it")
+                try Atlas.Disown(Atlas.lyr)
+                if IsObject(Atlas.dlg) {
+                    try Atlas.Disown(Atlas.dlg)
+                    try Atlas.dlg.Dispose()
+                    Atlas.dlg := 0
+                    Atlas.dstate := 0
+                }
+                try Atlas.lyr.Dispose()
+                Atlas.lyr := 0
+                Atlas.list := 0
+            }
+        }
         if IsObject(Atlas.lyr) {
             Atlas.KeysOn(true)
             Atlas.keysParked := false
