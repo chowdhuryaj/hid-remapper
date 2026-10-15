@@ -11,6 +11,10 @@ slot marked **▽** still does what All programs or Base set, and says where
 from; **Override** gives it its own setting. **F13–F24** are always on the
 Keyboard page as caps, ready to map; **+ Add a key…** records any other key.
 The colours are Flask's Graphite theme.
+**Side panel guide** shows the Naga side panel as a 3×4 grid (1 = F13 …
+12 = F24) with what each key does in the program in front and your own icon
+per key. Bind "Show the side panel guide" to a button (hold = while held), or
+set a hotkey in Keyboard → Guide & icons….
 **Mac shortcuts** (Settings → Behaviour) makes Win+C/X/V/Z, Win+Shift+Z,
 Win+A/S/F act as Ctrl, for Mac habits or a keyboard whose ⌘ sends Win.
 **Monitor positions** (Home → Set monitor positions) puts your screens in desk

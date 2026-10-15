@@ -218,7 +218,7 @@ global ACT_CODES := ["keys", "keysrepeat", "text", "native", "stock", "dblclick"
     "clicklock", "appswitch",
     "layout",
     "winplace", "warp",
-    "macro", "run", "guiopen", "bypass", "pausetgl", "none"]
+    "macro", "run", "guiopen", "bypass", "pausetgl", "guide", "none"]
 global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Type text", "Act like another button", "Pass through — let the app's own binding run",
     "Double-click a button",
@@ -239,6 +239,7 @@ global ACT_LABELS := ["Send keys", "Send keys (auto-repeat while held)",
     "Open RadMapper settings",
     "Stand back: every other input native (hold = while held, tap = on / off)",
     "Toggle engine pause",
+    "Show the side panel guide (F13-F24 grid)",
     "Block it (this button does nothing at all)"]
 global ACT_HINTS := Map(
     "keys", "Use Rec to press a shortcut, or Keys to choose one. Typed syntax: ^z = Ctrl+Z; {F5} = F5.",
@@ -284,6 +285,8 @@ global ACT_HINTS := Map(
             . "the engine keeps running. Hold it: on while held. Tap it: on "
             . "until tapped again (or 2 minutes).",
     "pausetgl", "No value needed",
+    "guide", "No value needed. Tap: show / hide the F13-F24 side panel "
+            . "guide. Hold: show it while held.",
     "none", "Suppresses the input entirely")
 
 ; Settings keys retired in v0.3 along with the scroll engine, gestures and
@@ -360,6 +363,7 @@ global DEFAULTS := Map(
     ;   "~NumLock". Want the key back entirely? Set it to "".
     "teleportFlash", 1,
     "macShortcuts", 0,         ; v0.7.3: Win+C/X/V/Z... act as Ctrl (Mac habit)
+    "hkGuide", "",             ; v0.7.3: show / hide the side panel guide
     "focusFlash", 1,           ; ring pulse when the cursor lands somewhere
                                ;   new (follow-focus, window switch) -- the
                                ;   teleport ring without the monitor border        ; 1 = flash the monitor the cursor teleports to
@@ -1805,6 +1809,16 @@ NormalizeCfg(imported := false) {
         }
     }
     c["monitorOrder"] := mo
+    ; v0.7.3: side panel guide icons, key name -> emoji / text / file path
+    gi := Map()
+    gi.CaseSense := "Off"
+    if (MGet(c, "guideIcons", 0) is Map) {
+        for k, v in c["guideIcons"] {
+            if (Type(v) = "String" && Trim(v) != "")
+                gi[k] := Trim(v)
+        }
+    }
+    c["guideIcons"] := gi
     ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
     ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
     ; as "can no longer hold a layer" instead of migrating it. Idempotent.
@@ -3385,6 +3399,8 @@ OnPressHK(btn, *) {
     if g_GateClaim.Has(btn)
         g_GateClaim.Delete(btn)
     TestNotify(btn, 1)
+    if SideGuide.on
+        SideGuide.Pressed(btn)
     ; v0.6.2: while the keyboard pointer is up it owns every key. A bound key
     ; row is a hooked "*key" hotkey and would beat its InputHook to the key,
     ; so the row is bypassed here and the key handed over (and suppressed).
@@ -3745,7 +3761,7 @@ RepeatSafeAct(t) {
 ; native/moddrag/keysrepeat would lose their hold phase.
 StatefulHoldType(t) {
     return (t = "native" || t = "stock" || t = "moddrag" || t = "keysrepeat"
-        || t = "dragmove" || t = "bypass")
+        || t = "dragmove" || t = "bypass" || t = "guide")
 }
 
 HoldTimer(st, gen, *) {
@@ -4508,6 +4524,8 @@ ActionFire(binding, st, ctx := 0) {
                 Problem("run", "Could not start " v ": " e.Message)
         case "guiopen":
             ShowMain()
+        case "guide":
+            SetTimer(ObjBindMethod(SideGuide, "Toggle"), -1)   ; off the hook thread
         case "bypass":
             if IsWheel(MGet(binding, "button", "")) {
                 HUD("Pass-through belongs on a button or key, not the wheel", "warn")
@@ -4561,6 +4579,8 @@ ActionDown(binding, st, instant) {
             }
         case "bypass":
             BypassOn(IsObject(st) ? st.btn : "", true, LayerParts(binding))
+        case "guide":                            ; shown while held
+            SetTimer(ObjBindMethod(SideGuide, "Show", true), -1)
         case "dragmove":
             if IsObject(st)
                 st.dragOn := false           ; MovePoll sends the real down
@@ -4598,6 +4618,8 @@ ActionUp(binding, st) {
         case "bypass":
             if (IsObject(g_Bypass) && g_Bypass.mom)
                 BypassOff()
+        case "guide":
+            SetTimer(ObjBindMethod(SideGuide, "HideHeld"), -1)
         case "dragmove":
             if (IsObject(st) && st.dragOn)
                 SendNativeUp(st.passBtn != "" ? st.passBtn : st.btn)
@@ -8214,7 +8236,8 @@ RegisterKbHotkeys() {
         [Cfg("hkWinNext"),   (*) => WinPlace("next")],
         [Cfg("hkWinPrev"),   (*) => WinPlace("prev")],
         [Cfg("hkWinMax"),    (*) => WinPlace("max")],
-        [Cfg("hkWarp"),      (*) => Warp.Toggle()]]
+        [Cfg("hkWarp"),      (*) => Warp.Toggle()],
+        [Cfg("hkGuide"),     (*) => SideGuide.Toggle()]]
     bad := ""
     mouse := ""
     clash := ""
@@ -9940,6 +9963,7 @@ BuildTray() {
     A_TrayMenu.Delete()
     A_TrayMenu.Add("Settings…", (*) => ShowMain())
     A_TrayMenu.Add("Rendering self-test…", (*) => ShowGallery())
+    A_TrayMenu.Add("Side panel guide", (*) => SideGuide.Toggle())
     ; reachable when the window itself will not draw (v0.7.3)
     A_TrayMenu.Add("Copy diagnostics", (*) => (ProblemsCopy(),
         TrayTip("Diagnostics copied — paste them into a message", "RadMapper")))
@@ -12176,7 +12200,7 @@ class Atlas {
     static SIMPLE_ACTS := ["keys", "moddrag",
         "ps_dictate", "ps_next", "ps_prev",
         "ps_keys", "pacs_keys", "tele_prev", "tele_next",
-        "bypass", "none"]
+        "bypass", "guide", "none"]
     static ActView(code := "") {
         if Atlas.Advanced()
             return {labels: ACT_LABELS, codes: ACT_CODES}
@@ -14488,7 +14512,9 @@ class Atlas {
      */
     static KeyMap(x, y, ch, keys) {
         Lumi.Card(x, y - 10, 300, ch, "surface")
-        Lumi.Label(x + 16, y, 268, "F13 – F24", "section")
+        Lumi.Label(x + 16, y, 160, "F13 – F24", "section")
+        Lumi.Btn(x + 300 - 16 - 110, y - 4, 110, 24, "Guide & icons…",
+            (*) => Atlas.OpenDlg(() => Atlas.GuideDlg()), "flat")
         i := 0
         loop 12 {
             k := "F" (A_Index + 12)
@@ -17284,6 +17310,84 @@ class Atlas {
             . " is now a layer button — it has its own layer in the rail")
     }
 
+    ; ── SIDE PANEL GUIDE (v0.7.3) ────────────────────────────────────────────
+    ; One row per side-panel button: its number, its key, what it does in
+    ; the program picked in the rail, and its icon -- an emoji or a few
+    ; characters typed in, or an image / program file picked with File….
+
+    static GuideDlg() {
+        w := 700
+        h := 150 + 12 * 34 + 104
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     parent.y + Max((Atlas.H - h) // 2, 0), w, h,
+                     "RadMapperGuide", parent.hwnd)
+        dlg.TopMost(false)
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Lumi.Focus.Reset(dlg, true)
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, w - 48, "Side panel guide", "title")
+        Lumi.Para(24, 42, w - 48, 40,
+            "A grid of the Naga side panel — button 1 is F13, 12 is F24 — showing "
+            . "what each one does in the program in front. Give each an icon: "
+            . "an emoji or a few letters, or a picture / program file.", "mute")
+        Lumi.Rule(24, 88, w - 48)
+        app := Atlas.ScopeApp()
+        lay := Atlas.ScopeLayer()
+        Lumi.Label(24, 96, w - 48, "Actions shown for  " AppDisp(app) "  ›  "
+            . Atlas.LayerShort(lay) "   (the rail on the Keyboard page)", "mute", "left", 22)
+        icons := SideGuide.Icons()
+        y := 124
+        loop 12 {
+            k := "F" (A_Index + 12)
+            Lumi.Label(24, y, 28, String(A_Index), "title", "left", 30)
+            Lumi.Label(56, y, 44, k, "mono", "left", 30)
+            Lumi.Label(104, y, 250, Lumi.Elide(SideGuide.Describe(k, app, lay),
+                250, "body"), "body", "left", 30)
+            Lumi.Field(362, y, 230, 30, icons.Has(k) ? icons[k] : "",
+                SideGuide.IconCommit(k), "emoji, text or a file", false)
+            Lumi.Btn(600, y, 76, 30, "File…", Atlas.GuideFileGo(k), "ghost")
+            y += 34
+        }
+        y += 8
+        Atlas.HkRow(24, y, "Show / hide with", "hkGuide", 0, 0, "", 300)
+        Lumi.Btn(w - 24 - 110 - 8 - 120, h - 52, 120, 36, "Show it",
+            (*) => SideGuide.Toggle(), "accent")
+        Lumi.Btn(w - 24 - 110, h - 52, 110, 36, "Done",
+            (*) => Atlas.CloseDlg(), "primary")
+
+        Lumi.Focus.Restore()
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    static GuideFileGo(k) {
+        return (*) => Atlas.GuideFile(k)
+    }
+
+    static GuideFile(k) {
+        Lumi.EndEdit()
+        f := ""
+        try f := FileSelect(3, , "Icon for " k,
+            "Pictures and programs (*.png; *.jpg; *.bmp; *.gif; *.ico; *.exe; *.dll)")
+        if (f = "")
+            return
+        SideGuide.SetIcon(k, f)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.GuideDlg()), -1)
+    }
+
     ; ── MONITOR POSITIONS (v0.7.3) ──────────────────────────────────────────
     ; Number the screens the way they sit on the desk. A sketch of where
     ; Windows thinks they are, each labelled with ITS number in your order,
@@ -17810,6 +17914,265 @@ class Chooser {
 ;  lets the loupe photograph the screen underneath our own overlays without
 ;  hiding them first. Where it is not allowed, the overlays that intersect
 ;  the capture are hidden for the blink of a BitBlt.
+
+; ── §SG  SIDE PANEL GUIDE (v0.7.3) ──────────────────────────────────────────
+; GridCraft's grid (github.com/mrled/GridCraft), for the Naga V3's 12-button
+; side panel: three columns, four rows, button 1 = F13 ... 12 = F24, each
+; tile with its icon, its number and what it does in the program in front
+; (the same scores the engine uses). A guide, not a launcher: the keys do
+; what RadMapper already maps them to, and a pressed key's tile flashes.
+; Click-through, never activated, on the monitor under the pointer.
+class SideGuide {
+    static on := false
+    static held := false           ; shown by a held "guide" row
+    static lyr := 0
+    static sig := ""
+    static flashKey := ""
+    static bmps := Map()           ; icon string -> GdipBitmap (cached)
+    static tickFn := 0
+    static paintFn := 0
+    static COLS := 3
+    static ROWS := 4
+    static TILE := 108
+    static GAP := 10
+    static PAD := 16
+    static HEAD := 30
+
+    static Icons() {
+        gi := MGet(g_Cfg, "guideIcons", 0)
+        return (gi is Map) ? gi : Map()
+    }
+
+    static IconCommit(k) {
+        return (t) => SideGuide.SetIcon(k, t)
+    }
+
+    static SetIcon(k, v) {
+        gi := SideGuide.Icons()
+        if !(MGet(g_Cfg, "guideIcons", 0) is Map) {
+            gi := Map()
+            gi.CaseSense := "Off"
+            g_Cfg["guideIcons"] := gi
+        }
+        v := Trim(v)
+        if (v = "")
+            (gi.Has(k) && gi.Delete(k))
+        else
+            gi[k] := v
+        Atlas.SaveOrWarn()
+        if SideGuide.on {
+            SideGuide.sig := ""
+            SideGuide.PaintSoon()
+        }
+    }
+
+    /** What a key does here: its tap, and its hold when it has one. */
+    static Describe(k, app, lay) {
+        a := (app = "*") ? "" : app
+        ctx := {app: a, mods: "", held: (lay = "*") ? [] : [lay], win: 0,
+            layApp: a, layWin: 0}
+        return SideGuide.DescribeCtx(k, ctx)
+    }
+
+    static DescribeCtx(k, ctx) {
+        tap := 0, hold := 0
+        try tap := FindBindingFor(k, "tap", ctx)
+        try hold := FindBindingFor(k, "hold", ctx)
+        out := IsObject(tap) ? (IsInertRow(tap) ? "native" : DescribeAction(tap["action"])) : ""
+        if IsObject(hold)
+            out .= (out = "" ? "" : "  ·  hold: ")
+                . (IsInertRow(hold) ? "native" : DescribeAction(hold["action"]))
+        return (out = "") ? "—" : out
+    }
+
+    static Toggle(*) {
+        if SideGuide.on
+            SideGuide.Hide()
+        else
+            SideGuide.Show()
+    }
+
+    static Show(held := false, *) {
+        SideGuide.held := held
+        SideGuide.on := true
+        SideGuide.sig := ""
+        SideGuide.Paint()
+        if !IsObject(SideGuide.tickFn)
+            SideGuide.tickFn := ObjBindMethod(SideGuide, "Tick")
+        SetTimer(SideGuide.tickFn, 400)
+    }
+
+    /** A held guide row was released: hide only what the hold showed. */
+    static HideHeld(*) {
+        if (SideGuide.on && SideGuide.held)
+            SideGuide.Hide()
+    }
+
+    static Hide(*) {
+        SideGuide.on := false
+        SideGuide.held := false
+        if IsObject(SideGuide.tickFn)
+            SetTimer(SideGuide.tickFn, 0)
+        if IsObject(SideGuide.lyr) {
+            try g_PassThru.Delete(SideGuide.lyr.hwnd)
+            try SideGuide.lyr.Dispose()
+            SideGuide.lyr := 0
+        }
+    }
+
+    /** Called on the hook thread: record, paint later. Must stay tiny. */
+    static Pressed(btn) {
+        if !Atlas.IsFKeyExtra(btn)
+            return
+        SideGuide.flashKey := btn
+        SideGuide.sig := ""
+        SideGuide.PaintSoon()
+        SetTimer(ObjBindMethod(SideGuide, "Unflash", btn), -220)
+    }
+
+    static Unflash(btn, *) {
+        if (SideGuide.flashKey = btn) {
+            SideGuide.flashKey := ""
+            SideGuide.sig := ""
+            SideGuide.PaintSoon()
+        }
+    }
+
+    static PaintSoon() {
+        if !IsObject(SideGuide.paintFn)
+            SideGuide.paintFn := ObjBindMethod(SideGuide, "Paint")
+        SetTimer(SideGuide.paintFn, -1)
+    }
+
+    /** Repaint when the program in front, the layer or the config moved. */
+    static Tick(*) {
+        if !SideGuide.on
+            return
+        if (SideGuide.Sig() != SideGuide.sig)
+            SideGuide.Paint()
+    }
+
+    static Sig() {
+        return ActiveAppName() "|" CurrentLayerCode() "|" g_Cfg["bindings"].Length
+            . "|" ObjPtr(g_Cfg) "|" SideGuide.flashKey
+    }
+
+    static Bitmap(src) {
+        if SideGuide.bmps.Has(src)
+            return SideGuide.bmps[src]
+        bmp := 0
+        try {
+            if RegExMatch(src, "i)\.(exe|dll)$") {
+                hIcon := LoadPicture(src, "Icon1 w48 h48", &imgType)
+                if hIcon {
+                    bmp := GdipBitmap.FromHICON(hIcon)
+                    DllCall("DestroyIcon", "ptr", hIcon)
+                }
+            } else
+                bmp := GdipBitmap(src)
+            if (IsObject(bmp) && bmp.ptr && (bmp.w > 48 || bmp.h > 48))
+                bmp.Resize("w48 h48")
+        } catch as e {
+            Problem("guide", "icon '" src "' could not be loaded: " e.Message)
+            bmp := 0
+        }
+        if !(IsObject(bmp) && bmp.ptr)
+            bmp := 0
+        SideGuide.bmps[src] := bmp           ; a bad file is not retried
+        return bmp
+    }
+
+    static Paint(*) {
+        if !SideGuide.on
+            return
+        prev := LayerStack.ActiveLayer
+        try {
+            SideGuide.sig := SideGuide.Sig()
+            T := SideGuide.TILE, G := SideGuide.GAP, P := SideGuide.PAD
+            W := P * 2 + SideGuide.COLS * T + (SideGuide.COLS - 1) * G
+            H := P * 2 + SideGuide.HEAD + SideGuide.ROWS * T + (SideGuide.ROWS - 1) * G
+            if (IsObject(SideGuide.lyr)
+                && !DllCall("user32\IsWindow", "ptr", SideGuide.lyr.hwnd)) {
+                try g_PassThru.Delete(SideGuide.lyr.hwnd)
+                SideGuide.lyr := 0
+            }
+            if !IsObject(SideGuide.lyr) {
+                RM_GetPos(&mx, &my)
+                m := 0
+                for mm in StationMons() {
+                    if (mx >= mm.l && mx < mm.r && my >= mm.t && my < mm.b)
+                        m := mm
+                }
+                if !IsObject(m)
+                    m := {wl: 0, wt: 0, wr: A_ScreenWidth, wb: A_ScreenHeight}
+                L := Layer(m.wl + (m.wr - m.wl - W) // 2, m.wt + (m.wb - m.wt - H) // 2,
+                    W, H, "RadMapperSideGuide")
+                L.ClickThrough := true
+                L.NoActivate()
+                L.TopMost(true)
+                ; unowned: GpGFX owns a new layer to the first live one (often
+                ; a toast), and Windows destroys owned windows with it
+                DllCall(A_PtrSize = 8 ? "SetWindowLongPtrW" : "SetWindowLongW",
+                    "ptr", L.hwnd, "int", -8, "ptr", 0)
+                g_PassThru[L.hwnd] := 1
+                SideGuide.lyr := L
+            }
+            L := SideGuide.lyr
+            LayerStack.ActiveLayer := L
+            L.Clear()
+            RoundedRectangle(0, 0, W, H, 14, "0xF0121212", true)
+            RoundedRectangle(0, 0, W, H, 14, Lumi.C["hair"], false)
+            ctx := CurCtx("F13")             ; keys: the program in front
+            app := ctx.app
+            lay := CurrentLayerCode()
+            Text(P, P - 4, W - 2 * P, 24, "Side panel  ·  " (app = "" ? "all programs" : app)
+                . (lay = "*" ? "" : "  ·  " Atlas.LayerShort(lay)),
+                Lumi.C["inkDim"], Lumi.Size["small"], Lumi.Face).TextAlign("left", "middle")
+            icons := SideGuide.Icons()
+            loop 12 {
+                i := A_Index
+                k := "F" (i + 12)
+                tx := P + Mod(i - 1, SideGuide.COLS) * (T + G)
+                ty := P + SideGuide.HEAD + ((i - 1) // SideGuide.COLS) * (T + G)
+                desc := SideGuide.DescribeCtx(k, ctx)
+                flash := (SideGuide.flashKey = k)
+                bg := flash ? Lumi.C["accent"] : Lumi.C["raised"]
+                ink := flash ? Lumi.C["onAccent"] : Lumi.C["ink"]
+                RoundedRectangle(tx, ty, T, T, 8, bg, true)
+                RoundedRectangle(tx, ty, T, T, 8, (desc = "—") ? Lumi.C["hairSoft"]
+                    : flash ? Lumi.C["accent"] : Lumi.C["inkMute"], false)
+                ic := icons.Has(k) ? icons[k] : ""
+                if (ic != "" && RegExMatch(ic, "i)\.(png|jpe?g|bmp|gif|ico|exe|dll)$")) {
+                    bmp := SideGuide.Bitmap(ic)
+                    well := Rectangle(tx + (T - 48) // 2, ty + 10, 48, 48, bg, true)
+                    if IsObject(bmp) {
+                        cl := bmp.Clone()
+                        if IsObject(cl)
+                            try well.AddImage(cl, 100)
+                    }
+                } else if (ic != "") {
+                    Text(tx, ty + 6, T, 56, ic, ink, StrLen(ic) <= 2 ? 30 : 16,
+                        "Segoe UI Emoji").TextAlign("center", "middle")
+                }
+                Text(tx + 8, ty + T - 26, 30, 22, String(i), ink, 15,
+                    Lumi.Face).TextAlign("left", "middle")
+                Text(tx + T - 40, ty + 4, 36, 14, k, flash ? ink : Lumi.C["inkMute"],
+                    Lumi.Size["small"] - 2, Lumi.Mono).TextAlign("right", "middle")
+                Text(tx + 30, ty + T - 26, T - 36, 22,
+                    Lumi.Elide(desc, T - 36, "small"),
+                    flash ? ink : (desc = "—" ? Lumi.C["inkMute"] : Lumi.C["inkDim"]),
+                    Lumi.Size["small"], Lumi.Face).TextAlign("right", "middle")
+            }
+            Lumi.FullErase(L)
+            L.Draw()
+        } catch as e {
+            Problem("guide", "side panel guide failed to draw: " e.Message
+                . (e.HasProp("Line") ? " (line " e.Line ")" : ""))
+        }
+        if IsObject(prev)
+            LayerStack.ActiveLayer := prev
+    }
+}
 
 class Warp {
     static active := false

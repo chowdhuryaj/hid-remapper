@@ -18,6 +18,13 @@ History moved out of the script header in 0.7.2 (verbatim).
       Pointer left/right, "screen N", window next/prev and the keyboard
       pointer follow it (config "monitorOrder", by device name). Layouts
       keep Windows' geometry.
+    * SIDE PANEL GUIDE (after Hammerspoon's GridCraft): a 3x4 grid of the
+      Naga V3 side panel, button 1 = F13 ... 12 = F24, each tile with its
+      icon, number and what it does in the program in front; a pressed
+      key's tile flashes. Click-through, on the monitor under the pointer.
+      Open it with the "Show the side panel guide" action (tap toggles,
+      hold shows while held), a hotkey, or the tray. Icons per key (emoji,
+      text, or a .png/.ico/.exe file) in Keyboard > "Guide & icons…".
     * MAC SHORTCUTS (Settings > Behaviour): Win+C/X/V/Z, Win+Shift+Z
       (redo, sends Ctrl+Y), Win+A/S/F act as Ctrl. Off by default; stands
       down while paused, in pass-through and while recording.
