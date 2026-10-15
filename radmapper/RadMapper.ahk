@@ -12072,6 +12072,7 @@ class Atlas {
     static sel := "LButton"        ; selected input in the mouse map
     static keySel := ""            ; selected key in the Keyboard panel
     static keysParked := false     ; context keys off while minimised (Tick)
+    static building := false       ; a Build is mid-frame (re-entry defers)
     static appIdx := 1             ; program in the rail (both map pages)
     static layerIdx := 1           ; layer in the rail (both map pages)
     static list := 0               ; the active list view handle
@@ -13017,11 +13018,25 @@ class Atlas {
             if (age >= 0 && age < 12000)
                 return               ; a "drag" this long is a stuck button
         }
+        ; NEVER TWO AT ONCE (v0.7.3). A Build runs on whatever thread asked
+        ; for it -- a click, the 700 ms tick, a -1 timer after a dialog --
+        ; and AHK lets a timer thread interrupt a running one. A second Build
+        ; landing mid-frame cleared and rebuilt the layer, then the first
+        ; one resumed and added the REST of its frame on top: two frames in
+        ; one window, every label doubled and the program shown twice. The
+        ; interrupting call defers instead; Tick runs it as soon as this one
+        ; is done.
+        if Atlas.building {
+            Atlas.pending := true
+            Atlas.pendAt := A_TickCount
+            return
+        }
         Atlas.pending := false
         ; Any open option list belongs to the layout about to be destroyed.
         Lumi.CloseSelect()
         prevActive := LayerStack.ActiveLayer
         LayerStack.ActiveLayer := lyr
+        Atlas.building := true
         try {
             ; A pick made since the last frame outranks the old list's sel:
             ; the old list may belong to the input we have just navigated
@@ -13157,11 +13172,14 @@ class Atlas {
             Problem("ui", "frame build failed: " e.Message
                 . (e.HasProp("Line") ? " (line " e.Line ")" : ""))
         } finally {
+            Atlas.building := false
             ; A failed Clear, widget constructor or Draw must not leak the
             ; global construction target into the next dialog or timer.
             if (IsObject(prevActive) && !Lumi.Same(prevActive, lyr))
                 LayerStack.ActiveLayer := prevActive
         }
+        if Atlas.pending                     ; a Build that arrived meanwhile
+            SetTimer(() => Atlas.Build(), -1)
     }
 
     /**
