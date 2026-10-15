@@ -18,6 +18,12 @@ History moved out of the script header in 0.7.2 (verbatim).
       Pointer left/right, "screen N", window next/prev and the keyboard
       pointer follow it (config "monitorOrder", by device name). Layouts
       keep Windows' geometry.
+    * CONFIG LOAD: ResolveInputValue set CaseSense on a filled Map ("Map
+      must be empty") the first time it ran -- during load -- so a good
+      config was reported unreadable and restored from a backup (0.7.2
+      regression). check_source.py now guards the pattern. The monitor
+      dialog no longer fails on a float division; ui-event problems name
+      the handler and its call stack.
     * The settings window is never destroyed by Alt+F4 / taskbar Close
       (it hides); tray Settings rebuilds a destroyed one; tray "Copy
       diagnostics".

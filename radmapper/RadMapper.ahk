@@ -787,7 +787,12 @@ EventLabelOf(code) {
 ResolveInputValue(v) {
     static alias := ""
     if !IsObject(alias) {
-        alias := Map("lmb", "LButton", "left", "LButton", "leftclick", "LButton",
+        ; CaseSense must be set while the Map is EMPTY: setting it after
+        ; the pairs threw "Map must be empty" on the first call -- during
+        ; config load, which then reported the config unreadable (v0.7.3)
+        alias := Map()
+        alias.CaseSense := "Off"
+        alias.Set("lmb", "LButton", "left", "LButton", "leftclick", "LButton",
             "mouse1", "LButton", "button1", "LButton",
             "rmb", "RButton", "right", "RButton", "rightclick", "RButton",
             "mouse2", "RButton", "button2", "RButton",
@@ -797,7 +802,6 @@ ResolveInputValue(v) {
             "x2", "XButton2", "mouse5", "XButton2", "forward", "XButton2",
             "scrollup", "WheelUp", "scrolldown", "WheelDown",
             "tiltleft", "WheelLeft", "tiltright", "WheelRight")
-        alias.CaseSense := "Off"
     }
     v := NormalizeInputName(v)               ; "{RButton}" -> "RButton"
     if (v = "")
@@ -8685,6 +8689,18 @@ RadUiCall(callback, args*) {
     catch as e {
         detail := e.Message
         try detail .= " (line " e.Line ")"
+        ; WHICH handler: the line alone can point into GpGFX's wrapper
+        try detail .= " in " e.What
+        try {
+            st := ""
+            for ln in StrSplit(e.Stack, "`n", "`r") {
+                if (A_Index > 4 || Trim(ln) = "")
+                    break
+                st .= (st = "" ? "" : " < ") Trim(RegExReplace(ln, "^.*\\"))
+            }
+            if (st != "")
+                detail .= " [" st "]"
+        }
         try Problem("ui-event", detail)
         try OutputDebug("[RadMapper ui-event] " detail "`n")
     }
@@ -17257,8 +17273,9 @@ class Atlas {
                 maxR := Max(maxR, m.r), maxB := Max(maxB, m.b)
             }
             sc := Min((bw - 24) / Max(maxR - minL, 1), (bh - 24) / Max(maxB - minT, 1))
-            ox := bx + (bw - (maxR - minL) * sc) // 2
-            oy := by + (bh - (maxB - minT) * sc) // 2
+            ; sc is a float: // is integer-only in AHK v2 and threw
+            ox := bx + Floor((bw - (maxR - minL) * sc) / 2)
+            oy := by + Floor((bh - (maxB - minT) * sc) / 2)
             for m in mons {
                 rx := Round(ox + (m.l - minL) * sc) + 2
                 ry := Round(oy + (m.t - minT) * sc) + 2

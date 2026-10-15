@@ -22,4 +22,16 @@ for ink in ['ink', 'inkDim', 'inkMute']:
     for ground in ['abyss', 'surface', 'raised', 'raised2', 'sunk']:
         a,b = sorted([luminance(tokens[ink]),luminance(tokens[ground])])
         assert (b+.05)/(a+.05) >= 4.5, (ink, ground)
-print('PASS: UI member references, "0" labels draw, case-insensitive collisions, timer identity, 15 text/background contrast pairs')
+# CaseSense can only be set on an EMPTY Map ("Map must be empty" at runtime).
+lines = s.split('\n')
+for i, l in enumerate(lines):
+    m = re.search(r'(\w+)\.CaseSense\s*:=', l)
+    if not m:
+        continue
+    for j in range(i - 1, max(i - 30, 0), -1):
+        a = re.search(r'\b' + re.escape(m.group(1)) + r'\s*:=\s*(.*)', lines[j])
+        if a:
+            assert re.match(r'(Map\(\s*\)|IMap\(\)|0\b|"")', a.group(1).strip()), \
+                ('CaseSense on a non-empty Map', i + 1)
+            break
+print('PASS: UI member references, "0" labels draw, case-insensitive collisions, timer identity, 15 text/background contrast pairs, CaseSense on empty Maps')
