@@ -34,4 +34,29 @@ for i, l in enumerate(lines):
             assert re.match(r'(Map\(\s*\)|IMap\(\)|0\b|"")', a.group(1).strip()), \
                 ('CaseSense on a non-empty Map', i + 1)
             break
-print('PASS: UI member references, "0" labels draw, case-insensitive collisions, timer identity, 15 text/background contrast pairs, CaseSense on empty Maps')
+# Member names are case-insensitive in AHK v2: a method and a property that
+# differ only in case collide ("Property is read-only" at load). Every app
+# class is checked at class-body depth (braces matched, strings stripped).
+def class_body(src, name):
+    i = src.index('class ' + name + ' ')
+    i = src.index('{', i) + 1
+    depth, j = 1, i
+    while depth:
+        c = src[j]
+        if c == '"':
+            j = src.index('"', j + 1)
+        elif c == ';' and src[j-1] in ' \t\n':
+            j = src.index('\n', j)
+            continue
+        elif c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+        j += 1
+    return src[i:j-1]
+app = s[:s.index('class GpGFX {')]
+for cname in re.findall(r'^class (\w+)', app, re.M):
+    members = re.findall(r'^    (?:static )?(\w+)\s*(?:\(|:=)', class_body(app, cname), re.M)
+    dup = [n for n, k in Counter(m.lower() for m in members).items() if k > 1]
+    assert not dup, (cname, dup)
+print('PASS: UI member references, "0" labels draw, case-insensitive collisions, timer identity, 15 text/background contrast pairs, CaseSense on empty Maps, member-name collisions in every app class')

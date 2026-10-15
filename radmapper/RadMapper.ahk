@@ -18048,11 +18048,11 @@ class SideGuide {
     static Tick(*) {
         if !SideGuide.on
             return
-        if (SideGuide.Sig() != SideGuide.sig)
+        if (SideGuide.SigNow() != SideGuide.sig)
             SideGuide.Paint()
     }
 
-    static Sig() {
+    static SigNow() {
         return ActiveAppName() "|" CurrentLayerCode() "|" g_Cfg["bindings"].Length
             . "|" ObjPtr(g_Cfg) "|" SideGuide.flashKey
     }
@@ -18087,7 +18087,7 @@ class SideGuide {
             return
         prev := LayerStack.ActiveLayer
         try {
-            SideGuide.sig := SideGuide.Sig()
+            SideGuide.sig := SideGuide.SigNow()
             T := SideGuide.TILE, G := SideGuide.GAP, P := SideGuide.PAD
             W := P * 2 + SideGuide.COLS * T + (SideGuide.COLS - 1) * G
             H := P * 2 + SideGuide.HEAD + SideGuide.ROWS * T + (SideGuide.ROWS - 1) * G
