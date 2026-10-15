@@ -150,6 +150,9 @@ global RETIRED_EVENTS := ["double", "triple", "taphold"]
 ; a stranded assignment lower in the file never runs before Init (auto-exec is
 ; top-to-bottom, RM_TEST hides this because it skips Init).
 global LAYER_BASE_LABEL := "Base (no button held)"
+; v0.7.3: one name for the global scope everywhere it is shown ("Global
+; (all apps)", "App", "profile" and "Everywhere" were four).
+global ALL_PROGRAMS := "All programs"
 ; The DEFAULT layer hosts: the two thumb buttons and CapsLock (it types
 ; nothing, so holding it is free). v0.7.2: the live list is the config's
 ; "layerHosts" (LayerHosts()), editable from the Mouse/Keyboard tab strip, so
@@ -898,11 +901,11 @@ InputValueChoices(atype, cur := "") {
 
 ; "*" is stored in the config; the GUI shows it as an explicit Global label.
 AppDisp(code) {
-    return (code = "*") ? "Global (all apps)" : code
+    return (code = "*") ? ALL_PROGRAMS : code
 }
 
 AppCodeFromDisp(label) {
-    return (label = "Global (all apps)") ? "*" : label
+    return (label = ALL_PROGRAMS || label = "Global (all apps)") ? "*" : label
 }
 
 ; Lookups run several times per input event: case-insensitive Maps, built
@@ -1484,6 +1487,12 @@ CurrentLayerDisp() {
             parts .= (parts = "" ? "" : "/") name
     }
     return parts = "" ? "Base" : parts
+}
+
+; The same, as a layer code: "*" when nothing holds a layer.
+CurrentLayerCode() {
+    d := CurrentLayerDisp()
+    return (d = "Base") ? "*" : d
 }
 
 ; True if a layer-path code names btn as one of its held components (used by
@@ -2552,7 +2561,7 @@ ParkNow() {
     }
     pk := ParkOf(name)
     if !IsObject(pk) {
-        HUD("No park spot for " name " — set one in the Apps tab", "warn")
+        HUD("No park spot for " name " — set one on the Programs page", "warn")
         return
     }
     DllCall("SetCursorPos", "int", pk.x, "int", pk.y)
@@ -7428,8 +7437,8 @@ AppDeliverNow(appName, keys) {
     cr := AppCrits(appName, prefer)
     crits := cr.all
     if (crits.Length = 0) {
-        Problem("app-missing", "No '" appName "' profile on the Apps tab")
-        HUD("No " appName " profile on the Apps tab", "warn")
+        Problem("app-missing", "No '" appName "' program on the Programs page")
+        HUD("No " appName " program on the Programs page", "warn")
         return
     }
     ; Already-active fast path. When a preferred window title exists, ONLY the
@@ -8961,7 +8970,7 @@ AtlasRefresh() {
 }
 
 AppChoices() {
-    out := ["Global (all apps)"]
+    out := [ALL_PROGRAMS]
     for app in g_Cfg["apps"]
         out.Push(app["name"])
     return out
@@ -9565,8 +9574,8 @@ AppDlg(editRow) {
 
 AppOk(dlg, editRow, edName, edMatch) {
     name := Trim(edName.Value)
-    if (name = "" || name = "*" || name = "Global (all apps)") {
-        MsgBox("Enter a profile name (not * or the reserved Global label).", "RadMapper", "Iconx Owner" . dlg.Hwnd)
+    if (name = "" || name = "*" || AppCodeFromDisp(name) = "*") {
+        MsgBox("Enter a program name (not * or \"" ALL_PROGRAMS "\").", "RadMapper", "Iconx Owner" . dlg.Hwnd)
         return
     }
     matches := []
@@ -9583,7 +9592,7 @@ AppOk(dlg, editRow, edName, edMatch) {
     ; deleting either rewrote the rows of both.
     for i, other in g_Cfg["apps"] {
         if (i != editRow && MGet(other, "name", "") = name) {
-            MsgBox("There is already a profile called '" name "'.", "RadMapper",
+            MsgBox("There is already a program called '" name "'.", "RadMapper",
                 "Iconx Owner" . dlg.Hwnd)
             return
         }
@@ -9607,6 +9616,8 @@ AppOk(dlg, editRow, edName, edMatch) {
         app["name"] := name
         app["match"] := matches
         g_Cfg["apps"].Push(app)
+        ; the rail edits the program just added (AppChoices: All first)
+        try Atlas.appIdx := g_Cfg["apps"].Length + 1
     }
     SaveCfg()
     AfterCfgChange()
@@ -9627,14 +9638,14 @@ AppDelete(row) {
     if (used > 0) {
         ; Default: its settings go WITH it. Made global, a PACS "keys r"
         ; thumb row would start typing into PowerScribe.
-        ans := MsgBox("Delete profile '" name "'?`n`nIt has " used " setting(s)."
+        ans := MsgBox("Delete program '" name "'?`n`nIt has " used " setting(s)."
             . "`n`nYes = delete them too (recommended)"
             . "`nNo = keep them, working in every program"
-            . "`nCancel = keep the profile", "RadMapper", "YesNoCancel Icon? Default1")
+            . "`nCancel = keep the program", "RadMapper", "YesNoCancel Icon? Default1")
         if (ans = "Cancel")
             return
         toGlobal := (ans = "No")
-    } else if (MsgBox("Delete profile '" name "'?", "RadMapper", "YesNo Icon?") != "Yes")
+    } else if (MsgBox("Delete program '" name "'?", "RadMapper", "YesNo Icon?") != "Yes")
         return
     ; Moving a row to Global must not shadow an existing global row on the
     ; same key, and a left/right/middle hold cannot be global at all.
@@ -9662,13 +9673,10 @@ AppDelete(row) {
     ; then profiles): keep them on the same program, or Global if it went.
     if IsSet(Atlas) {
         pos := row + 1
-        for prop in ["appIdx", "kbAppIdx"] {
-            v := Atlas.%prop%
-            if (v = pos)
-                Atlas.%prop% := 1
-            else if (v > pos)
-                Atlas.%prop% := v - 1
-        }
+        if (Atlas.appIdx = pos)
+            Atlas.appIdx := 1
+        else if (Atlas.appIdx > pos)
+            Atlas.appIdx -= 1
         Atlas.selWant := 0
     }
     if dropped
@@ -9871,49 +9879,50 @@ class Lumi {
     ; ── TOKENS ──────────────────────────────────────────────────────────────
     ; Colours are ARGB strings, the form GpGFX's Color() parses natively.
 
-    ; THREE HUES, one ground. Neon hot pink, bright olive green, neon cyan,
-    ; sitting on the Dracula obsidian. Nothing else -- no amber, no violet,
-    ; no teal. Every accent below is one of the three or a tint of it, which
-    ; is what makes a three-colour scheme read as deliberate instead of as a
-    ; palette that ran out.
+    ; GRAPHITE (v0.7.3), the Totem-Flask configurator's default theme, so
+    ; the two tools read as one family. Neutral greys, one lime accent for
+    ; identity and selection, green for state, blue for information and
+    ; layers, amber for warnings and holds. The token NAMES are the old ones
+    ; ("magenta" is the accent, "jade" the state hue, "cyan" the info hue)
+    ; so no call site had to change; new code uses the role names below.
     static C := Map(
-        ; ground (Dracula, deepened) -- unchanged
-        "abyss",    "0xFF15161F",   ; window ground, behind everything
-        "surface",  "0xFF1E1F2B",   ; panel / card
-        "raised",   "0xFF282A36",   ; Dracula bg -- rows, fields, tracks
-        "raised2",  "0xFF343746",   ; hover, selected row
-        "sunk",     "0xFF121319",   ; wells, list background
+        ; ground
+        "abyss",    "0xFF121212",   ; window ground, behind everything
+        "surface",  "0xFF1B1B1D",   ; panel / card
+        "raised",   "0xFF242427",   ; rows, fields, tracks
+        "raised2",  "0xFF2E2E32",   ; hover, selected row
+        "sunk",     "0xFF0F0F10",   ; wells, list background
         ; structure
-        "hair",     "0xFF3B3E52",   ; hairline rules, card borders
-        "hairSoft", "0xFF2A2C3A",   ; grid lines, dividers inside a card
+        "hair",     "0xFF3A3A40",   ; hairline rules, card borders
+        "hairSoft", "0xFF2B2B2F",   ; grid lines, dividers inside a card
         ; ink
-        "ink",      "0xFFF2F3F8",   ; primary text
-        "inkDim",   "0xFFA6ACC8",   ; secondary text
-        "inkMute",  "0xFF9A9FBE",   ; placeholders, disabled, helper text:
-                                    ; >= 4.5:1 on every ground (4.54 on
-                                    ; raised2) and still one step dimmer
-                                    ; than inkDim, so the hierarchy holds
-        ; ── NEON HOT PINK -- identity, selection, alarm ──────────────────
-        "magenta",  "0xFFFF6FB5",   ; the signature hue
-        "pink",     "0xFFFF9BCB",   ; lighter tint: warnings, soft accents
-        "violet",   "0xFFFF2D95",   ; selection accent (kept as a name so
-                                    ; call sites read the same)
-        "latch",    "0xFFFF2D95",   ; a click lock is pink and unmissable
-        "warn",     "0xFFFF6FB5",
-        "danger",   "0xFFFF1B6B",   ; deeper, redder pink: destructive only.
-                                    ; BORDER AND FILL ONLY -- at 3.8:1 on
-                                    ; `raised` it is not readable as text
-        "dangerInk", "0xFFFF7FA8",  ; the same signal, light enough to READ:
-                                    ; 6.0:1 on raised, 5.0:1 on raised2
-        ; ── BRIGHT OLIVE GREEN -- state: running, engaged, filled ────────
-        "jade",     "0xFFBCD62B",   ; the state hue
-        "teal",     "0xFF8FA61E",   ; deeper olive: gradient floor
-        "seafoam",  "0xFFDCEB5A",   ; pale olive: gradient ceiling, knobs
-        "ok",       "0xFFBCD62B",
-        ; ── NEON CYAN -- information, focus, hover ───────────────────────
-        "cyan",     "0xFF00E9FF",
-        "cyanSoft", "0xFF7DF3FF",
-        "sunset",   "0xFFFF6FB5")
+        "ink",      "0xFFF1F1EE",   ; primary text
+        "inkDim",   "0xFFA9A9A3",   ; secondary text
+        "inkMute",  "0xFF9A9A94",   ; placeholders, helper text: >= 4.5:1
+                                    ; on raised2, one step under inkDim
+        ; ── LIME -- identity, selection, the primary action ──────────────
+        "magenta",  "0xFFD7F46C",   ; the accent (dark ink on it: onAccent)
+        "pink",     "0xFFE6F9A0",   ; lighter tint: hover of the accent
+        "violet",   "0xFFD7F46C",   ; selection accent
+        "latch",    "0xFFF5B86B",   ; a click lock is amber and unmissable
+        "warn",     "0xFFF5B86B",
+        "danger",   "0xFFF1857C",   ; destructive: border and fill
+        "dangerInk", "0xFFF1857C",  ; 6.4:1 on raised
+        ; ── GREEN -- state: running, engaged, assigned ───────────────────
+        "jade",     "0xFF7FD69A",
+        "teal",     "0xFF4FA86C",   ; deeper green: toggle track
+        "seafoam",  "0xFFB5ECC4",   ; pale green: knobs
+        "ok",       "0xFF7FD69A",
+        ; ── BLUE -- information, focus, hover, layers ────────────────────
+        "cyan",     "0xFF7AA7FF",
+        "cyanSoft", "0xFFA9C6FF",
+        "sunset",   "0xFFF5B86B",
+        ; role names (v0.7.3)
+        "accent",   "0xFFD7F46C",
+        "accentBg", "0xFF2B3314",   ; a selected thing's fill
+        "onAccent", "0xFF1A1F05",   ; ink on an accent fill
+        "layer",    "0xFF7AA7FF",   ; layers, as Flask colours them
+        "hold",     "0xFFF5B86B")   ; holds and modifiers
 
     static Face := "Segoe UI"
     static Mono := "Consolas"
@@ -9939,10 +9948,8 @@ class Lumi {
 
     ; one spacing scale, no in-between values
     static SP  := Map("xs", 4, "sm", 8, "md", 12, "lg", 16, "xl", 24, "xxl", 32)
-    ; Small radii on purpose. 14 px corners on every surface is the house
-    ; style of every dashboard template on the internet; 3-4 px reads as an
-    ; instrument panel and lets the hairlines do the work of separating things.
-    static RAD := Map("card", 4, "row", 3, "field", 3, "chip", 2)
+    ; v0.7.3: Flask's rounder geometry (cards 12, rows and fields 8).
+    static RAD := Map("card", 12, "row", 8, "field", 8, "chip", 2)
     ; toast duration raised 1600 -> 2600 ms: a reading-position or wheel
     ; confirmation needs longer than a click acknowledgement to actually read.
     static MS  := Map("hover", 140, "panel", 220, "toast", 2600)
@@ -10527,6 +10534,12 @@ class Lumi {
                 Text(x, y, w, h, label, Lumi.C["dangerInk"], Lumi.Size["body"],
                     Lumi.Face).TextAlign("center", "middle")
                 hit.Hover(Lumi.C["raised2"], Lumi.C["raised"])
+            case "flat":
+                ; Flask's unselected tab: no border, quiet label, a fill
+                ; only on hover. The ground fill is what takes the click.
+                hit := RoundedRectangle(x, y, w, h, r, Lumi.C["abyss"], true)
+                Lumi.Label(x, y, w, label, "dim", "center", h)
+                hit.Hover(Lumi.C["raised2"], Lumi.C["abyss"])
             case "muted":
                 ; Nothing is selected, so this button has nothing to act on.
                 ; Shown, not hidden: the row of actions keeps its shape and
@@ -11661,7 +11674,7 @@ class Lumi {
             (t) => Lumi.GalleryNote("Field committed: " t, "jade"),
             "click and type...")
         Lumi.Select(256, 442, 200, 32,
-            ["Global (all apps)", "PACS", "PowerScribe"], 2,
+            [ALL_PROGRAMS, "PACS", "PowerScribe"], 2,
             (i, t) => Lumi.GalleryNote("Select -> " t, "violet"))
         Lumi.Field(470, 442, 160, 32, "Numpad1", 0, "", true)
 
@@ -11850,16 +11863,16 @@ class Atlas {
     static maxed := false
     static restore := 0            ; pre-maximise rect
     static resizing := false
-    static NAVW := 188
-    static HEADH := 64
+    static NAVW := 188             ; the Program / Layer rail (Mouse, Keyboard)
+    static HEADH := 52             ; title bar
+    static TABH := 44              ; the page tabs under it (v0.7.3)
 
     static lyr := 0                ; main window layer
     static panel := 1              ; active panel index
     static sel := "LButton"        ; selected input in the mouse map
     static keySel := ""            ; selected key in the Keyboard panel
-    static kbAppIdx := 1           ; Keyboard panel App scope
-    static appIdx := 1             ; App scope selector
-    static layerIdx := 1           ; Layer scope selector
+    static appIdx := 1             ; program in the rail (both map pages)
+    static layerIdx := 1           ; layer in the rail (both map pages)
     static list := 0               ; the active list view handle
     static rowRefs := []           ; list row -> g_Cfg["bindings"] index
     static ticking := false
@@ -11886,9 +11899,10 @@ class Atlas {
     ; SIMPLE MODE hides the pages a first-week user never needs. Nothing is
     ; removed: the pages, their config and every action still exist, and one
     ; switch on Home brings them back. Index semantics are unchanged --
-    ; hidden entries keep their slot in PANELS; the rail just skips them.
-    static HIDDEN := Map("Macros", 1, "Apps", 1, "Windows", 1,
-                         "Pointer", 1)
+    ; hidden entries keep their slot in PANELS; the tabs just skip them.
+    ; v0.7.3: Programs (Apps) shows in Simple mode -- the rail lists the
+    ; programs, so the page that adds, edits and deletes them must exist.
+    static HIDDEN := Map("Macros", 1, "Windows", 1, "Pointer", 1)
     static Advanced() => Cfg("uiAdvanced") ? true : false
     static PanelHidden(name) => !Atlas.Advanced() && Atlas.HIDDEN.Has(name)
     static SetAdvanced(v) {
@@ -12615,7 +12629,7 @@ class Atlas {
         ; asks for a precision nobody should have to produce on a workstation.
         Rectangle(w - 14, Atlas.HEADH + 8, 14, h - Atlas.HEADH - 40,
             Lumi.C["abyss"], true).OnEvent("LeftMouseDown", rightFn)
-        Rectangle(Atlas.NAVW + 8, h - 14, w - Atlas.NAVW - 40, 14,
+        Rectangle(8, h - 14, w - 48, 14,
             Lumi.C["abyss"], true).OnEvent("LeftMouseDown", bottomFn)
 
         ; The corner itself, visible on purpose, and a 26 px target.
@@ -12693,7 +12707,7 @@ class Atlas {
      *
      * Almost every panel handler calls Build() SYNCHRONOUSLY, from inside a
      * GpGFX shape's click handler -- NavGo/Go, PickZone, PickKeyTile,
-     * SetApp, SetLayer, SetKbApp, SetKbLayer, ToggleEngine. Build() calls
+     * SetApp, SetLayer, ToggleEngine. Build() calls
      * lyr.Clear(), which disposes every shape on the layer, and the shape
      * whose handler is running is one of them. GpGFX then returns from the
      * dispatch loop into an object that no longer exists. Whether that is
@@ -12805,7 +12819,9 @@ class Atlas {
             Problem("ui", "header failed: " e.Message)
         }
         try {
-            Atlas.Nav()
+            Atlas.Tabs()
+            if Atlas.HasRail()
+                Atlas.Rail()
         } catch as e {
             Problem("ui", "nav failed: " e.Message)
         }
@@ -12815,10 +12831,12 @@ class Atlas {
             Problem("ui", "status failed: " e.Message)
         }
 
-        px := Atlas.NAVW + Lumi.SP["xl"]
-        py := Atlas.HEADH + Lumi.SP["lg"]
+        ; Pages without the rail (everything but the two maps) take the full
+        ; width, as Flask's non-keymap screens do.
+        px := (Atlas.HasRail() ? Atlas.NAVW : 0) + Lumi.SP["xl"]
+        py := Atlas.HEADH + Atlas.TABH + Lumi.SP["md"]
         pw := w - px - Lumi.SP["xl"]
-        ph := h - py - 56
+        ph := h - py - 46
 
         ; A panel that throws used to take the whole window with it. Build()
         ; runs from a 700 ms timer, and an uncaught error in a timer thread
@@ -12928,8 +12946,8 @@ class Atlas {
         Lumi.Rule(0, Atlas.HEADH, w, Lumi.C["hair"])
         ; No tagline. "reading-room input engine" under the wordmark was
         ; marketing copy in a tool the user already opened on purpose.
-        Lumi.Label(Lumi.SP["xl"], 20, 260, "RadMapper", "title")
-        Lumi.Label(Lumi.SP["xl"] + 108, 20, 120, "v" RM_VERSION, "mute", "left", 24)
+        Lumi.Label(Lumi.SP["xl"], 14, 260, "RadMapper", "title", "left", 24)
+        Lumi.Label(Lumi.SP["xl"] + 108, 14, 120, "v" RM_VERSION, "mute", "left", 24)
 
         ; live state chips, right-aligned
         ; One status line, right-aligned, in reading order: engine, app, and
@@ -12940,21 +12958,21 @@ class Atlas {
         cx := w - 166                    ; clear of four window buttons now
         if IsObject(g_Bypass) {
             cx -= 132
-            Lumi.Chip(cx, 20, 128, 24, "pass-through", "warn")
+            Lumi.Chip(cx, 14, 128, 24, "pass-through", "warn")
         }
         if IsObject(g_ClickLock) {
             cx -= 132
-            Lumi.Chip(cx, 20, 128, 24,
+            Lumi.Chip(cx, 14, 128, 24,
                 "lock " InputLabel(g_ClickLock.held), "magenta")
         }
         app := ActiveAppName()
         if (app != "") {
             cw := Max(StrLen(app) * 7 + 20, 70)
             cx -= (cw + 14)
-            Lumi.Chip(cx, 20, cw, 24, app, "cyan")
+            Lumi.Chip(cx, 14, cw, 24, app, "cyan")
         }
         cx -= 96
-        Lumi.Chip(cx, 20, 92, 24, g_Enabled ? "running" : "paused",
+        Lumi.Chip(cx, 14, 92, 24, g_Enabled ? "running" : "paused",
             g_Enabled ? "jade" : "warn")
 
         ; Window controls. This is a borderless layer, so it owns its chrome
@@ -13036,61 +13054,197 @@ class Atlas {
         }
     }
 
-    static Nav() {
-        Rectangle(0, Atlas.HEADH, Atlas.NAVW, Atlas.H - Atlas.HEADH,
-            Lumi.C["surface"], true)
-        Line(Atlas.NAVW, Atlas.HEADH, Atlas.NAVW, Atlas.H, Lumi.C["hair"], 1)
-        y := Atlas.HEADH + Lumi.SP["lg"]
-        ; The rail used to step a fixed 44 px per entry. With eleven entries
-        ; that runs THROUGH the engine switch and the panic button at the
-        ; bottom on any window shorter than about 780 px -- and the minimum
-        ; is 760. The pitch is derived from the space that is actually there
-        ; now, and never grows past the 44 the design was drawn at.
-        floorY := Atlas.H - 128           ; the rule above the engine switch
-        shown := 0
-        for name in Atlas.PANELS {
-            if !Atlas.PanelHidden(name)
-                shown += 1
-        }
-        pitch := 44
-        if (shown > 0) {
-            room := floorY - y
-            pitch := ClampInt(room // shown, 30, 44, 44)
-        }
-        rowH := Max(24, pitch - 6)
-        i := 1
-        for name in Atlas.PANELS {
-            if Atlas.PanelHidden(name) {
-                i += 1
+    /**
+     * THE PAGE TABS (v0.7.3). Flask's screen row: one pill per page under
+     * the title bar, the current one filled. The page list used to be a
+     * column down the left; that column is now the Program / Layer rail on
+     * the two map pages, which is where Flask keeps its layer list. Engine
+     * on/off and Unstick are global, so they sit at the right end.
+     */
+    static TAB_LABELS := Map("Apps", "Programs")
+
+    static Tabs() {
+        y := Atlas.HEADH
+        w := Atlas.W
+        Lumi.Rule(0, y + Atlas.TABH, w, Lumi.C["hairSoft"])
+        bx := w - Lumi.SP["xl"] - 170
+        Lumi.Btn(bx, y + 7, 170, 30, "Unstick my buttons",
+            (*) => Atlas.Unstick(), "danger")
+        tgx := bx - 16 - 52
+        Lumi.Toggle(tgx, y + 8, "", g_Enabled, (v) => Atlas.ToggleEngine(v))
+        Lumi.Label(tgx - 90, y + 8, 84, g_Enabled ? "Engine on" : "Engine off",
+            "dim", "right", 28)
+        room := tgx - 90 - 16 - Lumi.SP["xl"]
+        tabs := []
+        chars := 0
+        for i, name in Atlas.PANELS {
+            if Atlas.PanelHidden(name)
                 continue
-            }
-            active := (i = Atlas.panel)
-            ; the row itself is the button: opaque tone, hover on the same
-            ; shape, no transparent overlay (see Lumi.Clear for why)
-            bg := active ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.22)
-                         : Lumi.C["surface"]
-            row := RoundedRectangle(Lumi.SP["md"], y, Atlas.NAVW - 24, rowH,
-                Lumi.RAD["row"], bg, true)
-            row.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.20), bg)
-            row.OnEvent("Click", Atlas.NavGo(i))
-            if active
-                Rectangle(Lumi.SP["md"], y + 4, 2, Max(12, rowH - 8),
-                    Lumi.C["magenta"], true)
-            Lumi.Label(Lumi.SP["md"] + 18, y, 150, name,
-                active ? "body" : "dim", "left", rowH)
-            y += pitch
-            i += 1
+            lab := Atlas.TAB_LABELS.Has(name) ? Atlas.TAB_LABELS[name] : name
+            tabs.Push({i: i, lab: lab})
+            chars += StrLen(lab)
         }
-        ; engine switch lives in the rail: it is global, not panel-scoped
-        Lumi.Rule(Lumi.SP["md"], Atlas.H - 116, Atlas.NAVW - 24, Lumi.C["hairSoft"])
-        Lumi.Toggle(Lumi.SP["md"], Atlas.H - 96, "", g_Enabled,
-            (v) => Atlas.ToggleEngine(v))
-        Lumi.Label(Lumi.SP["md"] + 64, Atlas.H - 96, 120,
-            g_Enabled ? "Engine on" : "Engine off", "dim", "left", 28)
-        ; "Panic release" is the name of the feature, not a description of
-        ; what it does for you. The word on the button is now the job.
-        Lumi.Btn(Lumi.SP["md"], Atlas.H - 62, Atlas.NAVW - 24, 30,
-            "Unstick my buttons", (*) => Atlas.Unstick(), "danger")
+        ; measured, then padded: the padding gives way before a tab does
+        pad := 32
+        while (pad > 12 && chars * 7 + tabs.Length * (pad + 6) > room)
+            pad -= 4
+        tx := Lumi.SP["xl"]
+        for t in tabs {
+            tw := StrLen(t.lab) * 7 + pad
+            Lumi.Btn(tx, y + 7, tw, 30, t.lab, Atlas.NavGo(t.i),
+                (t.i = Atlas.panel) ? "primary" : "flat")
+            tx += tw + 6
+        }
+    }
+
+    /** The two map pages carry the Program / Layer rail. */
+    static HasRail() {
+        n := Atlas.PanelName()
+        return (n = "Mouse" || n = "Keyboard")
+    }
+
+    /** "Base", "Hold Right", "Hold Button 4", "Hold CapsLock". */
+    static LayerShort(code) {
+        if (code = "*" || code = "" || code = "Base")
+            return "Base"
+        if (code = "RButton")
+            return "Hold Right"
+        return "Hold " (IsMouseInput(code) ? "Button " Atlas.ZoneCap(code) : code)
+    }
+
+    /**
+     * THE RAIL (v0.7.3), after Flask's layer list. Two stacked choices, read
+     * top to bottom as one sentence: "for THIS PROGRAM, while THIS is held".
+     * Both map pages share them -- the Keyboard page used to keep its own
+     * program, so the two pages could disagree about what you were editing.
+     * The chip filled with the accent is what you are editing; a green dot
+     * marks what is live right now (the program in front, the layer held),
+     * as Flask rings the layer the board is on. Counts are settings there.
+     */
+    static Rail() {
+        top := Atlas.HEADH + Atlas.TABH + 1
+        bottom := Atlas.H - 34
+        Rectangle(0, top, Atlas.NAVW, bottom - top, Lumi.C["surface"], true)
+        Line(Atlas.NAVW, top, Atlas.NAVW, bottom, Lumi.C["hair"], 1)
+        x := Lumi.SP["md"]
+        cw := Atlas.NAVW - 2 * Lumi.SP["md"]
+        apps := AppChoices()
+        lays := LayerChoices()
+        if !apps.Has(Atlas.appIdx)
+            Atlas.appIdx := 1
+        if !lays.Has(Atlas.layerIdx)
+            Atlas.layerIdx := 1
+        app := Atlas.ScopeApp()
+        liveApp := ActiveAppName()
+        liveLay := CurrentLayerCode()
+
+        ; fit: chips shrink before anything is dropped, then the helper
+        ; text goes, then programs past the space (the edited one stays)
+        fixed := 22 + 34 + 14 + 22 + 34
+        avail := bottom - 12 - (top + 12) - fixed
+        n := apps.Length + lays.Length
+        help := (avail - n * 34 >= 64)
+        pitch := help ? 34 : ClampInt(avail // Max(n, 1), 26, 34, 34)
+        showApps := []
+        maxApps := Max(1, (avail - lays.Length * pitch) // pitch)
+        for i, a in apps {
+            if (showApps.Length < maxApps)
+                showApps.Push(i)
+        }
+        if (apps.Length > maxApps && Atlas.appIdx > showApps[showApps.Length])
+            showApps[showApps.Length] := Atlas.appIdx
+
+        y := top + 12
+        Lumi.Label(x + 4, y, cw, "Program", "section")
+        y += 22
+        for i in showApps {
+            code := AppCodeFromDisp(apps[i])
+            cnt := 0
+            for row in g_Cfg["bindings"] {
+                if (MGet(row, "app", "*") = code && !IsInertRow(row))
+                    cnt += 1
+            }
+            active := (i = Atlas.appIdx)
+            Atlas.RailChip(x, y, cw, pitch - 4, "", apps[i], cnt, active,
+                code != "*" && code = liveApp, Atlas.RailAppGo(i),
+                (active && code != "*") ? Atlas.RailAppEditGo(i - 1) : 0)
+            y += pitch
+        }
+        Lumi.Btn(x, y, cw, 30, "+ Add program…",
+            (*) => Atlas.AppEdit(0), "flat")
+        y += 34 + 14
+
+        Lumi.Label(x + 4, y, cw, "Layer", "section")
+        y += 22
+        for i, lab in lays {
+            code := LayerCodeFromLabel(lab)
+            cnt := 0
+            for row in g_Cfg["bindings"] {
+                if (MGet(row, "app", "*") = app && MGet(row, "layer", "*") = code
+                    && !IsInertRow(row))
+                    cnt += 1
+            }
+            Atlas.RailChip(x, y, cw, pitch - 4, String(i - 1),
+                Atlas.LayerShort(code), cnt, i = Atlas.layerIdx,
+                code = liveLay && code != "*", Atlas.TabGo(i), 0)
+            y += pitch
+        }
+        Lumi.Btn(x, y, cw, 30, "Layer buttons…",
+            (*) => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), "flat")
+        y += 38
+        if help
+            Lumi.Para(x + 4, y, cw - 4, bottom - y - 8,
+                "All programs and Base still apply here unless this "
+                . "program or layer sets its own.", "mute")
+    }
+
+    /**
+     * One rail entry. Flask's chip: index in mono on the left, the name,
+     * a count on the right; filled with the accent when it is the one being
+     * edited, a green dot when it is live. An optional ✎ edits it.
+     */
+    static RailChip(x, y, w, h, idx, label, cnt, active, live, onClick, onEdit) {
+        bg := active ? Lumi.C["accent"] : Lumi.C["raised"]
+        ink := active ? Lumi.C["onAccent"] : Lumi.C["inkDim"]
+        chip := RoundedRectangle(x, y, w, h, Lumi.RAD["row"], bg, true)
+        if !active
+            chip.Hover(Lumi.C["raised2"], bg)
+        RoundedRectangle(x, y, w, h, Lumi.RAD["row"],
+            active ? Lumi.C["accent"] : Lumi.C["hairSoft"], false)
+        chip.OnEvent("Click", onClick)
+        Lumi.Focus.Add({x: x, y: y, w: w, h: h, kind: "btn", activate: onClick})
+        tx := x + 10
+        if (idx != "") {
+            Text(tx, y, 16, h, idx, active ? Lumi.C["onAccent"] : Lumi.C["inkMute"],
+                Lumi.Size["small"], Lumi.Mono).TextAlign("left", "middle")
+            tx += 16
+        }
+        right := x + w - 8
+        if IsObject(onEdit) {
+            right -= 24
+            Lumi.Btn(right, y + (h - 22) // 2, 22, 22, "✎", onEdit, "flat")
+            right -= 4
+        } else if (cnt > 0) {
+            Text(right - 24, y, 24, h, String(cnt),
+                active ? Lumi.C["onAccent"] : Lumi.C["inkMute"],
+                Lumi.Size["small"], Lumi.Mono).TextAlign("right", "middle")
+            right -= 28
+        }
+        if live {
+            Ellipse(right - 8, y + (h - 8) // 2, 8, 8,
+                active ? Lumi.C["onAccent"] : Lumi.C["jade"], true)
+            right -= 12
+        }
+        Text(tx, y, right - tx, h, Lumi.Elide(label, right - tx, "body"), ink,
+            Lumi.Size["body"], Lumi.Face).TextAlign("left", "middle")
+    }
+
+    static RailAppGo(i) {
+        return (*) => Atlas.SetApp(i)
+    }
+
+    static RailAppEditGo(ref) {
+        return (*) => Atlas.AppEdit(ref)
     }
 
     /**
@@ -13120,24 +13274,28 @@ class Atlas {
             . "every one of them is a button. Start "
             . "there and you never have to guess which page you want.`n`n"
             . "The switch at the bottom of Home is Simple or Advanced. "
-            . "Simple shows Mouse, Keyboard, Settings and Diagnostics, "
-            . "and a short list of actions. Advanced adds Macros, "
-            . "Apps, Windows and Pointer. Nothing is lost either way -- the "
+            . "Simple shows Mouse, Keyboard, Programs, Settings and "
+            . "Diagnostics, and a short list of actions. Advanced adds "
+            . "Macros, Windows and Pointer. Nothing is lost either way -- the "
             . "switch changes what is SHOWN, never what is set up.`n`n"
             . "If something goes wrong, go to Diagnostics and press "
             . "“Copy this list”. That puts the whole trail, and what "
             . "machine it came from, on the clipboard -- paste it into an "
             . "email and the answer usually falls out of it.`n`n"
             . "Mouse / Keyboard`n"
-            . "Choose a button or key, then add an assignment. In program "
-            . "limits where it works: a mouse button follows the window "
-            . "under the pointer, a key follows the window you are typing "
-            . "in. Rec records a shortcut; Keys lets you "
+            . "The rail on the left says what you are editing: a PROGRAM "
+            . "(All programs, or one of them) and a LAYER (Base, or what "
+            . "happens while a layer button is held). Pick both, then click "
+            . "a button or key. An empty slot marked ▽ still does what All "
+            . "programs or Base set; Override gives it its own. A mouse "
+            . "button follows the window under the pointer, a key the "
+            . "window you are typing in. F13-F24 are always on the Keyboard "
+            . "page, ready to map. Rec records a shortcut; Keys lets you "
             . "choose one without AutoHotkey syntax. Left, right and middle "
             . "are always instant clicks; a hold on them only works inside "
             . "one program.`n`n"
             . "Getting around`n"
-            . "Use the list on the left, or set the whole thing up from the "
+            . "Use the tabs along the top, or set the whole thing up from the "
             . "keyboard: Tab and Shift+Tab move between controls and ring "
             . "the one you are on, Enter or Space presses it, the arrows "
             . "step a dropdown, nudge a slider, flip a switch or move a "
@@ -13312,10 +13470,11 @@ class Atlas {
 
     static Status() {
         y := Atlas.H - 34
-        Lumi.Rule(Atlas.NAVW, y, Atlas.W - Atlas.NAVW, Lumi.C["hair"])
-        Lumi.Label(Atlas.NAVW + Lumi.SP["xl"], y, 620,
+        Lumi.Rule(0, y, Atlas.W, Lumi.C["hair"])
+        Lumi.Label(Lumi.SP["xl"], y, 620,
             g_CfgSaveFailed ? "Not saved to disk — your changes work but will be lost on exit. See Diagnostics."
-                : "Layer " CurrentLayerDisp() "   ·   Last: " LastEventText(),
+                : "Held now: " Atlas.LayerShort(CurrentLayerCode())
+                . "   ·   Last: " LastEventText(),
             "mute", "left", 34)
         n := g_Problems.Length
         if (n > 0)
@@ -13468,7 +13627,7 @@ class Atlas {
                 : "RadMapper is OFF — your mouse and keyboard behave normally.",
             "body", "left", 20)
         Lumi.Label(x + 120, sy + 24, w - 140,
-            "Use the switch at the bottom of the list on the left to turn it "
+            "Use the Engine switch at the top right to turn it "
             . "on or off.", "mute", "left", 20)
 
         ; ── the three jobs ───────────────────────────────────────────────
@@ -13507,78 +13666,22 @@ class Atlas {
     ; ── PANEL: MOUSE ────────────────────────────────────────────────────────
 
     static PanelMouse(x, y, w, h) {
-        Lumi.Label(x, y, 300, "Mouse map", "title")
-        Lumi.Label(x, y + 28, 420,
-            "Pick a layer tab, then click a part of the mouse.", "mute")
-        Lumi.Label(x + w - 236, y, 40, "App", "mute", "left", 30)
-        apps := AppChoices()
-        Lumi.Select(x + w - 196, y, 196, 30, apps, Atlas.appIdx,
-            (i, t) => Atlas.SetApp(i))
-        Atlas.LayerTabs(x, y + 50, w)
-        Atlas.MouseMap(x, y + 100)
-        Atlas.SlotPanel(x + 320, y + 100, w - 320, h - 100, Atlas.sel, false)
+        Atlas.ScopeHead(x, y, w, "Mouse map", "Click a part of the mouse.")
+        Atlas.MouseMap(x, y + 74)
+        Atlas.SlotPanel(x + 320, y + 64, w - 320, h - 64, Atlas.sel, false)
     }
 
     /**
-     * THE LAYER TABS (v0.7). A layer is a whole second map of the mouse that
-     * exists while one button is held -- the way a QMK or ZMK keymap has a
-     * base layer and a layer per hold key. So it is shown as a TAB, not a
-     * dropdown inside a dialog: Base, Hold Button 4, Hold Button 5 and Hold
-     * CapsLock -- the only three hosts. Every tab shows the same mouse;
-     * what changes is what each part does.
+     * Page title plus WHAT YOU ARE EDITING, in words, the way Flask's key
+     * inspector names the layer under the key title. The rail on the left
+     * is where it changes; this line is so it is never a guess.
      */
-    static LayerTabs(x, y, w) {
-        ; v0.7.2: the right end of the strip edits WHICH inputs are tabs
-        bw0 := 132
-        Lumi.Btn(x + w - bw0, y, bw0, 30, "Layer buttons…",
-            (*) => Atlas.OpenDlg(() => Atlas.LayerHostsDlg()), "ghost")
-        w -= bw0 + 8
-        items := LayerChoices()
-        if !items.Has(Atlas.layerIdx)        ; a tab whose host is gone
-            Atlas.layerIdx := 1
-        ; measure first: the strip must never drop the ACTIVE tab, so when
-        ; it runs out of room the last tab that fits gives way to it
-        tabs := []
-        for i, lab in items {
-            code := LayerCodeFromLabel(lab)
-            host := (code = "*") ? "" : code
-            txt := (host = "") ? "Base"
-                : (host = "RButton") ? "Hold Right"
-                : "Hold " (IsMouseInput(host) ? "Button " Atlas.ZoneCap(host) : host)
-            tabs.Push({i: i, txt: txt, bw: Max(72, 22 + StrLen(txt) * 7)})
-        }
-        fit := []
-        tx := x
-        for t in tabs {
-            if (tx + t.bw > x + w)
-                break
-            fit.Push(t)
-            tx += t.bw + 8
-        }
-        if (fit.Length < tabs.Length) {
-            shown := false
-            for t in fit {
-                if (t.i = Atlas.layerIdx)
-                    shown := true
-            }
-            if (!shown && fit.Length > 0) {
-                for t in tabs {
-                    if (t.i = Atlas.layerIdx)
-                        fit[fit.Length] := t
-                }
-            }
-        }
-        tx := x
-        for t in fit {
-            active := (t.i = Atlas.layerIdx)
-            Lumi.Btn(tx, y, t.bw, 30, t.txt, Atlas.TabGo(t.i),
-                active ? "accent" : "ghost")
-            tx += t.bw + 8
-        }
-        if (tx + 300 <= x + w)
-            Lumi.Label(tx + 6, y + 4, x + w - tx - 6,
-                "A tab is what everything does WHILE that button is held.",
-                "mute", "left", 22)
+    static ScopeHead(x, y, w, title, hint) {
+        Lumi.Label(x, y, 300, title, "title")
+        app := Atlas.ScopeApp()
+        lay := Atlas.ScopeLayer()
+        Lumi.Label(x, y + 28, w, "Editing  " AppDisp(app) "   ›   "
+            . Atlas.LayerShort(lay) "      " hint, "mute")
     }
 
     static TabGo(i) {
@@ -13594,17 +13697,16 @@ class Atlas {
      * exception, and they keep a small list underneath.
      */
     static SlotPanel(lx, ly, lw, lh, input, keyMode) {
-        app := keyMode ? Atlas.KbScopeApp() : Atlas.ScopeApp()
+        app := Atlas.ScopeApp()
         lay := Atlas.ScopeLayer()
         mode := keyMode ? "key" : "mouse"
         Atlas.rowRefs := []
         Atlas.list := 0
         by := ly + lh - 40
         if (input = "") {
-            Lumi.Label(lx, ly, lw, keyMode ? "No keys on this tab" : "Nothing selected", "title")
+            Lumi.Label(lx, ly, lw, "Nothing selected", "title")
             Lumi.Para(lx, ly + 30, lw, 70, keyMode
-                ? ("Nothing is mapped to a key here for this program. “Add "
-                . "new” hooks one; a key nothing references is never touched.")
+                ? "Click a key on the left, or “+ Add a key…” to record one."
                 : "Click a part of the mouse.", "mute")
             Lumi.Btn(lx, by, 150, 34, "Add new",
                 (*) => Atlas.EditRow(0, keyMode), "primary")
@@ -13614,11 +13716,11 @@ class Atlas {
                         : InputLabel(input)
         Lumi.Label(lx, ly, lw, head, "title")
         Lumi.Label(lx, ly + 26, lw,
-            AppDisp(app) "   ·   " LayerLabelFromCode(lay), "mute")
+            AppDisp(app) "   ·   " Atlas.LayerShort(lay), "mute")
         if LayerIncludes(lay, input) {
             Lumi.Para(lx, ly + 54, lw, 90,
                 "You hold this to reach this layer, so it has no actions of "
-                . "its own here. Its tap and hold live on the Base tab.",
+                . "its own here. Its tap and hold live on the Base layer.",
                 "mute")
             Lumi.Btn(lx, by, 150, 34, "Conflicts…",
                 (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(input)), "ghost")
@@ -13631,16 +13733,28 @@ class Atlas {
             ref := Atlas.SlotRef(input, app, lay, ev)
             row := ref ? g_Cfg["bindings"][ref] : 0
             live := IsObject(row) && !IsInertRow(row)
+            ; v0.7.3: an empty slot in a program or a layer is NOT "normal":
+            ; whatever All programs / Base set still fires here. Shown as
+            ; Flask shows a pass-through key (▽), but with what comes
+            ; through and where from, so nothing fires that the page hides.
+            inh := IsObject(row) ? 0 : Atlas.InheritedRow(input, app, lay, ev)
             Lumi.Card(lx, sy, lw, 60, "raised")
-            Lumi.Label(lx + 12, sy + 7, 160, EventLabelOf(ev), "dim", "left", 18)
+            Lumi.Label(lx + 12, sy + 7, lw - 220, EventLabelOf(ev)
+                . (IsObject(inh) ? "   ·   from " AppDisp(MGet(inh, "app", "*"))
+                . " › " Atlas.LayerShort(MGet(inh, "layer", "*")) : ""),
+                "dim", "left", 18)
             what := !IsObject(row) ? "Nothing set — works the normal way"
                 : (live ? DescribeAction(row["action"]) : "Native (system default)")
+            if IsObject(inh)
+                what := "▽  " (IsInertRow(inh) ? "Native (system default)"
+                    : DescribeAction(inh["action"]))
             blocked := (ev = "hold" && !live && IsPrimaryButton(input) && app = "*")
             if blocked
                 what := "Nothing set — a hold here only works inside one program"
             Lumi.Label(lx + 12, sy + 27, lw - 220, what,
                 live ? "body" : "mute", "left", 24)
-            Lumi.Btn(lx + lw - 198, sy + 15, 92, 30, live ? "Change" : "Set",
+            Lumi.Btn(lx + lw - 198, sy + 15, 92, 30,
+                live ? "Change" : IsObject(inh) ? "Override" : "Set",
                 blocked ? 0 : Atlas.SlotGo(input, ev, keyMode, ref),
                 blocked ? "muted" : (live ? "accent" : "primary"))
             ; Clear works on ANY row that fills the slot, a system-default
@@ -13695,6 +13809,34 @@ class Atlas {
             (*) => Atlas.OpenDlg(() => Atlas.ConflictsDlg(input)), "ghost")
     }
 
+    /**
+     * What fires for this slot when the slot itself is empty: the row the
+     * engine would pick (FindBindingFor, same scores) with this program in
+     * front and this layer held. 0 when nothing broader applies either, or
+     * when the scope is All programs + Base (nothing broader exists).
+     */
+    static InheritedRow(input, app, lay, ev) {
+        if (app = "*" && lay = "*")
+            return 0
+        a := (app = "*") ? "" : app
+        ctx := {app: a, mods: "", held: (lay = "*") ? [] : [lay], win: 0,
+            layApp: a, layWin: 0}
+        try return FindBindingFor(input, ev, ctx)
+        return 0
+    }
+
+    /** Does an empty-here input still do something here (from a broader scope)? */
+    static Inherits(input) {
+        app := Atlas.ScopeApp()
+        lay := Atlas.ScopeLayer()
+        for ev in ["tap", "hold", "turn"] {
+            if (!Atlas.SlotRef(input, app, lay, ev)
+                && IsObject(Atlas.InheritedRow(input, app, lay, ev)))
+                return true
+        }
+        return false
+    }
+
     /** The one row that fills a slot: this input, scope, trigger, no modifier. */
     static SlotRef(input, app, lay, ev) {
         for i, row in g_Cfg["bindings"] {
@@ -13726,8 +13868,8 @@ class Atlas {
             Atlas.OpenDlg(() => Atlas.BindDlg(ref, keyMode))
             return
         }
-        app := keyMode ? Atlas.KbScopeApp() : Atlas.ScopeApp()
-        seed := NewBinding(app, Atlas.ScopeLayer(), "", input, ev, "keys", "")
+        seed := NewBinding(Atlas.ScopeApp(), Atlas.ScopeLayer(), "", input, ev,
+            "keys", "")
         Atlas.OpenDlg(() => Atlas.BindDlg(0, keyMode, seed))
     }
 
@@ -13747,7 +13889,7 @@ class Atlas {
 
     static ScopeApp() {
         items := AppChoices()
-        return AppCodeFromDisp(items.Has(Atlas.appIdx) ? items[Atlas.appIdx] : "Global (all apps)")
+        return AppCodeFromDisp(items.Has(Atlas.appIdx) ? items[Atlas.appIdx] : ALL_PROGRAMS)
     }
 
     static ScopeLayer() {
@@ -13843,16 +13985,17 @@ class Atlas {
     static Zone(code, zx, zy, zw, zh, rad, align := "center") {
         n := Atlas.ZoneCount(code)
         selected := (Atlas.sel = code)
-        bg := selected ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.34)
-                       : Lumi.C["raised"]
+        bg := selected ? Lumi.C["accentBg"] : Lumi.C["raised"]
         zone := RoundedRectangle(zx, zy, zw, zh, rad, bg, true)
         zone.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.24), bg)
         zone.OnEvent("Click", Atlas.ZoneGo(code))
         RoundedRectangle(zx, zy, zw, zh, rad,
-            n ? Lumi.C["jade"] : Lumi.C["hair"], false)
+            selected ? Lumi.C["accent"] : n ? Lumi.C["jade"] : Lumi.C["hair"], false)
+        if (!n && zw >= 24 && Atlas.Inherits(code))   ; works here via a
+            Lumi.Label(zx + zw - 16, zy + 2, 12, "▽", "mute", "center", 14)
         if Atlas.IsLayerHost(code) {         ; holding this arms a layer
             RoundedRectangle(zx + 3, zy + 3, zw - 6, zh - 6, Max(rad - 2, 2),
-                Lumi.C["magenta"], false)
+                Lumi.C["layer"], false)
             Lumi.Label(zx + 2, zy + zh - 16, 12, "L", "mono", "center", 14)
         }
         ; L and R are label-aligned AWAY from the centre line, because the
@@ -13948,71 +14091,73 @@ class Atlas {
      * the mouse map goes, the same three-column row list, the same buttons.
      */
     static PanelKeys(x, y, w, h) {
-        Lumi.Label(x, y, 300, "Keyboard map", "title")
-        Lumi.Label(x, y + 28, 420,
-            "Pick a layer tab, then click a key.", "mute")
-        Lumi.Label(x + w - 236, y, 40, "App", "mute", "left", 30)
-        apps := AppChoices()
-        Lumi.Select(x + w - 196, y, 196, 30, apps, Atlas.kbAppIdx,
-            (i, t) => Atlas.SetKbApp(i))
-        Atlas.LayerTabs(x, y + 50, w)
-        ; Only the keys that have a row ON THIS TAB, for this program. The
-        ; picker used to list every key used anywhere in the config (the
-        ; same list the "Hold <key>" tabs come from), so a key mapped only
-        ; under Hold Button 4 sat on the Base tab with nothing in its slots
-        ; and nothing to delete -- it could not be got rid of from here.
+        Atlas.ScopeHead(x, y, w, "Keyboard map", "Click a key.")
         keys := Atlas.KeysInScope()
-        if (Atlas.keySel = "" || !Atlas.HasKey(keys, Atlas.keySel))
-            Atlas.keySel := keys.Length ? keys[1] : ""
-        Atlas.KeyMap(x, y + 100, keys)
-        Atlas.SlotPanel(x + 320, y + 100, w - 320, h - 100, Atlas.keySel, true)
+        if !(Atlas.HasKey(keys, Atlas.keySel) || Atlas.IsFKeyExtra(Atlas.keySel))
+            Atlas.keySel := keys.Length ? keys[1] : "F13"
+        Atlas.KeyMap(x, y + 74, Min(h - 84, 520), keys)
+        Atlas.SlotPanel(x + 320, y + 64, w - 320, h - 64, Atlas.keySel, true)
     }
 
     /**
-     * Keys with at least one row in the current program + layer tab, in
-     * config order. A system-default (inert) row counts: it is still a row,
-     * and listing it is what lets it be cleared. The key that HOSTS the
-     * current tab is left out -- holding it is how you got here.
+     * Keys that do something on this page: a row in this program or All
+     * programs, on this layer or Base -- so a key set for every program is
+     * still listed when PACS is the program picked, marked ▽. F13-F24 have
+     * a grid of their own and are left out; so is the key that hosts the
+     * current layer (holding it is how you got here). A key just recorded
+     * with "+ Add a key…" is listed until it has a setting of its own.
      */
     static KeysInScope() {
-        app := Atlas.KbScopeApp()
-        lay := Atlas.KbScopeLayer()
+        app := Atlas.ScopeApp()
+        lay := Atlas.ScopeLayer()
         have := Map()
         have.CaseSense := "Off"
         for row in g_Cfg["bindings"] {
-            if (MGet(row, "app", "*") = app && MGet(row, "layer", "*") = lay)
+            ra := MGet(row, "app", "*")
+            rl := MGet(row, "layer", "*")
+            if ((ra = app || ra = "*") && (rl = lay || rl = "*"))
                 have[MGet(row, "button", "")] := 1
         }
         out := []
         for k in KeyInputsInUse() {
-            if (have.Has(k) && !LayerIncludes(lay, k))
+            if (have.Has(k) && !LayerIncludes(lay, k) && !Atlas.IsFKeyExtra(k))
                 out.Push(k)
         }
+        if (Atlas.keyNew != "" && !Atlas.HasKey(out, Atlas.keyNew)
+            && !Atlas.IsFKeyExtra(Atlas.keyNew))
+            out.Push(Atlas.keyNew)
         return out
     }
 
-    static SetKbApp(i) {
+    static keyNew := ""            ; a key recorded with "+ Add a key…"
+
+    /** F13-F24: no keyboard types them, so they are free to map (v0.7.3). */
+    static IsFKeyExtra(k) {
+        static fx := 0
+        if !IsObject(fx) {
+            fx := Map()
+            fx.CaseSense := "Off"
+            loop 12
+                fx["F" (A_Index + 12)] := 1
+        }
+        return fx.Has(k)
+    }
+
+    /** "+ Add a key…": record one key and select it, ready to Set. */
+    static AddKey() {
         Lumi.EndEdit()
+        k := RecordKeyName()
+        if (k = "")
+            return
+        if (IsMouseInput(k) || !KeyNameValid(k)) {
+            Lumi.Toast("RadMapper cannot watch '" k "'", "danger", 3000)
+            return
+        }
+        if !Atlas.IsFKeyExtra(k)
+            Atlas.keyNew := k
+        Atlas.keySel := k
         Atlas.selWant := 0
-        Atlas.kbAppIdx := i
         Atlas.Build()
-    }
-
-    static SetKbLayer(i) {
-        Lumi.EndEdit()
-        Atlas.selWant := 0
-        Atlas.layerIdx := i
-        Atlas.Build()
-    }
-
-    static KbScopeApp() {
-        items := AppChoices()
-        return AppCodeFromDisp(items.Has(Atlas.kbAppIdx)
-            ? items[Atlas.kbAppIdx] : "Global (all apps)")
-    }
-
-    static KbScopeLayer() {
-        return Atlas.ScopeLayer()            ; one layer tab strip, two pages
     }
 
     static HasKey(arr, v) {
@@ -14024,65 +14169,90 @@ class Atlas {
     }
 
     /**
-     * The key picker: one tile per key in the config, styled exactly like a
-     * mouse-map zone. Olive rim = has assignments in this scope, pink ring
-     * plus L = holds a layer, a number = how many rows.
-     *
-     * A mouse has nine inputs and a keyboard has no fixed list, so the
-     * tiles are capped at what the card holds and the overflow is a count.
-     * That is not a limitation in practice: a key nothing references is
-     * never hooked, so this list only ever holds keys you deliberately
-     * bound, and on a reading station that is a handful.
+     * The key picker (v0.7.3). Flask draws the board; a keyboard here has
+     * no fixed shape, so it is two groups of key caps. F13-F24 come first
+     * and always show -- keyboards and macro pads send them and nothing
+     * types them, which makes them the easiest keys there are to map, and
+     * a cap shows what the key does here (▽ = it comes from All programs or
+     * Base). Below them, every other key that does something on this page.
      */
-    static KeyMap(x, y, keys) {
-        ; Same footprint as the mouse schematic next door, so switching tabs
-        ; does not move the row list a pixel.
-        Lumi.Card(x, y - 10, 300, 324, "surface")
-        Lumi.Label(x + 16, y, 272, "KEYS ON THIS TAB", "section")
-        if (keys.Length = 0) {
-            Lumi.Para(x + 16, y + 34, 272, 90,
-                "No keys mapped on this tab for this program. Keys mapped "
-                . "on other tabs are listed there. “Add new” hooks one; a "
-                . "key nothing references is never touched at all.", "mute")
-            return
+    static KeyMap(x, y, ch, keys) {
+        Lumi.Card(x, y - 10, 300, ch, "surface")
+        Lumi.Label(x + 16, y, 268, "F13 – F24", "section")
+        i := 0
+        loop 12 {
+            k := "F" (A_Index + 12)
+            Atlas.KeyCap(k, x + 16 + Mod(i, 4) * 68, y + 24 + (i // 4) * 46, 62, 40)
+            i += 1
         }
-        cols := 2
-        tw := 132
-        th := 30
-        rows := 7                             ; 14 tiles: what the card holds
-        cap := cols * rows
+        oy := y + 24 + 3 * 46 + 12
+        Lumi.Label(x + 16, oy, 268, "Other keys", "section")
+        by := y - 10 + ch - 46
+        if (keys.Length = 0)
+            Lumi.Para(x + 16, oy + 24, 268, 60,
+                "None on this page yet. “+ Add a key…” records one.", "mute")
+        rows := Max((by - 6 - (oy + 24)) // 36, 0)
+        cap := rows * 2
         i := 0
         for k in keys {
             if (i >= cap)
                 break
-            kx := x + 16 + Mod(i, cols) * (tw + 8)
-            ky := y + 26 + (i // cols) * (th + 6)
-            Atlas.KeyTile(k, kx, ky, tw, th)
+            Atlas.KeyTile(k, x + 16 + Mod(i, 2) * 138, oy + 24 + (i // 2) * 36, 130, 30)
             i += 1
         }
         if (keys.Length > i)
-            Lumi.Label(x + 16, y + 278, 272,
-                "+" (keys.Length - i) " more — they are listed on the rows "
-                . "to the right",
-                "mute", "left", 16)
-        Lumi.Label(x + 16, y + 296, 272,
-            "Olive rim = assigned here.   Pink ring + L = holds a layer.",
-            "mute", "center", 16)
+            Lumi.Label(x + 16, by - 20, 268, "+" (keys.Length - i)
+                . " more — make the window taller to see them", "mute", "left", 16)
+        Lumi.Btn(x + 16, by, 268, 32, "+ Add a key…", (*) => Atlas.AddKey(), "accent")
+    }
+
+    /** One F13-F24 cap: the key's name, and under it what a tap does here. */
+    static KeyCap(code, zx, zy, zw, zh) {
+        n := Atlas.KeyCount(code)
+        selected := (Atlas.keySel = code)
+        bg := selected ? Lumi.C["accentBg"] : Lumi.C["raised"]
+        tile := RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"], bg, true)
+        tile.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.24), bg)
+        tile.OnEvent("Click", Atlas.KeyGo(code))
+        Lumi.Focus.Add({x: zx, y: zy, w: zw, h: zh, kind: "btn",
+            activate: Atlas.KeyGo(code)})
+        RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"], selected
+            ? Lumi.C["accent"] : n ? Lumi.C["jade"] : Lumi.C["hairSoft"], false)
+        app := Atlas.ScopeApp()
+        lay := Atlas.ScopeLayer()
+        ref := Atlas.SlotRef(code, app, lay, "tap")
+        row := ref ? g_Cfg["bindings"][ref] : 0
+        sub := ""
+        inh := 0
+        if IsObject(row)
+            sub := IsInertRow(row) ? "native" : DescribeAction(row["action"])
+        else if IsObject(inh := Atlas.InheritedRow(code, app, lay, "tap"))
+            sub := "▽ " (IsInertRow(inh) ? "native" : DescribeAction(inh["action"]))
+        else if n
+            sub := "hold / mod"
+        Text(zx, zy + 3, zw, 18, code, (n || sub != "") ? Lumi.C["ink"]
+            : Lumi.C["inkDim"], Lumi.Size["body"], Lumi.Face)
+            .TextAlign("center", "middle")
+        if (sub != "")
+            Text(zx + 3, zy + 21, zw - 6, 16, Lumi.Elide(sub, zw - 6, "small"),
+                IsObject(row) ? Lumi.C["jade"] : Lumi.C["inkMute"],
+                Lumi.Size["small"], Lumi.Mono).TextAlign("center", "middle")
     }
 
     static KeyTile(code, zx, zy, zw, zh) {
         n := Atlas.KeyCount(code)
         selected := (Atlas.keySel = code)
-        bg := selected ? Lumi.Mix(Lumi.C["surface"], Lumi.C["magenta"], 0.34)
-                       : Lumi.C["raised"]
+        bg := selected ? Lumi.C["accentBg"] : Lumi.C["raised"]
         tile := RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"], bg, true)
         tile.Hover(Lumi.Mix(bg, Lumi.C["cyan"], 0.24), bg)
         tile.OnEvent("Click", Atlas.KeyGo(code))
-        RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"],
-            n ? Lumi.C["jade"] : Lumi.C["hair"], false)
+        Lumi.Focus.Add({x: zx, y: zy, w: zw, h: zh, kind: "btn",
+            activate: Atlas.KeyGo(code)})
+        RoundedRectangle(zx, zy, zw, zh, Lumi.RAD["row"], selected
+            ? Lumi.C["accent"] : n ? Lumi.C["jade"] : Lumi.C["hair"], false)
         if Atlas.IsLayerHost(code) {
             RoundedRectangle(zx + 2, zy + 2, zw - 4, zh - 4, Lumi.RAD["row"],
-                Lumi.C["magenta"], false)
+                Lumi.C["layer"], false)
             Lumi.Label(zx + 3, zy + zh - 15, 10, "L", "mono", "center", 13)
         }
         ; ⚠ on a key AutoHotkey cannot hook -- the row will never fire, and
@@ -14092,6 +14262,8 @@ class Atlas {
             selected ? "body" : "mute", "left", zh)
         if (n > 0)
             Lumi.Label(zx + zw - 18, zy + 1, 14, String(n), "mono", "center", zh - 2)
+        else if Atlas.Inherits(code)
+            Lumi.Label(zx + zw - 18, zy + 1, 14, "▽", "mute", "center", zh - 2)
     }
 
     static KeyGo(code) {
@@ -14109,8 +14281,8 @@ class Atlas {
         n := 0
         for row in g_Cfg["bindings"] {
             if (MGet(row, "button", "") = code && !IsInertRow(row)
-                && MGet(row, "app", "*") = Atlas.KbScopeApp()
-                && MGet(row, "layer", "*") = Atlas.KbScopeLayer())
+                && MGet(row, "app", "*") = Atlas.ScopeApp()
+                && MGet(row, "layer", "*") = Atlas.ScopeLayer())
                 n += 1
         }
         return n
@@ -15784,19 +15956,23 @@ class Atlas {
         st := {idx: idx, keyMode: keyMode, events: events, dlg: dlg,
                original: idx ? g_Cfg["bindings"][idx] : row}
 
-        Lumi.Label(24, 70, 120, "In program", "dim", "left", 30)
-        st.app := Lumi.Select(150, 70, 240, 30, apps,
-            Atlas.IndexOfText(apps, AppDisp(row ? MGet(row, "app", "*")
-                : Atlas.ScopeApp())))
-        ; The LAYER is not a question here (v0.7): it is the tab the page
-        ; is on, or the row's own. Shown, never asked. DoSave reads
-        ; st.layer.index.
+        ; Neither PROGRAM nor LAYER is a question here (v0.7.3; the layer
+        ; since v0.7): both are what the rail on the page says, or the
+        ; row's own. A second program picker in the dialog meant the page
+        ; and the dialog could disagree, and saving silently moved the page.
+        ; Shown, never asked. DoSave reads st.app.index and st.layer.index.
+        rowApp := row ? MGet(row, "app", "*") : Atlas.ScopeApp()
+        st.app := {index: Atlas.IndexOfText(apps, AppDisp(rowApp))}
         layIdx := Atlas.IndexOfText(layers, LayerLabelFromCode(row
             ? MGet(row, "layer", "*") : Atlas.ScopeLayer()))
         st.layer := {index: layIdx}
+        Lumi.Label(24, 70, 120, "Program", "dim", "left", 30)
+        Lumi.Label(150, 70, 486, AppDisp(rowApp)
+            . "   (picked in the rail on the left)", "body", "left", 30)
         Lumi.Label(24, 112, 120, "Layer", "dim", "left", 30)
         Lumi.Label(150, 112, 486, layers.Has(layIdx)
-            ? (layers[layIdx] "   (the tab on the page decides this)")
+            ? (Atlas.LayerShort(LayerCodeFromLabel(layers[layIdx]))
+               "   (picked in the rail on the left)")
             : (LayerLabelFromCode(row ? MGet(row, "layer", "*") : "*")
                " — no longer a layer; saving moves this to Base"),
             layers.Has(layIdx) ? "body" : "accent", "left", 30)
@@ -16018,7 +16194,7 @@ class Atlas {
         apps := AppChoices()
         layers := LayerChoices()
         app := AppCodeFromDisp(apps.Has(st.app.index)
-            ? apps[st.app.index] : "Global (all apps)")
+            ? apps[st.app.index] : ALL_PROGRAMS)
         lay := LayerCodeFromLabel(layers.Has(st.layer.index)
             ? layers[st.layer.index] : LAYER_BASE_LABEL)
         event := st.events.Has(st.event.index) ? st.events[st.event.index] : "tap"
@@ -16127,7 +16303,7 @@ class Atlas {
         ; into it and a stale selection throws inside a click handler; fall
         ; back to the safe default instead.
         app := AppCodeFromDisp(apps.Has(st.app.index)
-            ? apps[st.app.index] : "Global (all apps)")
+            ? apps[st.app.index] : ALL_PROGRAMS)
         lay := LayerCodeFromLabel(layers.Has(st.layer.index)
             ? layers[st.layer.index] : LAYER_BASE_LABEL)
         event := events.Has(st.event.index) ? events[st.event.index] : "tap"
@@ -16262,17 +16438,13 @@ class Atlas {
         }
         ; Follow the row you just made: scope the panel to its input, so the
         ; list you land back on is the one that now contains it.
-        if st.keyMode {
+        if st.keyMode
             Atlas.keySel := btn
-            Atlas.kbAppIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
-            Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
-                LayerLabelFromCode(lay))
-        } else {
+        else
             Atlas.sel := btn
-            Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
-            Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
-                LayerLabelFromCode(lay))
-        }
+        Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
+        Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
+            LayerLabelFromCode(lay))
         Atlas.CloseDlg()
         Atlas.Build()
     }
@@ -16321,7 +16493,7 @@ class Atlas {
         dlg.Drag()
 
         host := keyMode ? Atlas.keySel : Atlas.sel
-        app := keyMode ? Atlas.KbScopeApp() : Atlas.ScopeApp()
+        app := Atlas.ScopeApp()
 
         Lumi.Card(0, 0, w, h, "surface", 0)
         Lumi.Label(24, 16, 560, "Scroll while holding a button", "title")
@@ -16451,7 +16623,7 @@ class Atlas {
         Lumi.EndEdit()
         apps := AppChoices()
         app := AppCodeFromDisp(apps.Has(st.app.index)
-            ? apps[st.app.index] : "Global (all apps)")
+            ? apps[st.app.index] : ALL_PROGRAMS)
         if st.keyMode
             host := CanonicalInputName(NormalizeInputName(Lumi.FieldValue(st.input)))
         else
@@ -16543,17 +16715,13 @@ class Atlas {
 
         ; Land back on the hold input, so the list shows the deck you just
         ; built rather than whatever was scoped before.
-        if st.keyMode {
+        if st.keyMode
             Atlas.keySel := host
-            Atlas.kbAppIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
-            Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
-                LayerLabelFromCode(host))
-        } else {
+        else
             Atlas.sel := host
-            Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
-            Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
-                LayerLabelFromCode(host))
-        }
+        Atlas.appIdx := Atlas.IndexOfText(AppChoices(), AppDisp(app))
+        Atlas.layerIdx := Atlas.IndexOfText(LayerChoices(),
+            LayerLabelFromCode(host))
         Atlas.CloseDlg()
         Atlas.Build()
         ; Do not claim a save that did not happen.
@@ -16782,7 +16950,7 @@ class Atlas {
             return
         hs.Push(code)
         Atlas.LayerHostsCommit(hs, (IsMouseInput(code) ? InputLabel(code) : code)
-            . " is now a layer button — it has its own tab")
+            . " is now a layer button — it has its own layer in the rail")
     }
 
     static LayerHostsCommit(hs, msg) {
