@@ -18,6 +18,9 @@ History moved out of the script header in 0.7.2 (verbatim).
       Pointer left/right, "screen N", window next/prev and the keyboard
       pointer follow it (config "monitorOrder", by device name). Layouts
       keep Windows' geometry.
+    * MAC SHORTCUTS (Settings > Behaviour): Win+C/X/V/Z, Win+Shift+Z
+      (redo, sends Ctrl+Y), Win+A/S/F act as Ctrl. Off by default; stands
+      down while paused, in pass-through and while recording.
     * CONFIG LOAD: ResolveInputValue set CaseSense on a filled Map ("Map
       must be empty") the first time it ran -- during load -- so a good
       config was reported unreadable and restored from a backup (0.7.2

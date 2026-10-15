@@ -11,6 +11,8 @@ slot marked **▽** still does what All programs or Base set, and says where
 from; **Override** gives it its own setting. **F13–F24** are always on the
 Keyboard page as caps, ready to map; **+ Add a key…** records any other key.
 The colours are Flask's Graphite theme.
+**Mac shortcuts** (Settings → Behaviour) makes Win+C/X/V/Z, Win+Shift+Z,
+Win+A/S/F act as Ctrl, for Mac habits or a keyboard whose ⌘ sends Win.
 **Monitor positions** (Home → Set monitor positions) puts your screens in desk
 order when Windows has them out of place; pointer left/right and "screen N"
 follow it. Tray → **Copy diagnostics** works even if the window will not draw.

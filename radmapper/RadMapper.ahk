@@ -359,6 +359,7 @@ global DEFAULTS := Map(
     ;   Want NumLock to keep toggling the lock as well? Set this to
     ;   "~NumLock". Want the key back entirely? Set it to "".
     "teleportFlash", 1,
+    "macShortcuts", 0,         ; v0.7.3: Win+C/X/V/Z... act as Ctrl (Mac habit)
     "focusFlash", 1,           ; ring pulse when the cursor lands somewhere
                                ;   new (follow-focus, window switch) -- the
                                ;   teleport ring without the monitor border        ; 1 = flash the monitor the cursor teleports to
@@ -8123,6 +8124,38 @@ IsMouseHotkey(hk) {
     return false
 }
 
+; ── MAC SHORTCUTS (v0.7.3) ──────────────────────────────────────────────────
+; For hands trained on a Mac (or a keyboard whose Cmd key sends Win): the
+; common editing shortcuts on the Windows key do what they do with Ctrl.
+; Registered ONCE at start under a context that reads the setting live, so
+; the switch in Settings needs no re-registration; it stands down while the
+; engine is paused, during pass-through and while a key is being recorded.
+; Holding one repeats, as the Ctrl shortcut would.
+global MAC_KEYS := [["#x", "^x"], ["#c", "^c"], ["#v", "^v"], ["#z", "^z"],
+    ["#+z", "^y"], ["#a", "^a"], ["#s", "^s"], ["#f", "^f"]]
+
+MacKeysLive(*) {
+    return g_Enabled && Cfg("macShortcuts") && !IsObject(g_Bypass)
+        && !IsObject(g_RecHook)
+}
+
+MacKeysRegister() {
+    try {
+        HotIf(MacKeysLive)
+        for pr in MAC_KEYS
+            Hotkey(pr[1], MacKeySend.Bind(pr[2]), "On")
+    } catch as e {
+        Problem("hotkey", "Mac shortcuts could not be registered: " e.Message)
+    }
+    HotIf()
+}
+
+MacKeySend(keys, *) {
+    ; Send (not Blind) lifts the held Win key around the Ctrl combo, and
+    ; AHK's menu-mask keeps that Win release from opening Start
+    Send(keys)
+}
+
 ; A Settings hotkey fires ONCE PER PRESS (v0.7.3). AHK runs a hotkey on every
 ; OS auto-repeat, so holding the pause key flipped the engine about every
 ; 30 ms and left it in whichever state the release landed on; holding the
@@ -9967,6 +10000,7 @@ Init() {
                                              ; switcher: both set a HotIf
                                              ; context, and doing it there
                                              ; could clear theirs mid-register
+    MacKeysRegister()                        ; once, under its own HotIf
     SyncFollowFocus()
     StationWatchStart()                      ; recognise the screens, place windows
     OnExit(Cleanup)
@@ -15740,7 +15774,7 @@ class Atlas {
         Lumi.Label(x + 24, B.y + 12, 300, "Behaviour", "section")
         ; Three columns, two rows. Five switches in one row did not fit at
         ; the minimum width: each label ran into the next switch.
-        tc := Atlas.BtnRow(x + 24, w - 48, [1, 1, 1])
+        tc := Atlas.BtnRow(x + 24, w - 48, [1, 1, 1, 1])
         tlw := tc[1].w - 52 - Lumi.SP["md"] - 8
         r1 := B.y + 38
         r2 := B.y + 74
@@ -15752,6 +15786,11 @@ class Atlas {
         ; switch, and chasing those is what made the pointer feel jumpy.
         Lumi.Toggle(tc[3].x, r1, "Follow in-app", Cfg("followSameApp"),
             (v) => Atlas.SetCfgLive("followSameApp", v ? 1 : 0), , , tlw)
+        ; v0.7.3: Win+C/X/V/Z, Win+Shift+Z, Win+A/S/F act as Ctrl
+        Lumi.Toggle(tc[4].x, r1, "Mac shortcuts (Win = ⌘)", Cfg("macShortcuts"),
+            (v) => (Atlas.SetCfg("macShortcuts", v ? 1 : 0),
+                v ? Lumi.Toast("Win+C / X / V / Z, Win+Shift+Z (redo), Win+A / S / F "
+                    . "now act as Ctrl", "jade", 3600) : 0), , , tlw)
         Lumi.Toggle(tc[1].x, r2, "Landing flash", Cfg("focusFlash"),
             (v) => Atlas.SetCfgLive("focusFlash", v ? 1 : 0), , , tlw)
         Lumi.Toggle(tc[2].x, r2, "Teleport flash", Cfg("teleportFlash"),
