@@ -1791,6 +1791,15 @@ NormalizeCfg(imported := false) {
     ; to "no hosts", which would drop every layer row.
     c["layerHosts"] := (MGet(c, "layerHosts", 0) is Array)
         ? CleanLayerHosts(c["layerHosts"]) : LAYER_HOSTS.Clone()
+    ; v0.7.3: the user's left-to-right screen order, by device name
+    mo := []
+    if (MGet(c, "monitorOrder", 0) is Array) {
+        for nm in c["monitorOrder"] {
+            if (Type(nm) = "String" && Trim(nm) != "")
+                mo.Push(Trim(nm))
+        }
+    }
+    c["monitorOrder"] := mo
     ; MigrateRow folds "while" into "layer" and unbraces paths. It must run
     ; BEFORE the first ValidateCfg, which otherwise drops an old-format row
     ; as "can no longer hold a layer" instead of migrating it. Idempotent.
@@ -5335,9 +5344,73 @@ MonitorWorkAt(px, py) {
 }
 
 _MonitorsByX() {
-    ; the same screens, in the same order, as every station feature
-    ; (winplace "2", the keyboard pointer): 0x0 panels dropped, left then top
-    return StationMons()
+    ; the same screens, in the same order, as winplace ("2", next/prev) and
+    ; the keyboard pointer: 0x0 panels dropped; the user's order when set
+    return OrderedMons()
+}
+
+/**
+ * The screens in the order the user put them in (v0.7.3, "Monitor
+ * positions"), else left-then-top as Windows reports them. Windows' own
+ * arrangement is often not the desk's -- a clinical display driver, a dock
+ * or a KVM can report screens out of place -- and then pointer left/right
+ * went the wrong way. Screens are known by device name (DISPLAY1...); one
+ * the list does not name keeps its Windows place after the named ones.
+ * idx is renumbered so MonIndexAt and the screen numbers agree.
+ * Layouts keep StationMons(): they are stored by geometry, not by number.
+ */
+OrderedMons() {
+    mons := StationMons()
+    order := MGet(g_Cfg, "monitorOrder", 0)
+    if !(order is Array) || order.Length = 0
+        return mons
+    rank := IMap()
+    for i, nm in order
+        rank[nm] := i
+    keyed := []
+    for m in mons
+        keyed.Push({m: m, k: rank.Has(m.name) ? rank[m.name] : 1000 + m.idx})
+    i := 2                                   ; stable insertion sort by k
+    while (i <= keyed.Length) {
+        cur := keyed[i]
+        j := i - 1
+        while (j >= 1 && keyed[j].k > cur.k) {
+            keyed[j + 1] := keyed[j]
+            j -= 1
+        }
+        keyed[j + 1] := cur
+        i += 1
+    }
+    out := []
+    for e in keyed {
+        e.m.idx := out.Length + 1
+        out.Push(e.m)
+    }
+    return out
+}
+
+/** "DISPLAY2" from "\\.\DISPLAY2". */
+MonShortName(nm) {
+    return RegExReplace(nm, "^\\\\\.\\")
+}
+
+/**
+ * Flash each screen's number on it for two seconds, so "which one is 2"
+ * is never a guess. Plain always-on-top windows, click-through, gone on
+ * their own.
+ */
+MonIdentify() {
+    for m in OrderedMons() {
+        g := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale")
+        g.BackColor := "121212"
+        g.SetFont("s96 bold cD7F46C", "Segoe UI")
+        g.AddText("x0 y10 w260 h150 Center", String(m.idx))
+        g.SetFont("s14 norm cF1F1EE", "Segoe UI")
+        g.AddText("x0 y168 w260 h30 Center", MonShortName(m.name))
+        g.Show("NoActivate x" ((m.l + m.r) // 2 - 130) " y" ((m.t + m.b) // 2 - 110)
+            . " w260 h210")
+        SetTimer(ObjBindMethod(g, "Destroy"), -2000)
+    }
 }
 
 
@@ -5977,7 +6050,9 @@ StationMons() {
         ; the real numbers arrive.
         if (r - l <= 0 || b - t <= 0)
             continue
-        arr.Push({i: A_Index, l: l, t: t, r: r, b: b,
+        nm := ""
+        try nm := MonitorGetName(A_Index)
+        arr.Push({i: A_Index, l: l, t: t, r: r, b: b, name: nm,
                   wl: wl, wt: wt, wr: wr, wb: wb,
                   w: r - l, h: b - t,
                   primary: (A_Index = MonitorGetPrimary())})
@@ -7215,7 +7290,7 @@ WinPlace(v) {
             HUD("The desktop is active, not a window", "warn")
             return
         }
-        mons := StationMons()
+        mons := OrderedMons()                ; "next" = the next screen ON THE DESK
         n := mons.Length
         if (n = 0)
             return
@@ -12345,7 +12420,7 @@ class Atlas {
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperConflicts", parent.hwnd)
         dlg.TopMost(false)          ; owned by the main window, which never
                                     ; floats over PACS (v0.7.3)
-Atlas.dlg := dlg
+        Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -13807,6 +13882,8 @@ Atlas.dlg := dlg
             (*) => Atlas.Go(Atlas.PanelIndex("Keyboard")), "accent")
         Lumi.Btn(x, jy + 70, bw, bh, "Apply a starter pack",
             (*) => Atlas.PackChoose(), "accent")
+        Lumi.Btn(x + bw + 16, jy + 70, bw, bh, "Set monitor positions",
+            (*) => Atlas.OpenDlg(() => Atlas.MonitorsDlg()), "accent")
 
         ; ── the keys that work even when nothing else does ──────────────
         ; Pinned to the BOTTOM, so this block is in the same place whatever
@@ -14821,7 +14898,7 @@ Atlas.dlg := dlg
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperStep", parent.hwnd)
         dlg.TopMost(false)          ; owned by the main window, which never
                                     ; floats over PACS (v0.7.3)
-Atlas.dlg := dlg
+        Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -16113,7 +16190,7 @@ Atlas.dlg := dlg
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperEdit", parent.hwnd)
         dlg.TopMost(false)          ; owned by the main window, which never
                                     ; floats over PACS (v0.7.3)
-Atlas.dlg := dlg
+        Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
@@ -16662,7 +16739,7 @@ Atlas.dlg := dlg
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperWheelDeck", parent.hwnd)
         dlg.TopMost(false)          ; owned by the main window, which never
                                     ; floats over PACS (v0.7.3)
-Atlas.dlg := dlg
+        Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         ; A dialog opens FOCUSED on its first control: it is a place you were
         ; sent to answer something, so the ring is useful before Tab is
@@ -16979,7 +17056,7 @@ Atlas.dlg := dlg
                      parent.y + (Atlas.H - h) // 2, w, h, "RadMapperLayerHosts", parent.hwnd)
         dlg.TopMost(false)          ; owned by the main window, which never
                                     ; floats over PACS (v0.7.3)
-Atlas.dlg := dlg
+        Atlas.dlg := dlg
         LayerStack.ActiveLayer := dlg
         Lumi.Focus.Reset(dlg, true)
         Atlas.Own(dlg)
@@ -17132,6 +17209,122 @@ Atlas.dlg := dlg
         hs.Push(code)
         Atlas.LayerHostsCommit(hs, (IsMouseInput(code) ? InputLabel(code) : code)
             . " is now a layer button — it has its own layer in the rail")
+    }
+
+    ; ── MONITOR POSITIONS (v0.7.3) ──────────────────────────────────────────
+    ; Number the screens the way they sit on the desk. A sketch of where
+    ; Windows thinks they are, each labelled with ITS number in your order,
+    ; then one row per screen with ↑ ↓. Identify flashes the numbers on the
+    ; screens themselves.
+
+    static MonitorsDlg() {
+        mons := OrderedMons()
+        w := 640
+        h := 330 + mons.Length * 36
+        Lumi.CloseSelect()
+        Lumi.EndEdit()
+        if IsObject(Atlas.dlg) {
+            Atlas.Disown(Atlas.dlg)
+            try Atlas.dlg.Dispose()
+            Atlas.dlg := 0
+        }
+        parent := Atlas.lyr
+        dlg := Layer(parent.x + (Atlas.W - w) // 2,
+                     parent.y + Max((Atlas.H - h) // 2, 0), w, h,
+                     "RadMapperMonitors", parent.hwnd)
+        dlg.TopMost(false)
+        Atlas.dlg := dlg
+        LayerStack.ActiveLayer := dlg
+        Lumi.Focus.Reset(dlg, true)
+        Atlas.Own(dlg)
+        dlg.Drag()
+
+        Lumi.Card(0, 0, w, h, "surface", 0)
+        Lumi.Label(24, 16, w - 48, "Monitor positions", "title")
+        Lumi.Para(24, 42, w - 48, 40,
+            "Put your screens in order, left to right as they sit on the desk. "
+            . "Pointer left / right, “screen 2” and moving a window to the next "
+            . "screen follow this order. Window layouts are not affected.", "mute")
+        Lumi.Rule(24, 88, w - 48)
+
+        ; the sketch: Windows' coordinates, scaled into the box
+        bx := 24, by := 100, bw := w - 48, bh := 120
+        Lumi.Card(bx, by, bw, bh, "sunk")
+        if (mons.Length) {
+            minL := mons[1].l, minT := mons[1].t, maxR := mons[1].r, maxB := mons[1].b
+            for m in mons {
+                minL := Min(minL, m.l), minT := Min(minT, m.t)
+                maxR := Max(maxR, m.r), maxB := Max(maxB, m.b)
+            }
+            sc := Min((bw - 24) / Max(maxR - minL, 1), (bh - 24) / Max(maxB - minT, 1))
+            ox := bx + (bw - (maxR - minL) * sc) // 2
+            oy := by + (bh - (maxB - minT) * sc) // 2
+            for m in mons {
+                rx := Round(ox + (m.l - minL) * sc) + 2
+                ry := Round(oy + (m.t - minT) * sc) + 2
+                rw := Max(Round(m.w * sc) - 4, 8)
+                rh := Max(Round(m.h * sc) - 4, 8)
+                RoundedRectangle(rx, ry, rw, rh, 4, Lumi.C["raised"], true)
+                RoundedRectangle(rx, ry, rw, rh, 4, Lumi.C["hair"], false)
+                Text(rx, ry, rw, rh, String(m.idx), Lumi.C["accent"],
+                    Lumi.Size["title"], Lumi.Face).TextAlign("center", "middle")
+            }
+        }
+        Lumi.Label(24, by + bh + 4, w - 48,
+            "Where Windows places them (Display settings). The numbers are your order.",
+            "mute", "left", 18)
+
+        y := by + bh + 30
+        for m in mons {
+            Lumi.Label(24, y, 30, String(m.idx), "title", "left", 30)
+            Lumi.Label(60, y, 380, MonShortName(m.name) "   ·   " m.w "×" m.h
+                . "   ·   at " m.l ", " m.t (m.primary ? "   ·   main" : ""),
+                "body", "left", 30)
+            Lumi.Btn(w - 24 - 112, y, 52, 30, "↑",
+                m.idx > 1 ? Atlas.MonMoveGo(m.idx, -1) : 0,
+                m.idx > 1 ? "ghost" : "muted")
+            Lumi.Btn(w - 24 - 52, y, 52, 30, "↓",
+                m.idx < mons.Length ? Atlas.MonMoveGo(m.idx, 1) : 0,
+                m.idx < mons.Length ? "ghost" : "muted")
+            y += 36
+        }
+
+        set := (MGet(g_Cfg, "monitorOrder", []).Length > 0)
+        Lumi.Btn(24, h - 52, 130, 36, "Identify", (*) => MonIdentify(), "accent")
+        Lumi.Btn(164, h - 52, 190, 36, "Use Windows' order",
+            set ? (*) => Atlas.MonOrderSet([]) : 0, set ? "ghost" : "muted")
+        Lumi.Btn(w - 24 - 110, h - 52, 110, 36, "Done",
+            (*) => Atlas.CloseDlg(), "primary")
+
+        Lumi.Focus.Restore()
+        Lumi.FullErase(dlg)
+        dlg.Draw()
+        dlg.Activate()
+    }
+
+    static MonMoveGo(i, d) {
+        return (*) => Atlas.MonMove(i, d)
+    }
+
+    /** Swap screen i with its neighbour d (-1 up / +1 down) and keep it. */
+    static MonMove(i, d) {
+        mons := OrderedMons()
+        j := i + d
+        if (i < 1 || j < 1 || i > mons.Length || j > mons.Length)
+            return
+        names := []
+        for m in mons
+            names.Push(m.name)
+        t := names[i], names[i] := names[j], names[j] := t
+        Atlas.MonOrderSet(names)
+    }
+
+    static MonOrderSet(names) {
+        g_Cfg["monitorOrder"] := names
+        Atlas.SaveOrWarn()
+        Lumi.Toast(names.Length ? "Monitor order saved" : "Back to Windows' order", "jade")
+        ; rebuilt in place, after this click unwinds (the button is on it)
+        SetTimer(() => Atlas.OpenDlg(() => Atlas.MonitorsDlg()), -1)
     }
 
     static LayerHostsCommit(hs, msg) {
@@ -17670,7 +17863,7 @@ class Warp {
             return
         }
         try {
-            Warp.mons := StationMons()
+            Warp.mons := OrderedMons()
             if (Warp.mons.Length = 0)
                 return
             Warp.zoom := Min(Max(Cfg("warpZoom"), 2), 12)

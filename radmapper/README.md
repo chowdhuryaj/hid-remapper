@@ -11,6 +11,9 @@ slot marked **▽** still does what All programs or Base set, and says where
 from; **Override** gives it its own setting. **F13–F24** are always on the
 Keyboard page as caps, ready to map; **+ Add a key…** records any other key.
 The colours are Flask's Graphite theme.
+**Monitor positions** (Home → Set monitor positions) puts your screens in desk
+order when Windows has them out of place; pointer left/right and "screen N"
+follow it. Tray → **Copy diagnostics** works even if the window will not draw.
 
 **This is a review build.** It has been checked for syntax balance, by reading,
 and by the portable checks below, but it has not yet run on a Windows

@@ -13,6 +13,14 @@ History moved out of the script header in 0.7.2 (verbatim).
       and offers Override. Keys set for All programs stay listed.
     * F13-F24 always on the Keyboard page as caps showing their action;
       "+ Add a key…" records any other key.
+    * MONITOR POSITIONS (Home > "Set monitor positions"): put the screens
+      in desk order with ↑ ↓; Identify flashes each number on its screen.
+      Pointer left/right, "screen N", window next/prev and the keyboard
+      pointer follow it (config "monitorOrder", by device name). Layouts
+      keep Windows' geometry.
+    * The settings window is never destroyed by Alt+F4 / taskbar Close
+      (it hides); tray Settings rebuilds a destroyed one; tray "Copy
+      diagnostics".
     * Graphite theme (Flask's), rounder corners; "All programs" and
       "program" everywhere; Programs page in Simple mode.
     * Engine: Settings hotkeys fire once per press (auto-repeat flipped
