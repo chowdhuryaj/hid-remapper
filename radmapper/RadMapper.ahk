@@ -81,7 +81,7 @@ A_HotkeyInterval := 1000
 
 ; ── §1  CONSTANTS & GLOBAL STATE ────────────────────────────────────────────
 
-global RM_VERSION := "0.7.5"
+global RM_VERSION := "0.7.6"
 
 ; Remove the foreground-lock so WinActivate can pull PowerScribe forward from
 ; any app (single-user reading station; see PSFire).
@@ -334,6 +334,8 @@ global DEFAULTS := Map(
     "hudCorner", "bl",         ; bl | br | tl | tr | bc -- where the HUD parks
     "hudFollow", 1,            ; 1 = on the monitor under the cursor
     "psDictateKey", "{F4}",
+    "psDirectDictate", 1,      ; 1 = dictate presses PS One's record button
+                               ;   directly (no activation); keys as fallback
     "psReturnDelay", 60,       ; ms before focus returns after firing into PS
     "psSettleMs", 150,         ; ms after PowerScribe comes forward before the
                                ;   keys go: WPF needs a moment to put the
@@ -4542,7 +4544,7 @@ ActionFire(binding, st, ctx := 0) {
         case "dragmove":
             SendNativeClick(v != "" ? v : (IsObject(st) ? st.btn : "LButton"))
         case "ps_dictate":
-            PSFire(Cfg("psDictateKey"))
+            PSDictate()
         case "ps_next":
             PSFire("{Tab}")
         case "ps_prev":
@@ -7852,6 +7854,120 @@ ElevateAtLaunch() {
     }
 }
 
+; ── PRESSING POWERSCRIBE ONE'S RECORD BUTTON DIRECTLY ───────────────────────
+; Dictate toggles PowerScribe One's own record button through UI Automation
+; (the accessibility interface; what the mic's record key does), so it works
+; from any window without bringing PowerScribe forward: no activation, no
+; foreground lock, no keystroke that can land in the wrong place. Needs no
+; admin rights and works on any AutoHotkey 2.0.x. If the button cannot be
+; reached (PS 360, no report open, UI Automation unavailable) the press falls
+; back to the keystroke route (dictate key via PSFire). Tested on PS One by
+; radmapper/PSOne-DictateTest.ahk; psDirectDictate 0 turns this off.
+
+global g_Uia := 0, g_UiaTrue := 0
+global g_PsRecEl := 0                        ; cached element (raw pointer)
+global PS_REC_ID := "AutId_FieldTabPane_RecordingButton"
+
+PSDictate() {
+    if (Cfg("psDirectDictate") = 1 && PsRecToggle()) {
+        Problem("ps-direct", "PowerScribe record button pressed directly")
+        return
+    }
+    PSFire(Cfg("psDictateKey"))
+}
+
+; True when the record button was toggled.
+PsRecToggle() {
+    global g_PsRecEl
+    if g_PsRecEl && UiaToggle(g_PsRecEl)
+        return true
+    PsRecRelease()                           ; stale (report closed, PS restarted)
+    g_PsRecEl := PsRecFind()
+    return g_PsRecEl ? UiaToggle(g_PsRecEl) : false
+}
+
+PsRecRelease() {
+    global g_PsRecEl
+    if g_PsRecEl
+        try ObjRelease(g_PsRecEl)
+    g_PsRecEl := 0
+}
+
+UiaInit() {
+    global g_Uia, g_UiaTrue
+    if g_Uia
+        return true
+    try {
+        g_Uia := ComObject("{ff48dba4-60ef-4201-aa87-54103eef594e}",
+            "{30cbe57d-d9d0-452a-ab13-7ac5ac4825ee}")
+        ComCall(21, g_Uia, "ptr*", &g_UiaTrue)   ; CreateTrueCondition
+    } catch {
+        g_Uia := 0
+    }
+    return g_Uia && g_UiaTrue
+}
+
+; The record button in any PowerScribe One window, as a raw element pointer
+; the caller owns; 0 if none (PS 360 has no such button).
+PsRecFind() {
+    if !UiaInit()
+        return 0
+    for exe in g_Cfg["psExes"] {
+        for hwnd in WinGetList("ahk_exe " exe) {
+            root := 0, arr := 0, n := 0, hit := 0
+            try ComCall(6, g_Uia, "ptr", hwnd, "ptr*", &root)   ; ElementFromHandle
+            if !root
+                continue
+            try ComCall(6, root, "int", 4, "ptr", g_UiaTrue, "ptr*", &arr) ; FindAll
+            if arr
+                try ComCall(3, arr, "int*", &n)
+            loop n {
+                el := 0
+                try ComCall(4, arr, "int", A_Index - 1, "ptr*", &el)
+                if !el
+                    continue
+                if (!hit && UiaBStr(el, 29) = PS_REC_ID) {
+                    hit := el
+                    continue
+                }
+                ObjRelease(el)
+            }
+            if arr
+                ObjRelease(arr)
+            ObjRelease(root)
+            if hit
+                return hit
+        }
+    }
+    return 0
+}
+
+; Toggle an element through its TogglePattern; false if it has none or the
+; element is gone (a dead element fails GetCurrentPattern).
+UiaToggle(el) {
+    p := 0, ok := false
+    try ComCall(16, el, "int", 10015, "ptr*", &p)        ; GetCurrentPattern(Toggle)
+    if !p
+        return false
+    try {
+        tp := ComObjQuery(p, "{94cf8058-9b8d-4ab9-8bfd-4cd0a33c8c70}")
+        ComCall(3, tp)                                   ; Toggle()
+        ok := true
+    }
+    ObjRelease(p)
+    return ok
+}
+
+UiaBStr(el, idx) {
+    b := 0
+    try ComCall(idx, el, "ptr*", &b)
+    if !b
+        return ""
+    s := StrGet(b, "UTF-16")
+    DllCall("OleAut32\SysFreeString", "ptr", b)
+    return s
+}
+
 PSFire(keys) {
     ; A trace for "it does nothing": if this line is missing from
     ; Diagnostics after a press, the press never reached a PowerScribe
@@ -8302,7 +8418,7 @@ RunMacro(name, *) {
                 case "sleep":
                     Sleep(IsInteger(v) ? Min(Max(Integer(v), 0), 5000) : 100)
                 case "psdictate":
-                    PSFire(Cfg("psDictateKey"))
+                    PSDictate()
                     PSMacroSync()            ; step order: PS lands before the
                 case "psnext":               ; next step (delivery is async)
                     PSFire("{Tab}")
@@ -8644,7 +8760,7 @@ RegisterKbHotkeys() {
     }
     g_KbRegistered := []
     pairs := [
-        [Cfg("hkDictate"),   (*) => PSFire(Cfg("psDictateKey"))],
+        [Cfg("hkDictate"),   (*) => PSDictate()],
         [Cfg("hkPrevField"), (*) => PSFire("+{Tab}")],
         [Cfg("hkNextField"), (*) => PSFire("{Tab}")],
         [Cfg("hkTeleLeft"),  (*) => TeleportMonitor(-1)],
@@ -8829,7 +8945,7 @@ HookWatchTick() {
         return                               ; UIPI, not a lost hook
     fired := true                            ; once per press
     switch hit.type {
-        case "ps_dictate": PSFire(Cfg("psDictateKey"))
+        case "ps_dictate": PSDictate()
         case "ps_next":    PSFire("{Tab}")
         case "ps_prev":    PSFire("+{Tab}")
     }
@@ -10553,6 +10669,7 @@ Cleanup(*) {
     SetTimer(HookFrontTick, 0)
     SetTimer(FollowTick, 0)
     PSTrackStop()
+    PsRecRelease()
     SetTimer(HookWatchTick, 0)
     try StationWatchStop()
     try Warp.Close(true)                     ; drops a held drag, frees the keyboard

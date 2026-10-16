@@ -189,6 +189,14 @@ Linux): verify on a colleague's station that F4/Tab land from PACS.
   34/38, grid gaps 8, wheel header off the rule; BtnRow default gap and all
   dialog footers 12 px; Lumi.Toggle takes a label width.
 
+## Direct dictate through UI Automation (0.7.6)
+Dictate toggles PS One's record button (`AutId_FieldTabPane_RecordingButton`,
+TogglePattern) via UI Automation instead of activating PS and sending F4, so it
+works from PACS with no focus change, no admin, any AHK 2.0.x. Element cached;
+re-found when stale; falls back to the keystroke route. `psDirectDictate` 0
+disables. Diagnostics line `ps-direct`. Confirmed working on AJ's station.
+PS One exposes no next/previous field button; field nav still uses Tab.
+
 ## Next
 - Run on the workstation. Sonnet review findings (engine, radial/watchdog,
   config/editors) are being applied on this branch; see the PR for the list.
